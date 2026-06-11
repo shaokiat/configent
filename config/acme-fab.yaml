@@ -1,0 +1,26 @@
+client_id: acme-fab
+name: "Acme Fab Equipment"
+branding:
+  logo: assets/acme-fab/logo.svg
+  primary_color: "#1B4F8A"
+  assistant_name: "AcmeAssist"
+corpus:
+  source: corpora/acme-fab/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/acme-fab.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - pricing_lookup
+evals:
+  golden_set: evals/acme-fab/golden.jsonl
+  judge_model: claude-sonnet-4-6
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00

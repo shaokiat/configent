@@ -1,0 +1,26 @@
+client_id: meridian-insurance
+name: "Meridian Insurance"
+branding:
+  logo: assets/meridian-insurance/logo.svg
+  primary_color: "#1A6B3C"
+  assistant_name: "MeridianAssist"
+corpus:
+  source: corpora/meridian-insurance/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/meridian-insurance.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - coverage_check
+evals:
+  golden_set: evals/meridian-insurance/golden.jsonl
+  judge_model: claude-sonnet-4-6
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
