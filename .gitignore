@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# uv
+uv.lock
+
+# Node
+node_modules/
+.next/
+out/
+.vercel/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Alembic compiled versions (keep migrations, not compiled)
+# infra
+*.log
