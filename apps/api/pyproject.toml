@@ -1,7 +1,7 @@
 [project]
-name = "poc-factory-api"
+name = "configent-api"
 version = "0.1.0"
-description = "POC Factory — FastAPI backend for config-driven enterprise AI assistants"
+description = "Configent — FastAPI backend for config-driven enterprise AI assistants"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.scripts]
-poc-factory = "app.cli:app"
+configent = "app.cli:app"
 
 [tool.uv]
 dev-dependencies = [
