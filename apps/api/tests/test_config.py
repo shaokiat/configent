@@ -78,3 +78,13 @@ def test_config_all_returns_all_clients(tmp_path):
 def test_config_empty_dir_loads_zero_clients(tmp_path):
     registry = ConfigRegistry(config_dir=tmp_path)
     assert registry.all() == []
+
+
+def test_config_unknown_tool_rejected(tmp_path):
+    bad = dict(VALID_CONFIG)
+    bad["agent"] = dict(VALID_CONFIG["agent"])
+    bad["agent"]["tools"] = ["search_docs", "nonexistent_tool"]
+    write_yaml(tmp_path, "bad-tools.yaml", bad)
+
+    with pytest.raises(ValueError, match="Unknown tool"):
+        ConfigRegistry(config_dir=tmp_path)

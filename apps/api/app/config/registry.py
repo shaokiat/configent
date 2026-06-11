@@ -28,6 +28,7 @@ def _load_all(config_dir: Path) -> dict[str, ClientConfig]:
             cfg = ClientConfig.model_validate(raw)
         except ValidationError as exc:
             # Re-raise with filename so the error names both field and file
+
             messages = "; ".join(
                 f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}"
                 for e in exc.errors()
@@ -39,6 +40,13 @@ def _load_all(config_dir: Path) -> dict[str, ClientConfig]:
             raise ValueError(
                 f"Duplicate client_id {cfg.client_id!r} in {path.name} and {existing.name}"
             )
+
+        # Validate tool names against the registry
+        try:
+            from app.tools.registry import validate_tool_names
+            validate_tool_names(cfg.agent.tools)
+        except ValueError as exc:
+            raise ValueError(f"Config error in {path.name}: {exc}") from exc
 
         configs[cfg.client_id] = cfg
 
