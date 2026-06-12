@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 
+import ChatPanel from "./ChatPanel";
+
 interface BrandingData {
   id: string;
   name: string;
@@ -13,7 +15,7 @@ interface BrandingData {
 export default function ClientShell({ branding }: { branding: BrandingData }) {
   return (
     <div
-      className="min-h-screen flex flex-col"
+      className="h-dvh flex flex-col"
       style={
         {
           "--brand-color": branding.primary_color,
@@ -42,42 +44,9 @@ export default function ClientShell({ branding }: { branding: BrandingData }) {
         </Link>
       </header>
 
-      {/* Chat area (placeholder) */}
-      <main className="flex-1 flex flex-col items-center justify-center bg-gray-50 p-8">
-        <div className="max-w-2xl w-full">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
-            <div
-              className="w-16 h-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4"
-              style={{ backgroundColor: branding.primary_color }}
-            >
-              {branding.assistant_name.charAt(0)}
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              {branding.assistant_name}
-            </h2>
-            <p className="text-gray-500 mb-6">
-              Your AI assistant for {branding.name}. Ask me anything about our documentation.
-            </p>
-            <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-3 border border-gray-200">
-              <input
-                type="text"
-                placeholder={`Ask ${branding.assistant_name} a question…`}
-                className="flex-1 bg-transparent outline-none text-gray-700 placeholder-gray-400 text-sm"
-                disabled
-              />
-              <button
-                className="px-4 py-1.5 rounded-md text-white text-sm font-medium transition-opacity opacity-60 cursor-not-allowed"
-                style={{ backgroundColor: branding.primary_color }}
-                disabled
-              >
-                Send
-              </button>
-            </div>
-            <p className="text-xs text-gray-400 mt-3">
-              Chat functionality coming soon — retrieval pipeline in progress
-            </p>
-          </div>
-        </div>
+      {/* Chat area */}
+      <main className="flex-1 flex flex-col min-h-0 bg-gray-50">
+        <ChatPanel branding={branding} />
       </main>
 
       {/* Footer */}
