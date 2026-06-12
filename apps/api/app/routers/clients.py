@@ -18,6 +18,8 @@ class ChatResponse(BaseModel):
     conversation_id: str
     reply: str
     citations: list[dict]
+    # Ordered answer segments: [{text, citations: [{source, title, cited_text}]}]
+    segments: list[dict]
 
 
 @router.get("/clients")
@@ -50,7 +52,7 @@ async def chat(
         raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
 
     try:
-        conv_id, reply, citations = await agent_run(
+        conv_id, result = await agent_run(
             req.message,
             cfg=cfg,
             client_id=client_id,
@@ -62,7 +64,12 @@ async def chat(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return ChatResponse(conversation_id=conv_id, reply=reply, citations=citations)
+    return ChatResponse(
+        conversation_id=conv_id,
+        reply=result.reply_text,
+        citations=result.citations,
+        segments=result.segments,
+    )
 
 
 @router.get("/clients/{client_id}/branding")

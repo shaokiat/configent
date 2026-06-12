@@ -4,7 +4,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chunk, Document
-from app.retrieval.embed import EMBEDDING_DIM, embed_query
+from app.retrieval.embed import embed_query
 
 
 @dataclass

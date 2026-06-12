@@ -4,9 +4,10 @@ Revision ID: 0001
 Revises:
 Create Date: 2026-06-11
 """
-from alembic import op
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
+
+from alembic import op
 from app.retrieval.embed import EMBEDDING_DIM
 
 revision = "0001"
@@ -57,8 +58,8 @@ def upgrade() -> None:
     op.create_index("ix_chunks_client_id", "chunks", ["client_id"])
     # HNSW index for fast approximate nearest neighbour search
     op.execute(
-        f"CREATE INDEX ix_chunks_embedding_hnsw ON chunks "
-        f"USING hnsw (embedding vector_cosine_ops)"
+        "CREATE INDEX ix_chunks_embedding_hnsw ON chunks "
+        "USING hnsw (embedding vector_cosine_ops)"
     )
 
     op.create_table(

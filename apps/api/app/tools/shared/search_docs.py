@@ -34,19 +34,31 @@ DEFINITION = {
 
 
 async def execute(tool_input: dict[str, Any], *, client_id: str, db) -> list[dict]:
+    """Return hits as `search_result` content blocks so the API can attach citations.
+
+    Citations must be enabled on all search results in a request or none, so this
+    executor enables them unconditionally. Empty retrieval returns a plain text
+    block: the model is instructed to say it doesn't know rather than invent.
+    """
     from app.retrieval.search import search
 
     query = tool_input["query"]
     k = tool_input.get("k", 5)
     hits = await search(db, client_id=client_id, query=query, k=k)
+    if not hits:
+        return [
+            {
+                "type": "text",
+                "text": "No documents matched this query above the similarity threshold.",
+            }
+        ]
     return [
         {
-            "chunk_id": h.chunk_id,
-            "document_id": h.document_id,
-            "document_title": h.document_title,
-            "source_uri": h.source_uri,
-            "text": h.text,
-            "similarity": round(h.similarity, 4),
+            "type": "search_result",
+            "source": h.source_uri,
+            "title": h.document_title,
+            "content": [{"type": "text", "text": h.text}],
+            "citations": {"enabled": True},
         }
         for h in hits
     ]

@@ -1,9 +1,7 @@
 """Ingestion logic: parse → chunk → embed → upsert."""
 import hashlib
-import uuid
 from pathlib import Path
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.schema import ClientConfig

@@ -1,6 +1,6 @@
 import tiktoken
 
-from app.retrieval.chunker import Chunk, chunk_document
+from app.retrieval.chunker import chunk_document
 
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 

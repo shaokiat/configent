@@ -3,7 +3,7 @@
 Tool names in a client YAML are validated at config-load time against this registry.
 Unknown tool names fail startup, not at request time.
 """
-from typing import Any, Callable
+from collections.abc import Callable
 
 from app.tools.acme_fab import pricing_lookup
 from app.tools.meridian import coverage_check

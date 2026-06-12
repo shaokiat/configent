@@ -25,7 +25,6 @@ DEFINITION = {
 
 
 async def execute(tool_input: dict[str, Any], *, client_id: str, db) -> dict:
-    from sqlalchemy import select
 
     from app.models import Document
 
