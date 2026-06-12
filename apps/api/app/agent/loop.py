@@ -108,14 +108,50 @@ async def _execute_tool(block: Any, *, client_id: str, db: AsyncSession) -> dict
     }
 
 
+def _sorted_tool_defs(tool_names: list[str]) -> list[dict]:
+    """Caching (§4.4) is a prefix match over tools -> system -> messages, so the
+    tool list must serialize in a fixed order regardless of YAML order."""
+    return sorted(get_tool_definitions(tool_names), key=lambda d: d["name"])
+
+
+def _with_turn_breakpoint(messages: list[dict]) -> list[dict]:
+    """Return a copy of `messages` with a cache breakpoint on the last content
+    block of the latest message, so multi-turn history accrues incrementally.
+
+    Applied per call (never mutating the canonical list): a breakpoint baked into
+    history would accumulate one marker per loop iteration and blow the
+    4-breakpoint request limit."""
+    last = dict(messages[-1])
+    content = last["content"]
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    blocks = list(content)
+    if isinstance(blocks[-1], dict):
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+    last["content"] = blocks
+    return messages[:-1] + [last]
+
+
+def _log_usage(client_id: str, usage: Any) -> None:
+    logger.info(
+        "anthropic call client=%s input=%s output=%s cache_creation=%s cache_read=%s",
+        client_id,
+        getattr(usage, "input_tokens", 0),
+        getattr(usage, "output_tokens", 0),
+        getattr(usage, "cache_creation_input_tokens", 0),
+        getattr(usage, "cache_read_input_tokens", 0),
+    )
+
+
 def _request_kwargs(
     cfg: ClientConfig,
     system_prompt: str,
     tool_defs: list[dict],
     messages: list[dict],
 ) -> dict:
-    """Assemble kwargs for one API call. `messages` is snapshotted so call_args
-    captures the state at call time."""
+    """Assemble kwargs for one API call. `messages` is snapshotted (with the
+    per-turn cache breakpoint applied) so call_args captures the state at call
+    time."""
     return {
         "model": cfg.agent.model,
         "max_tokens": cfg.agent.max_tokens,
@@ -129,7 +165,7 @@ def _request_kwargs(
             }
         ],
         "tools": tool_defs,
-        "messages": list(messages),
+        "messages": _with_turn_breakpoint(messages),
     }
 
 
@@ -185,13 +221,14 @@ async def _run_loop(
     aclient: anthropic.AsyncAnthropic,
 ) -> LoopResult:
     """Core agent loop, non-streaming."""
-    tool_defs = get_tool_definitions(cfg.agent.tools)
+    tool_defs = _sorted_tool_defs(cfg.agent.tools)
     result = LoopResult(messages=messages)
 
     for _ in range(_MAX_ITERATIONS):
         response = await aclient.messages.create(
             **_request_kwargs(cfg, system_prompt, tool_defs, messages)
         )
+        _log_usage(client_id, getattr(response, "usage", None))
         result.usage.add(getattr(response, "usage", None))
 
         # Append full assistant content verbatim (tool_use blocks must not be lost)
@@ -228,7 +265,7 @@ async def _stream_loop(
 ) -> AsyncIterator[tuple[str, dict]]:
     """Core agent loop, streaming. Yields UC-10 events; fills `result` in place
     (async generators cannot return a value)."""
-    tool_defs = get_tool_definitions(cfg.agent.tools)
+    tool_defs = _sorted_tool_defs(cfg.agent.tools)
     citation_index = 0
 
     for _ in range(_MAX_ITERATIONS):
@@ -261,6 +298,7 @@ async def _stream_loop(
                         )
             response = await stream.get_final_message()
 
+        _log_usage(client_id, getattr(response, "usage", None))
         result.usage.add(getattr(response, "usage", None))
         messages.append({"role": "assistant", "content": _dump_blocks(response.content)})
 
