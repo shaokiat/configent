@@ -180,10 +180,15 @@ event: citation  data: {"index": 1, "source": "corpus://acme-fab/px900-maintenan
                         "title": "PX-900 Maintenance Manual",
                         "cited_text": "The PX-900 plasma etcher requires chamber seal replacement every 1,200 RF hours."}
 event: text      data: {"delta": "."}
-event: done      data: {"input_tokens": 5123, "output_tokens": 411,
-                        "cache_read_input_tokens": 3050, "cost_usd": 0.0241, "latency_ms": 2140}
+event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "output_tokens": 411,
+                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 3050,
+                        "cost_usd": 0.0241, "latency_ms": 2140}
 ```
 
+- `done` carries `conversation_id` (the frontend needs it to continue the turn) and
+  `cache_creation_input_tokens` (turn 1 shows cache creation, turn 2 shows reads).
+- On failure the stream emits `event: error` with `{"message": …}` instead of `done`,
+  and the turn is not persisted.
 - **Anchors tasks:** T3.5 (producer), T3.6 (consumer). Treat this block as the contract;
   change it in this file first if it needs to change.
 

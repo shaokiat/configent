@@ -1,10 +1,14 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.loop import run as agent_run
+from app.agent.loop import stream_turn
 from app.config.registry import get_registry
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 
 router = APIRouter(prefix="/api")
 
@@ -69,6 +73,35 @@ async def chat(
         reply=result.reply_text,
         citations=result.citations,
         segments=result.segments,
+    )
+
+
+@router.post("/c/{client_id}/chat/stream")
+async def chat_stream(client_id: str, req: ChatRequest):
+    """SSE chat endpoint. Event contract: POC_FACTORY_TEST_ANCHORS.md UC-10."""
+    registry = get_registry()
+    try:
+        cfg = registry.get(client_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
+
+    async def event_source():
+        # The session is opened inside the generator: a Depends(get_db) session
+        # can be torn down before a StreamingResponse body starts executing.
+        async with AsyncSessionLocal() as db:
+            async for name, data in stream_turn(
+                req.message,
+                cfg=cfg,
+                client_id=client_id,
+                conversation_id=req.conversation_id,
+                db=db,
+            ):
+                yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
