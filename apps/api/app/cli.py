@@ -12,7 +12,7 @@ load_dotenv()
 app = typer.Typer(help="Configent — config-driven enterprise AI assistant platform")
 console = Console()
 
-_REPO_ROOT = Path(__file__).parents[4]
+_REPO_ROOT = Path(__file__).parents[3]
 
 
 @app.command()
