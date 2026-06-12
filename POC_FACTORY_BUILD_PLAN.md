@@ -102,7 +102,9 @@ Verify: both read like something you would hand a client VP.
   troubleshooting guides. Realistic part numbers, cross-references between docs.
 - The generation prompt must include the Acme sentinel facts (AF-1 to AF-5 in
   `POC_FACTORY_TEST_ANCHORS.md` §1) verbatim, placed in their assigned documents.
-- Convert 2 or 3 to PDF and keep both formats in `corpora/acme-fab/`.
+- ~~Convert 2 or 3 to PDF and keep both formats in `corpora/acme-fab/`.~~
+  Deferred 2026-06-12: corpora stay markdown-only until the core agent loop is solid.
+  See "Deferred enhancements" at the bottom of this doc.
 
 Verify: docs are domain-plausible and reference each other; `grep` finds every AF
 sentinel sentence verbatim in its assigned document.
@@ -188,7 +190,7 @@ Verify: each loader produces non-empty, sane text from a real corpus file.
 
 Reference: architecture §5.3.
 
-- `poc-factory ingest --client <id>` (Typer): walk the corpus dir, parse, hash
+- `configent ingest --client <id>` (Typer): walk the corpus dir, parse, hash
   content, skip unchanged docs, delete-and-replace changed docs, chunk, embed, upsert.
   Print a summary table (added / skipped / replaced, chunk counts).
 
@@ -355,7 +357,7 @@ generated pairs per client by hand.
 
 ### T5.2: Retrieval eval
 
-- `poc-factory eval --client <id> --retrieval-only`: for each golden question, run
+- `configent eval --client <id> --retrieval-only`: for each golden question, run
   T2.6 search, score hit@k (golden source document in top k). Print per-client table.
 
 Verify: command prints hit@5 for both clients; numbers are plausible (>70%).
@@ -374,7 +376,7 @@ Verify: the wrong answer scores lower than the correct one on the real-call test
 
 ### T5.4: Full eval run + scorecard
 
-- `poc-factory eval --client <id>`: run every golden question through the real agent
+- `configent eval --client <id>`: run every golden question through the real agent
   loop, collect judge scores plus p50/p95 latency and cost/query from the trace data,
   write a row to `eval_runs`, emit a Markdown scorecard.
 - `--all` flag for both clients; paste the table into the README.
@@ -436,6 +438,20 @@ These are yours, not Claude's, though Claude can draft copy.
   (Problem / Built / Result with real numbers).
 - **T7.4 (stretch)**: record the onboarding timer run: doc dump to working POC in
   under an hour, visible clock.
+
+---
+
+## Deferred enhancements
+
+Decisions made during implementation that consciously trim or postpone plan scope.
+
+- **E1: PDF corpus ingestion** (deferred from T1.2, decided 2026-06-12). Corpora are
+  markdown-only until the core agent loop (Phase 3) is solid. When picked up: convert
+  2-3 Acme docs to PDF and ingest the PDF *instead of* the `.md` (move the markdown
+  originals to a `sources/` subfolder the ingester skips) — do not index both formats,
+  that double-indexes the same text. This exercises `parse_pdf` against real files and
+  restores the "it eats PDFs" demo line. Until then, `parse_pdf` is untested against
+  real corpus files and the T2.4 PDF verify is waived.
 
 ---
 
