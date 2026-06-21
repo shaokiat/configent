@@ -1,5 +1,6 @@
-/* ── Design tokens ─────────────────────────────────────────────── */
-:root {
+/* ── Design tokens — dark (default) ────────────────────────────── */
+:root,
+[data-theme="dark"] {
   --bg:            #09090f;
   --bg-surface:    #111118;
   --bg-elevated:   #1a1a26;
@@ -20,6 +21,80 @@
   --amber:         #fbbf24;
   --red:           #f87171;
 
+  --bg-glass:      rgba(9, 9, 15, 0.85);
+  --shadow-card:   0 0 60px rgba(99, 102, 241, 0.08), 0 20px 40px rgba(0, 0, 0, 0.4);
+
+  /* YAML snippet tokens */
+  --y-key:  #7dd3fc;
+  --y-str:  #86efac;
+  --y-num:  #fda4af;
+  --y-bool: #fbbf24;
+
+  /* SVG diagram fills */
+  --svg-bg-engine:  #0d0d16;
+  --svg-bg-surface: #111118;
+  --svg-bg-raised:  #1a1a26;
+  --svg-bg-output:  #1a2620;
+  --svg-stroke:     #252535;
+  --svg-text:       #e2e2f0;
+  --svg-text-muted: #8888aa;
+  --svg-text-faint: #4a4a6a;
+  --svg-text-dim:   #3a3a5a;
+  --svg-green-bg:   #1a2620;
+  --svg-green-text: #34d399;
+
+  color-scheme: dark;
+}
+
+/* ── Design tokens — light ──────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:            #f6f6fc;
+  --bg-surface:    #ffffff;
+  --bg-elevated:   #ededf8;
+  --bg-hover:      #e4e4f4;
+  --border:        #d8d8ec;
+  --border-accent: #6366f1;
+
+  --text:          #18182c;
+  --text-muted:    #4a4a6a;
+  --text-faint:    #9090b8;
+
+  --accent:        #6366f1;
+  --accent-dim:    #4f52cc;
+  --accent-glow:   rgba(99, 102, 241, 0.08);
+  --accent-subtle: rgba(99, 102, 241, 0.06);
+
+  --green:         #059669;
+  --amber:         #d97706;
+  --red:           #dc2626;
+
+  --bg-glass:      rgba(246, 246, 252, 0.88);
+  --shadow-card:   0 0 30px rgba(99, 102, 241, 0.06), 0 4px 20px rgba(0, 0, 0, 0.07);
+
+  /* YAML snippet tokens */
+  --y-key:  #0550ae;
+  --y-str:  #116329;
+  --y-num:  #cf222e;
+  --y-bool: #953800;
+
+  /* SVG diagram fills */
+  --svg-bg-engine:  #f0f0f8;
+  --svg-bg-surface: #ffffff;
+  --svg-bg-raised:  #ededf8;
+  --svg-bg-output:  #ecfdf5;
+  --svg-stroke:     #d0d0e8;
+  --svg-text:       #18182c;
+  --svg-text-muted: #4a4a6a;
+  --svg-text-faint: #9090b8;
+  --svg-text-dim:   #c0c0d8;
+  --svg-green-bg:   #ecfdf5;
+  --svg-green-text: #059669;
+
+  color-scheme: light;
+}
+
+/* ── Shared tokens (theme-independent) ─────────────────────────── */
+:root {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
 
@@ -84,6 +159,13 @@ pre {
   font-size: 0.85em;
   color: var(--accent);
 }
+
+/* ── Shiki dual-theme switching ────────────────────────────────── */
+/* defaultColor: false outputs both --shiki-light and --shiki-dark on each token */
+[data-theme="dark"]  .astro-code span { color: var(--shiki-dark)  !important; }
+[data-theme="light"] .astro-code span { color: var(--shiki-light) !important; }
+[data-theme="dark"]  .astro-code { background: var(--bg-surface) !important; }
+[data-theme="light"] .astro-code { background: #ffffff            !important; }
 
 /* ── Utility ───────────────────────────────────────────────────── */
 .sr-only {

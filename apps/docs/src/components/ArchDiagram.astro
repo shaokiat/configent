@@ -1,5 +1,5 @@
 ---
-// Architecture flow diagram — no external dependencies, pure SVG + CSS
+// Architecture flow diagram — fills driven by CSS variables so light/dark theme works
 ---
 
 <div class="diagram-wrap">
@@ -11,15 +11,12 @@
     aria-label="Configent architecture: config file feeds into the orchestration layer which initialises RAG and tools, runs the agent loop, and produces structured output"
   >
     <defs>
-      <!-- Arrow marker -->
       <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
         <polygon points="0 0, 8 3, 0 6" fill="#6366f1"/>
       </marker>
       <marker id="arrow-dim" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-        <polygon points="0 0, 8 3, 0 6" fill="#4a4a6a"/>
+        <polygon class="stroke-dim-fill" points="0 0, 8 3, 0 6"/>
       </marker>
-
-      <!-- Glow filter -->
       <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
         <feGaussianBlur stdDeviation="3" result="blur"/>
         <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
@@ -28,98 +25,97 @@
 
     <!-- ── Config file (left) ─────────────────────────────────── -->
     <g class="node node-config" transform="translate(30, 190)">
-      <rect width="140" height="140" rx="10" fill="#111118" stroke="#6366f1" stroke-width="1.5"/>
-      <!-- YAML icon lines -->
-      <text x="70" y="38" text-anchor="middle" font-family="monospace" font-size="10" fill="#7dd3fc">client_id: acme</text>
-      <text x="70" y="54" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">knowledge_base:</text>
-      <text x="70" y="70" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">  sources: [...]</text>
-      <text x="70" y="86" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">agent:</text>
-      <text x="70" y="102" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">  model: claude</text>
-      <text x="70" y="118" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">tools: [...]</text>
-      <text x="70" y="136" text-anchor="middle" font-family="monospace" font-size="11" fill="#6366f1" font-weight="600">config.yaml</text>
+      <rect class="bg-surface stroke-accent" width="140" height="140" rx="10" stroke-width="1.5"/>
+      <text x="70" y="38"   text-anchor="middle" class="mono-sm  y-key">client_id: acme</text>
+      <text x="70" y="54"   text-anchor="middle" class="mono-sm  text-faint">knowledge_base:</text>
+      <text x="70" y="70"   text-anchor="middle" class="mono-sm  text-faint">  sources: [...]</text>
+      <text x="70" y="86"   text-anchor="middle" class="mono-sm  text-faint">agent:</text>
+      <text x="70" y="102"  text-anchor="middle" class="mono-sm  text-faint">  model: claude</text>
+      <text x="70" y="118"  text-anchor="middle" class="mono-sm  text-faint">tools: [...]</text>
+      <text x="70" y="136"  text-anchor="middle" class="mono-sm-bold y-key">config.yaml</text>
     </g>
 
     <!-- Arrow: config → engine -->
     <line x1="170" y1="260" x2="210" y2="260" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
 
     <!-- ── Engine outer box ───────────────────────────────────── -->
-    <rect x="215" y="30" width="580" height="460" rx="12" fill="#0d0d16" stroke="#252535" stroke-width="1.5" stroke-dasharray="4 3"/>
-    <text x="505" y="58" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#4a4a6a" letter-spacing="0.08em">CONFIGENT ENGINE</text>
+    <rect class="bg-engine stroke-dim" x="215" y="30" width="580" height="460" rx="12" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="505" y="58" text-anchor="middle" class="label-xs text-faint letter-wide">CONFIGENT ENGINE</text>
 
     <!-- ── Orchestration layer ────────────────────────────────── -->
-    <rect x="235" y="70" width="540" height="100" rx="8" fill="#111118" stroke="#252535" stroke-width="1"/>
-    <text x="505" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#8888aa" font-weight="500">Orchestration Layer</text>
+    <rect class="bg-surface stroke-dim" x="235" y="70" width="540" height="100" rx="8" stroke-width="1"/>
+    <text x="505" y="95" text-anchor="middle" class="label-sm text-muted" font-weight="500">Orchestration Layer</text>
 
     <!-- Tool Registry box -->
-    <rect x="255" y="105" width="220" height="50" rx="6" fill="#1a1a26" stroke="#252535"/>
-    <text x="365" y="125" text-anchor="middle" font-family="monospace" font-size="11" fill="#fbbf24">Tool Registry</text>
-    <text x="365" y="143" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">register + validate tools from config</text>
+    <rect class="bg-raised stroke-dim" x="255" y="105" width="220" height="50" rx="6"/>
+    <text x="365" y="125" text-anchor="middle" class="mono-sm y-bool">Tool Registry</text>
+    <text x="365" y="143" text-anchor="middle" class="label-xs text-faint">register + validate tools from config</text>
 
     <!-- RAG Setup box -->
-    <rect x="495" y="105" width="260" height="50" rx="6" fill="#1a1a26" stroke="#252535"/>
-    <text x="625" y="125" text-anchor="middle" font-family="monospace" font-size="11" fill="#7dd3fc">RAG Pipeline</text>
-    <text x="625" y="143" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">embed docs → pgvector → retrieval</text>
+    <rect class="bg-raised stroke-dim" x="495" y="105" width="260" height="50" rx="6"/>
+    <text x="625" y="125" text-anchor="middle" class="mono-sm y-key">RAG Pipeline</text>
+    <text x="625" y="143" text-anchor="middle" class="label-xs text-faint">embed docs → pgvector → retrieval</text>
 
     <!-- Arrow: orchestration → agent loop -->
-    <line x1="505" y1="170" x2="505" y2="215" stroke="#252535" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <line x1="505" y1="170" x2="505" y2="215" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
     <!-- ── Agent Loop ──────────────────────────────────────────── -->
-    <rect x="285" y="220" width="440" height="180" rx="8" fill="#111118" stroke="#6366f1" stroke-width="1.5" filter="url(#glow)"/>
-    <text x="505" y="248" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#8888aa" font-weight="500">Agent Loop</text>
+    <rect class="bg-surface stroke-accent" x="285" y="220" width="440" height="180" rx="8" stroke-width="1.5" filter="url(#glow)"/>
+    <text x="505" y="248" text-anchor="middle" class="label-sm text-muted" font-weight="500">Agent Loop</text>
 
     <!-- Claude LLM -->
-    <rect x="305" y="260" width="180" height="120" rx="6" fill="#1a1a26" stroke="#6366f1" stroke-width="1"/>
-    <text x="395" y="285" text-anchor="middle" font-family="monospace" font-size="12" fill="#e2e2f0" font-weight="600">Claude LLM</text>
-    <text x="395" y="303" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#6366f1">claude-sonnet-4-6</text>
-    <text x="395" y="323" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">↑ tool results</text>
-    <text x="395" y="339" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">↓ tool calls</text>
-    <text x="395" y="358" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">streaming via SSE</text>
-    <text x="395" y="374" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">prompt cache enabled</text>
+    <rect class="bg-raised stroke-accent-soft" x="305" y="260" width="180" height="120" rx="6" stroke-width="1"/>
+    <text x="395" y="285" text-anchor="middle" class="mono-sm-bold text-primary">Claude LLM</text>
+    <text x="395" y="303" text-anchor="middle" class="label-xs text-accent">claude-sonnet-4-6</text>
+    <text x="395" y="323" text-anchor="middle" class="label-xs text-faint">↑ tool results</text>
+    <text x="395" y="339" text-anchor="middle" class="label-xs text-faint">↓ tool calls</text>
+    <text x="395" y="358" text-anchor="middle" class="label-xs text-faint">streaming via SSE</text>
+    <text x="395" y="374" text-anchor="middle" class="label-xs text-faint">prompt cache enabled</text>
 
     <!-- Tools panel -->
-    <rect x="505" y="260" width="200" height="120" rx="6" fill="#1a1a26" stroke="#252535"/>
-    <text x="605" y="280" text-anchor="middle" font-family="monospace" font-size="11" fill="#86efac">Active Tools</text>
-    <text x="605" y="300" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">search_knowledge_base</text>
-    <text x="605" y="316" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">get_pricing</text>
-    <text x="605" y="332" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">create_ticket</text>
-    <text x="605" y="352" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#3a3a5a">← defined in config.yaml</text>
-    <text x="605" y="370" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#3a3a5a">← no code changes</text>
+    <rect class="bg-raised stroke-dim" x="505" y="260" width="200" height="120" rx="6"/>
+    <text x="605" y="280" text-anchor="middle" class="mono-sm y-str">Active Tools</text>
+    <text x="605" y="300" text-anchor="middle" class="mono-xs text-faint">search_docs</text>
+    <text x="605" y="316" text-anchor="middle" class="mono-xs text-faint">get_document</text>
+    <text x="605" y="332" text-anchor="middle" class="mono-xs text-faint">pricing_lookup</text>
+    <text x="605" y="352" text-anchor="middle" class="label-xs text-dim">← defined in config.yaml</text>
+    <text x="605" y="370" text-anchor="middle" class="label-xs text-dim">← no code changes</text>
 
     <!-- Bidirectional arrows between LLM and tools -->
-    <line x1="490" y1="300" x2="506" y2="300" stroke="#4a4a6a" stroke-width="1" marker-end="url(#arrow-dim)"/>
-    <line x1="506" y1="320" x2="490" y2="320" stroke="#4a4a6a" stroke-width="1" marker-end="url(#arrow-dim)"/>
+    <line x1="490" y1="300" x2="506" y2="300" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
+    <line x1="506" y1="320" x2="490" y2="320" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
 
     <!-- Arrow: agent loop → output -->
     <line x1="505" y1="400" x2="505" y2="448" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
 
     <!-- ── Output ──────────────────────────────────────────────── -->
-    <rect x="330" y="450" width="350" height="24" rx="6" fill="#1a2620" stroke="#34d399" stroke-width="1"/>
-    <text x="505" y="467" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#34d399" font-weight="500">
+    <rect class="bg-output stroke-green" x="330" y="450" width="350" height="24" rx="6" stroke-width="1"/>
+    <text x="505" y="467" text-anchor="middle" class="label-sm text-green" font-weight="500">
       Streamed response · Inline citations · Structured tool output
     </text>
 
     <!-- ── Documents input (top right) ───────────────────────── -->
     <g transform="translate(810, 90)">
-      <rect width="120" height="80" rx="8" fill="#111118" stroke="#252535" stroke-width="1"/>
-      <text x="60" y="28" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#8888aa">Input Documents</text>
-      <text x="60" y="46" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">PDF / URL / text</text>
-      <text x="60" y="62" text-anchor="middle" font-family="monospace" font-size="10" fill="#4a4a6a">embed on startup</text>
-      <text x="60" y="76" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">pgvector index</text>
+      <rect class="bg-surface stroke-dim" width="120" height="80" rx="8" stroke-width="1"/>
+      <text x="60" y="28"  text-anchor="middle" class="label-sm text-muted">Input Documents</text>
+      <text x="60" y="46"  text-anchor="middle" class="mono-xs text-faint">PDF / URL / text</text>
+      <text x="60" y="62"  text-anchor="middle" class="mono-xs text-faint">embed on startup</text>
+      <text x="60" y="76"  text-anchor="middle" class="label-xs text-faint">pgvector index</text>
     </g>
 
     <!-- Arrow: docs → RAG -->
-    <line x1="810" y1="130" x2="758" y2="130" stroke="#252535" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <line x1="810" y1="130" x2="758" y2="130" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <!-- Labels -->
-    <text x="30" y="182" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">1. Author config</text>
-    <text x="215" y="22" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a">2. Configent initialises pipeline</text>
-    <text x="215" y="215" font-family="system-ui, sans-serif" font-size="10" fill="#6366f1">3. Queries run through agent loop</text>
-    <text x="330" y="495" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a" text-anchor="middle">4. Response delivered</text>
-    <text x="505" y="495" font-family="system-ui, sans-serif" font-size="10" fill="#4a4a6a" text-anchor="middle"></text>
+    <!-- Step labels -->
+    <text x="30"  y="182" class="label-xs text-faint">1. Author config</text>
+    <text x="215" y="22"  class="label-xs text-faint">2. Configent initialises pipeline</text>
+    <text x="215" y="215" class="label-xs text-accent">3. Queries run through agent loop</text>
+    <text x="505" y="495" text-anchor="middle" class="label-xs text-faint">4. Response delivered</text>
   </svg>
 </div>
 
 <style>
+  /* ── Wrapper ─────────────────────────────────────────────────── */
   .diagram-wrap {
     width: 100%;
     background: var(--bg);
@@ -135,10 +131,40 @@
     display: block;
   }
 
-  .node-config rect {
-    transition: stroke 0.2s;
-  }
-  .node-config:hover rect {
-    stroke: #818cf8;
-  }
+  /* ── Fill classes ────────────────────────────────────────────── */
+  .bg-engine  { fill: var(--svg-bg-engine); }
+  .bg-surface { fill: var(--svg-bg-surface); }
+  .bg-raised  { fill: var(--svg-bg-raised); }
+  .bg-output  { fill: var(--svg-bg-output); }
+
+  /* ── Stroke classes ──────────────────────────────────────────── */
+  .stroke-accent      { stroke: #6366f1; }
+  .stroke-accent-soft { stroke: #6366f1; }
+  .stroke-dim         { stroke: var(--svg-stroke); }
+  .stroke-green       { stroke: var(--svg-green-text); }
+
+  /* Lines and marker fill */
+  .stroke-dim-line { stroke: var(--svg-stroke); }
+  .stroke-dim-fill { fill: var(--svg-stroke); }
+
+  /* ── Text classes ────────────────────────────────────────────── */
+  .text-primary { fill: var(--svg-text); }
+  .text-muted   { fill: var(--svg-text-muted); }
+  .text-faint   { fill: var(--svg-text-faint); }
+  .text-dim     { fill: var(--svg-text-dim); }
+  .text-accent  { fill: #6366f1; }
+  .text-green   { fill: var(--svg-green-text); }
+
+  /* YAML token colours (reuse site tokens) */
+  .y-key  { fill: var(--y-key); }
+  .y-str  { fill: var(--y-str); }
+  .y-bool { fill: var(--y-bool); }
+
+  /* ── Font helpers ────────────────────────────────────────────── */
+  .mono-sm      { font-family: monospace; font-size: 10px; }
+  .mono-sm-bold { font-family: monospace; font-size: 12px; font-weight: 600; }
+  .mono-xs      { font-family: monospace; font-size: 10px; }
+  .label-sm     { font-family: system-ui, sans-serif; font-size: 12px; }
+  .label-xs     { font-family: system-ui, sans-serif; font-size: 10px; }
+  .letter-wide  { letter-spacing: 0.08em; }
 </style>

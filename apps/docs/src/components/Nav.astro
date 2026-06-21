@@ -32,6 +32,30 @@ function isActive(href: string) {
       ))}
     </nav>
 
+    <button
+      id="theme-toggle"
+      class="theme-btn"
+      aria-label="Toggle light/dark theme"
+      title="Toggle theme"
+    >
+      <!-- Sun (shown in dark mode) -->
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+      <!-- Moon (shown in light mode) -->
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+    </button>
+
     <a
       href="https://github.com/shaokiat/configent"
       class="nav-gh"
@@ -52,7 +76,7 @@ function isActive(href: string) {
     top: 0;
     z-index: 100;
     height: var(--nav-height);
-    background: rgba(9, 9, 15, 0.85);
+    background: var(--bg-glass);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
@@ -120,4 +144,35 @@ function isActive(href: string) {
     margin-left: 0.5rem;
   }
   .nav-gh:hover { color: var(--text); text-decoration: none; }
+
+  /* ── Theme toggle ─────────────────────────────────────────────── */
+  .theme-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+  .theme-btn:hover { color: var(--text); border-color: var(--accent); background: var(--bg-elevated); }
+
+  /* Show sun in dark mode, moon in light mode */
+  :global([data-theme="dark"])  .icon-moon { display: none; }
+  :global([data-theme="light"]) .icon-sun  { display: none; }
 </style>
+
+<script>
+  const btn = document.getElementById('theme-toggle');
+  btn?.addEventListener('click', () => {
+    const html = document.documentElement;
+    const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('configent-theme', next);
+  });
+</script>

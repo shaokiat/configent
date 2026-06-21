@@ -223,7 +223,7 @@ agent:
     - name: create_support_ticket
       enabled: true
       endpoint: https://api.example.com/support/tickets
-      auth_header: Bearer sk-prod-support-...
+      auth_header: Bearer <your-api-token>
 
 limits:
   rate_limit_per_minute: 30
@@ -315,7 +315,7 @@ agent:
     - name: create_support_ticket
       enabled: true
       endpoint: https://api.example.com/tickets
-      auth_header: Bearer sk-support-...
+      auth_header: Bearer <your-api-token>
     - name: get_product_pricing
       enabled: true
       endpoint: https://api.example.com/pricing

@@ -19,6 +19,10 @@ node_modules/
 out/
 .vercel/
 
+# Astro generated types (build artifact)
+apps/docs/.astro/
+apps/docs/dist/
+
 # Env
 .env
 .env.local
