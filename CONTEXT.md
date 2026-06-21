@@ -6,7 +6,7 @@ A config-driven enterprise AI assistant platform: one codebase spins up a brande
 
 **Configent**:
 The canonical project name — used for the repo, database, CLI, and all user-facing surfaces.
-_Avoid_: POC Factory (legacy name; survives only in the planning docs `POC_FACTORY_*.md`)
+_Avoid_: POC Factory (legacy name; see `CONFIGENT.md` and `CONFIGENT_BUILD.md`)
 
 **Client**:
 A tenant of the platform (e.g., Acme Fab Equipment, Meridian Insurance), defined entirely by one YAML file in `config/` plus a corpus directory.
@@ -16,7 +16,7 @@ _Avoid_: tenant, customer
 The set of source documents belonging to one Client, ingested into pgvector scoped by `client_id`.
 
 **Sentinel fact**:
-A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5 in `POC_FACTORY_TEST_ANCHORS.md`).
+A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5 in `CONFIGENT_BUILD.md` Part 1 §1).
 
 **Shared tool**:
 A tool available to every Client (`search_docs`, `get_document`).
@@ -37,4 +37,4 @@ A mock business-system tool enabled per Client via its YAML (`pricing_lookup` fo
 
 ## Flagged ambiguities
 
-- "poc-factory" vs "configent" — resolved 2026-06-12: **Configent** is canonical everywhere executable (CLI command is `configent`, DB is `configent`); the `POC_FACTORY_*.md` planning docs keep their filenames as historical artifacts.
+- "poc-factory" vs "configent" — resolved 2026-06-12: **Configent** is canonical everywhere executable (CLI command is `configent`, DB is `configent`). Planning docs consolidated into `CONFIGENT.md` and `CONFIGENT_BUILD.md`.

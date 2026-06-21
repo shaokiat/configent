@@ -1,4 +1,4 @@
-# POC Factory: Architecture and Implementation Plan
+# Configent: Architecture and Implementation Plan
 
 A config-driven enterprise AI assistant platform. One codebase spins up a fully branded,
 client-specific RAG + agent assistant from a YAML config file and a document dump. The
@@ -344,7 +344,7 @@ cold is an interview differentiator.
 ### 5.3 Ingestion pipeline (CLI)
 
 ```
-poc-factory ingest --client acme-fab
+configent ingest --client acme-fab
 ```
 
 Reads raw docs (Markdown, PDF, HTML), chunks per the config, embeds via the
@@ -358,7 +358,7 @@ instead of days of hunting. Convert two or three to PDF for ingestion realism.
 ### 5.4 Eval harness
 
 ```
-poc-factory eval --client acme-fab
+configent eval --client acme-fab
 ```
 
 - **Retrieval metrics**: hit rate at k (does the golden chunk's document appear in the
@@ -403,7 +403,7 @@ layer. No row-level security needed for a demo.
 ## 7. Repo structure (monorepo)
 
 ```
-poc-factory/
+configent/
 ├── apps/
 │   ├── web/                  # Next.js: chat UI, client switcher, admin
 │   └── api/                  # FastAPI: agent loop, RAG, tools, tracing
@@ -460,86 +460,7 @@ Stretch: a third client whose tool hits a real external system (Odoo/ERPNext).
 | Evals | Per-client golden sets, structured-output judge | Evals are the top skill gap AI companies report; structured outputs make the judge parse-proof |
 | Tracing | Homegrown Postgres sink | The data is needed anyway for cost/eval tables; no extra service to explain |
 
-## 11. Build plan: small steps with exit checks
-
-Each step is one sitting (roughly 2 to 4 hours). Do them in order; every step ends with
-something observable. Nothing depends on calendar weeks.
-
-For execution, use `POC_FACTORY_BUILD_PLAN.md`: it decomposes every step below into
-single-session tasks (T0.1 through T7.4) with explicit scope, dependency notes, and a
-verify command per task, written to be handed to Claude one task at a time.
-
-`POC_FACTORY_TEST_ANCHORS.md` supplies the ground truth those tasks test against:
-sentinel facts planted in the corpora, ten anchor use cases (UC-1 to UC-10), per-task
-test cases, golden set seed entries, and judge fixtures.
-
-### Phase 0: Foundations
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 0.1 | Scaffold monorepo: FastAPI app with `/healthz`, Next.js app, docker-compose with `pgvector/pgvector` Postgres | `docker compose up` serves both apps; `/healthz` returns OK |
-| 0.2 | Pydantic config schema + registry; load `config/*.yaml` at startup with validation errors that name the field | A deliberately broken YAML fails startup with a readable error |
-
-### Phase 1: Clients exist
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 1.1 | Write the two discovery briefs and generate both corpora with Claude (10-15 docs each, 2-3 converted to PDF) | `briefs/` and `corpora/` populated; briefs read like real deliverables |
-| 1.2 | Write both client YAMLs and system prompts (grounding rules, persona, "say I don't know") | Configs load; prompts exceed 2048 tokens so they cache (4.4) |
-| 1.3 | Branded shell: `/c/[client_id]` renders logo, colors, assistant name from config; switcher works | Flipping between the two URLs visibly rebrands with no code change |
-
-### Phase 2: Retrieval
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 2.1 | `embed()` function (Voyage) + `documents`/`chunks` tables + chunker | Unit test: chunk sizes and overlap match config |
-| 2.2 | `poc-factory ingest --client X`: parse, chunk, embed, upsert; content-hash idempotency | Running twice is a no-op; row counts match expectations |
-| 2.3 | Search function: cosine top-k filtered by `client_id` with similarity floor | A known question returns the chunk you planted, for the right client only |
-
-### Phase 3: The agent
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 3.1 | Non-streaming agent loop (4.2) with `search_docs` returning `search_result` blocks (4.3); CLI test entrypoint | A corpus question answered with `search_result_location` citations in the raw response |
-| 3.2 | `get_document` tool + one mock client tool per client, resolved from config | Acme answers a pricing question by calling `pricing_lookup`; Meridian cannot |
-| 3.3 | Streaming: SSE endpoint forwarding `text_delta` + `citations_delta`; chat UI renders text and inline citation markers live | Citations appear in the browser as the answer streams |
-| 3.4 | Prompt caching breakpoints (4.4) + cache verification | Turn 2 of a conversation shows nonzero `cache_read_input_tokens` |
-
-### Phase 4: Observability
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 4.1 | Tracing middleware writing spans (tokens, cache reads, cost, latency) to `traces` | Every chat turn produces queryable spans with correct cost math |
-| 4.2 | Admin console: conversation explorer with trace replay; per-client stats; basic auth | Any conversation can be replayed end to end with its total cost |
-| 4.3 | Budget guard + per-IP rate limit | Exceeding the daily budget returns a clean 429; resets at midnight |
-
-### Phase 5: Evals
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 5.1 | Golden sets: 25-40 Q&A pairs per client (generate drafts with Claude from the corpus, hand-review every pair) | `evals/*/golden.jsonl` committed; pairs reference real corpus content |
-| 5.2 | Retrieval metric: hit@k over the golden set | One command prints hit@5 per client |
-| 5.3 | Judge (4.5) + scorecard: quality scores, p50/p95, cost/query; write to `eval_runs` | The full eval table renders as Markdown; numbers land in the README |
-| 5.4 | Wire evals into CI with a score badge | A PR that breaks retrieval visibly drops the badge |
-
-### Phase 6: Ship
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 6.1 | Dockerize both apps; Cloud Run deploy; Cloud SQL or Neon; Secret Manager | Stable public URL serves both clients |
-| 6.2 | Nightly demo-data reset (Cloud Scheduler); smoke-test the hardening | Demo survives a stranger poking at it |
-| 6.3 | Switcher polish: transitions, loading states, empty states | You would happily open it in an interview |
-
-### Phase 7: Packaging (do not skip)
-
-| # | Step | Exit check |
-|---|------|-----------|
-| 7.1 | 2-3 minute demo video told as a client story: brief, config file, live branded assistant, eval dashboard | Video linked from README and portfolio |
-| 7.2 | README: pitch line, architecture diagram, eval table, video, all above the fold | A stranger gets the point in 60 seconds |
-| 7.3 | Blog post "Anatomy of a one-hour enterprise AI POC" + portfolio card (Problem / Built / Result with real numbers) | Both live |
-| 7.4 | Stretch: record the onboarding timer run (doc dump to working POC in under an hour) | The timer video exists |
-
-## 12. What the recruiter is screening for, and how this project answers it
+## 11. What the recruiter is screening for
 
 An FDE/SE screener spends about 60 seconds on a portfolio and a hiring manager about 5
 minutes. They are not reading code. They are pattern-matching for four signals, and
@@ -621,7 +542,7 @@ Order the artifacts so the screener hits the strongest signals first:
 One framing rule across all of it: never describe this as "a RAG chatbot." Describe it
 as "a POC delivery system." The first is what everyone has. The second is the job.
 
-## 13. Definition of done
+## 12. Definition of done
 
 - [ ] Live URL with at least 2 switchable clients
 - [ ] Demo video (2 to 3 minutes, told as a client story) linked from portfolio + README
