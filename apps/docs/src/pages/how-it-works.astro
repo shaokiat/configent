@@ -1,0 +1,350 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import ArchDiagram from '@/components/ArchDiagram.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<BaseLayout
+  title="How It Works"
+  description="Architecture walkthrough of the Configent config-driven agentic workflow engine."
+>
+
+  <div class="page container">
+    <div class="page-header">
+      <div class="page-label">Architecture</div>
+      <h1>How it works</h1>
+      <p class="lead">
+        Configent turns a YAML file into a fully operational RAG pipeline and
+        agentic assistant. Here's what happens from config to response.
+      </p>
+    </div>
+
+    <!-- ── Diagram ──────────────────────────────────────────────── -->
+    <section class="section">
+      <ArchDiagram />
+    </section>
+
+    <!-- ── Step walkthrough ─────────────────────────────────────── -->
+    <section class="section">
+      <h2>Step by step</h2>
+
+      <div class="steps">
+
+        <div class="step">
+          <div class="step-num">01</div>
+          <div class="step-body">
+            <h3>Author a config</h3>
+            <p>
+              A solutions engineer writes a <code>config.yaml</code> that declares the client ID,
+              knowledge base sources, active tools, agent model, and system prompt.
+              No Python. No infrastructure decisions. This file is the entire integration spec.
+            </p>
+            <div class="code-block">
+              <div class="cb-header">
+                <span class="cb-dot r"></span>
+                <span class="cb-dot a"></span>
+                <span class="cb-dot g"></span>
+                <span class="cb-filename">config.yaml</span>
+              </div>
+              <pre class="cb-pre"><code><span class="y-key">client_id</span>: <span class="y-str">acme-fab</span>
+<span class="y-key">name</span>: <span class="y-str">Acme Fab Equipment</span>
+
+<span class="y-key">branding</span>:
+  <span class="y-key">logo</span>: <span class="y-str">assets/acme-fab/logo.svg</span>
+  <span class="y-key">primary_color</span>: <span class="y-str">"#1B4F8A"</span>
+  <span class="y-key">assistant_name</span>: <span class="y-str">AcmeAssist</span>
+
+<span class="y-key">corpus</span>:
+  <span class="y-key">source</span>: <span class="y-str">corpora/acme-fab/</span>
+  <span class="y-key">chunking</span>:
+    <span class="y-key">chunk_size</span>: <span class="y-num">800</span>
+    <span class="y-key">overlap</span>: <span class="y-num">100</span>
+
+<span class="y-key">agent</span>:
+  <span class="y-key">model</span>: <span class="y-str">claude-sonnet-4-6</span>
+  <span class="y-key">system_prompt_file</span>: <span class="y-str">prompts/acme-fab.md</span>
+  <span class="y-key">max_tokens</span>: <span class="y-num">4096</span>
+  <span class="y-key">effort</span>: <span class="y-str">medium</span>
+  <span class="y-key">tools</span>:
+    - <span class="y-str">search_docs</span>
+    - <span class="y-str">get_document</span>
+    - <span class="y-str">pricing_lookup</span>
+
+<span class="y-key">limits</span>:
+  <span class="y-key">rate_limit_per_minute</span>: <span class="y-num">20</span>
+  <span class="y-key">daily_budget_usd</span>: <span class="y-num">2.00</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">02</div>
+          <div class="step-body">
+            <h3>Configent initialises the pipeline</h3>
+            <p>
+              On startup, the orchestration layer reads the config and:
+            </p>
+            <ul>
+              <li>Loads and embeds all knowledge base sources using <code>text-embedding-3-small</code></li>
+              <li>Indexes embeddings into a client-isolated pgvector namespace</li>
+              <li>Registers only the tools marked <code>enabled: true</code> — others are never loaded</li>
+              <li>Builds the system prompt with the turn breakpoint for prompt cache optimisation</li>
+            </ul>
+            <p>
+              Nothing is shared between clients. Each <code>client_id</code> gets an isolated
+              vector store namespace, tool registry, and session state.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">03</div>
+          <div class="step-body">
+            <h3>Queries run through the agent loop</h3>
+            <p>
+              When a user sends a message, it enters a manual agentic loop:
+            </p>
+            <ol>
+              <li>Claude receives the conversation history + registered tool schemas</li>
+              <li>If Claude calls a tool (e.g. <code>search_knowledge_base</code>), the engine executes it and appends the result</li>
+              <li>The loop continues until Claude produces a final text response or <code>max_iterations</code> is reached</li>
+              <li>Responses stream over SSE — text tokens and citation blocks arrive in real time</li>
+            </ol>
+            <p>
+              The loop is deterministic and inspectable. Every tool call and result is logged,
+              making it straightforward to debug or audit in enterprise contexts.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">04</div>
+          <div class="step-body">
+            <h3>Response is delivered with citations</h3>
+            <p>
+              The final response streams to the frontend with inline citation popovers.
+              Each cited passage maps back to a specific chunk in the knowledge base,
+              with the source document and page number surfaced in the UI.
+            </p>
+            <p>
+              This is not post-hoc attribution — citations are emitted as
+              <code>search_result</code> blocks during tool execution and rendered
+              by the client in real time.
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── Key design decisions ─────────────────────────────────── -->
+    <section class="section">
+      <h2>Key design decisions</h2>
+      <div class="decision-grid">
+        <div class="decision-card">
+          <div class="dc-label">ADR-0001</div>
+          <h4>Manual agent loop</h4>
+          <p>
+            Rather than delegating to a framework (LangChain, LlamaIndex), the agent loop
+            is implemented explicitly. This gives full control over tool execution order,
+            error handling, and streaming — all critical for enterprise reliability.
+          </p>
+        </div>
+        <div class="decision-card">
+          <div class="dc-label">ADR-0003</div>
+          <h4>Prompt caching</h4>
+          <p>
+            The system prompt and knowledge base context are cached at a turn breakpoint.
+            For clients with large, stable system prompts, this reduces cost and latency
+            by up to 90% on cache hits.
+          </p>
+        </div>
+        <div class="decision-card">
+          <div class="dc-label">ADR-0002</div>
+          <h4>pgvector for retrieval</h4>
+          <p>
+            Vector search runs in the same Postgres instance as the rest of the data.
+            No separate vector DB to operate. Client namespaces are isolated by
+            a <code>client_id</code> column — no cross-tenant leakage possible.
+          </p>
+        </div>
+        <div class="decision-card">
+          <div class="dc-label">ADR-0005</div>
+          <h4>Config-driven tenancy</h4>
+          <p>
+            There is no code path per client. The orchestration layer reads the config
+            at startup and builds everything from it. Adding a new client is a new file
+            and a service restart — no deployment, no PR, no code review.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <div class="page-nav">
+      <a href={`${base}/demo`} class="page-nav-next">
+        See it in action
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </a>
+    </div>
+  </div>
+
+</BaseLayout>
+
+<style>
+  .page {
+    padding-top: 4rem;
+    padding-bottom: 4rem;
+  }
+
+  .page-header {
+    max-width: 64ch;
+    margin-bottom: 3.5rem;
+  }
+
+  .page-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+  }
+
+  .page-header h1 { margin-bottom: 1rem; }
+
+  .lead {
+    font-size: 1.125rem;
+    color: var(--text-muted);
+    line-height: 1.7;
+    margin: 0;
+  }
+
+  .section { margin-bottom: 4.5rem; }
+  .section h2 { margin-bottom: 2rem; color: var(--text); }
+
+  /* ── Steps ─────────────────────────────────────────────────────── */
+  .steps { display: flex; flex-direction: column; gap: 3rem; }
+
+  .step {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  .step-num {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    opacity: 0.4;
+    line-height: 1;
+    padding-top: 0.2rem;
+  }
+
+  .step-body h3 { color: var(--text); margin-bottom: 0.75rem; }
+  .step-body p  { color: var(--text-muted); margin-bottom: 1rem; line-height: 1.7; }
+  .step-body ul,
+  .step-body ol { color: var(--text-muted); padding-left: 1.25rem; line-height: 1.75; margin-bottom: 1rem; }
+  .step-body li { margin-bottom: 0.375rem; }
+
+  /* ── Code block inside step ─────────────────────────────────── */
+  .code-block {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+    overflow: hidden;
+    margin-top: 1.25rem;
+  }
+
+  .cb-header {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.625rem 1rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cb-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .cb-dot.r { background: #ff5f57; }
+  .cb-dot.a { background: #ffbd2e; }
+  .cb-dot.g { background: #28ca41; }
+
+  .cb-filename {
+    margin-left: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .cb-pre {
+    padding: 1.5rem;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+
+  /* YAML tokens */
+  .y-key  { color: #7dd3fc; }
+  .y-str  { color: #86efac; }
+  .y-num  { color: #fda4af; }
+  .y-bool { color: #fbbf24; }
+
+  /* ── Decision grid ────────────────────────────────────────────── */
+  .decision-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+
+  .decision-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+  }
+
+  .dc-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .decision-card h4 { color: var(--text); margin-bottom: 0.5rem; }
+  .decision-card p  { font-size: 0.875rem; color: var(--text-muted); line-height: 1.65; margin: 0; }
+
+  /* ── Page nav ─────────────────────────────────────────────────── */
+  .page-nav { display: flex; justify-content: flex-end; }
+
+  .page-nav-next {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.25rem;
+    background: var(--accent);
+    color: #fff;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: background 0.15s;
+  }
+  .page-nav-next:hover { background: var(--accent-dim); text-decoration: none; }
+
+  @media (max-width: 768px) {
+    .step { grid-template-columns: 1fr; }
+    .step-num { font-size: 1.5rem; }
+    .decision-grid { grid-template-columns: 1fr; }
+  }
+</style>

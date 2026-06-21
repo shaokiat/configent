@@ -1,0 +1,169 @@
+---
+title: Quickstart
+description: Get a Configent RAG assistant running in under 10 minutes.
+order: 1
+---
+
+<div class="lead">
+  This guide walks you from zero to a working RAG assistant. You'll write one config file,
+  drop in some documents, and have a streaming agentic assistant running locally.
+</div>
+
+## Prerequisites
+
+- Python 3.11+
+- Docker (for Postgres + pgvector)
+- An [Anthropic API key](https://console.anthropic.com/)
+- A [Voyage AI API key](https://dash.voyageai.com/) — used for document and query embeddings (`voyage-3`)
+
+## 1. Clone and install
+
+```bash
+git clone https://github.com/shaokiat/configent.git
+cd configent
+```
+
+Install backend dependencies:
+
+```bash
+cd apps/api
+pip install -r requirements.txt
+```
+
+Install frontend dependencies:
+
+```bash
+cd ../web
+npm install
+```
+
+## 2. Start Postgres with pgvector
+
+```bash
+make up
+```
+
+This starts all services defined in `infra/docker-compose.yml`, including a Postgres instance
+with the `pgvector` extension enabled.
+
+## 3. Set environment variables
+
+Create `apps/api/.env`:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+VOYAGE_API_KEY=pa-...
+DATABASE_URL=postgresql://configent:configent@localhost:5432/configent
+```
+
+## 4. Write your first config
+
+Create `config/my-assistant.yaml` at the repo root:
+
+```yaml
+client_id: my-assistant
+name: "My First Assistant"
+
+branding:
+  logo: assets/my-assistant/logo.svg
+  primary_color: "#6366f1"
+  assistant_name: MyAssistant
+
+corpus:
+  source: corpora/my-assistant/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/my-assistant.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
+```
+
+> **The config is the only thing you write.** The orchestration layer reads this at startup,
+> embeds your documents using Voyage AI `voyage-3`, and has the assistant ready to query.
+
+## 5. Add your documents and system prompt
+
+**Documents** — place any `.pdf`, `.md`, or `.html` files in `corpora/my-assistant/`.
+The ingest step scans this directory recursively.
+
+**System prompt** — create `prompts/my-assistant.md`:
+
+```markdown
+You are a helpful assistant. Answer questions accurately using the knowledge base.
+Always cite the specific document and section you are referencing.
+If the answer is not in the knowledge base, say so — do not guess.
+```
+
+## 6. Ingest documents
+
+```bash
+cd apps/api
+python -m app.cli ingest my-assistant
+```
+
+You'll see output like:
+
+```
+INFO  Ingesting client: my-assistant
+INFO  Processing: corpora/my-assistant/product-manual.pdf
+INFO  Embedded 47 chunks → pgvector (namespace: my-assistant)
+INFO  Ingest complete: 1 added, 0 skipped, 47 total chunks
+```
+
+Documents are hashed — re-running ingest skips unchanged files and re-embeds only modified ones.
+
+## 7. Start the API
+
+```bash
+uvicorn app.main:app --reload
+```
+
+On startup the config registry loads all YAML files from `config/`, validates tool names,
+and registers the client. An unknown tool name or malformed config raises immediately.
+
+## 8. Start the frontend
+
+```bash
+cd apps/web
+npm run dev
+```
+
+Open `http://localhost:3000`. Select `my-assistant` from the client dropdown and start chatting.
+
+---
+
+## What happened?
+
+When you sent your first message, the agent loop:
+
+1. Loaded conversation history (empty for a new session)
+2. Built the API request: sorted tool definitions + cached system prompt + turn breakpoint
+3. Sent to Claude — which decided to call `search_docs` with a focused query
+4. The engine executed `search_docs`: embedded your query via `voyage-3`, ran cosine similarity
+   search against `my-assistant`'s pgvector namespace, returned the top 5 chunks as
+   `search_result` blocks with citations enabled
+5. Claude received the results and produced a final response
+6. The response streamed back over SSE — text tokens and citation events arriving in real time
+7. The frontend rendered the response with inline citation popovers
+
+The loop ran in **one iteration** (one tool call, one final response). For complex questions
+it may run multiple iterations up to the hardcoded limit of 8.
+
+---
+
+## Next steps
+
+- [Config Reference](/docs/config-reference) — every key explained with types and defaults
+- [Examples](/docs/examples) — the two live client configs from the repo
+- [How It Works](/how-it-works) — architecture walkthrough and design decisions

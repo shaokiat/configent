@@ -1,0 +1,203 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import Hero from '@/components/Hero.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<BaseLayout title="Home" description="Config-driven agentic workflow engine for enterprise AI.">
+
+  <Hero />
+
+  <!-- ── How it works teaser ─────────────────────────────────────── -->
+  <section class="features container">
+    <div class="section-label">What makes it different</div>
+    <h2>The config <em>is</em> the integration</h2>
+    <p class="section-sub">
+      Most enterprise AI projects require weeks of Python glue code per use case.
+      Configent inverts that model — the entire pipeline is expressed in a single YAML file
+      that a solutions engineer can write in an afternoon.
+    </p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">⬡</div>
+        <h3>No code per client</h3>
+        <p>
+          Each tenant gets their own config. Tools, knowledge base, prompt, and model
+          behaviour are all declared in YAML. Onboarding a new enterprise client
+          is a config diff, not a sprint.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>RAG out of the box</h3>
+        <p>
+          Point at PDFs, URLs, or raw text. Configent embeds, chunks, and indexes
+          your documents into pgvector at startup. No pipeline scaffolding required.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🔁</div>
+        <h3>Agentic by default</h3>
+        <p>
+          The agent loop handles multi-turn tool calling, citation injection, and
+          prompt caching. You declare which tools are active in config —
+          the engine wires them up automatically.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">📡</div>
+        <h3>Streaming first</h3>
+        <p>
+          Responses stream over SSE with live citations appearing inline.
+          The FastAPI backend and Next.js frontend share a typed event contract —
+          no polling, no timeouts.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA strip ───────────────────────────────────────────────── -->
+  <section class="cta-strip container">
+    <div class="cta-strip-inner">
+      <div>
+        <h2>See it running in 10 minutes</h2>
+        <p>Clone the repo, drop in a config, point at your docs.</p>
+      </div>
+      <div class="cta-strip-actions">
+        <a href={`${base}/docs/getting-started`} class="btn-primary-lg">
+          Read the quickstart
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </a>
+        <a href={`${base}/demo`} class="btn-ghost-lg">View live demo</a>
+      </div>
+    </div>
+  </section>
+
+</BaseLayout>
+
+<style>
+  /* ── Features ────────────────────────────────────────────────── */
+  .features {
+    padding: 5rem 0;
+  }
+
+  .section-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+  }
+
+  .features h2 {
+    margin-bottom: 0.75rem;
+    color: var(--text);
+  }
+  .features h2 em {
+    font-style: normal;
+    color: var(--accent);
+  }
+
+  .section-sub {
+    font-size: 1.0625rem;
+    color: var(--text-muted);
+    max-width: 60ch;
+    line-height: 1.7;
+    margin-bottom: 3rem;
+  }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+
+  .feature-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.75rem;
+    transition: border-color 0.2s;
+  }
+  .feature-card:hover { border-color: var(--border-accent); }
+
+  .feature-icon {
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .feature-card h3 {
+    color: var(--text);
+    margin-bottom: 0.5rem;
+  }
+
+  .feature-card p {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    line-height: 1.65;
+    margin: 0;
+  }
+
+  /* ── CTA strip ────────────────────────────────────────────────── */
+  .cta-strip {
+    padding-bottom: 0;
+  }
+
+  .cta-strip-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: 2.5rem 3rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .cta-strip h2 { margin-bottom: 0.25rem; color: var(--text); }
+  .cta-strip p  { margin: 0; font-size: 0.9375rem; }
+
+  .cta-strip-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-shrink: 0;
+  }
+
+  .btn-primary-lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.75rem 1.5rem;
+    background: var(--accent);
+    color: #fff;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .btn-primary-lg:hover { background: var(--accent-dim); text-decoration: none; }
+
+  .btn-ghost-lg {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    text-decoration: none;
+  }
+  .btn-ghost-lg:hover { color: var(--text); }
+
+  @media (max-width: 900px) {
+    .feature-grid { grid-template-columns: 1fr; }
+    .cta-strip-inner { flex-direction: column; align-items: flex-start; }
+  }
+</style>

@@ -1,0 +1,74 @@
+---
+import Nav from '@/components/Nav.astro';
+import '@/styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const {
+  title,
+  description = 'Config-driven agentic workflow engine for enterprise AI.',
+} = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <title>{title} · Configent</title>
+    <link rel="icon" type="image/svg+xml" href={`${import.meta.env.BASE_URL}favicon.svg`} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <Nav />
+    <main>
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <div class="container">
+        <span>Configent · Built for enterprise AI</span>
+        <span class="footer-sep">·</span>
+        <a href="https://github.com/shaokiat/configent" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>
+
+<style>
+  main {
+    min-height: calc(100vh - var(--nav-height) - 60px);
+  }
+
+  .site-footer {
+    height: 60px;
+    display: flex;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    margin-top: 6rem;
+  }
+
+  .site-footer .container {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-faint);
+  }
+
+  .site-footer a {
+    color: var(--text-faint);
+    transition: color 0.15s;
+  }
+  .site-footer a:hover { color: var(--text-muted); }
+
+  .footer-sep { color: var(--border); }
+</style>

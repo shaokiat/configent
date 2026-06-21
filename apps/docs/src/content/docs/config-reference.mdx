@@ -1,0 +1,192 @@
+---
+title: Config Reference
+description: Complete reference for all config.yaml keys — types, defaults, and examples.
+order: 2
+---
+
+<div class="lead">
+  Every Configent client is defined by a single YAML file in <code>config/</code> at the
+  repo root. This page documents every key, its type, default, and valid values.
+  All keys are validated against a Pydantic schema at startup — invalid configs fail fast
+  rather than at request time.
+</div>
+
+## Top-level keys
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `client_id` | `string` | ✓ | Unique identifier. Used as the pgvector namespace, URL slug, and log prefix. Must match `^[a-z0-9][a-z0-9-]*[a-z0-9]$`. |
+| `name` | `string` | ✓ | Human-readable client name. Used in logs and the UI header. |
+
+```yaml
+client_id: acme-fab
+name: "Acme Fab Equipment"
+```
+
+---
+
+## `branding`
+
+Controls UI presentation for this client.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `branding.logo` | `string` | ✓ | Path to the client logo, relative to the repo root (e.g. `assets/acme-fab/logo.svg`). |
+| `branding.primary_color` | `string` | ✓ | Hex colour used for the chat UI accent (e.g. `"#1B4F8A"`). |
+| `branding.assistant_name` | `string` | ✓ | Name displayed in the chat header and used in the system prompt. |
+
+```yaml
+branding:
+  logo: assets/acme-fab/logo.svg
+  primary_color: "#1B4F8A"
+  assistant_name: AcmeAssist
+```
+
+---
+
+## `corpus`
+
+Configures where documents come from and how they are chunked.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `corpus.source` | `string` | — | Path to the document directory, relative to the repo root. All `.pdf`, `.md`, `.html`, and `.htm` files in the directory are ingested recursively. |
+| `corpus.chunking.chunk_size` | `int` | `800` | Maximum tokens per chunk. Larger values preserve more context per retrieval hit. |
+| `corpus.chunking.overlap` | `int` | `100` | Token overlap between adjacent chunks. Prevents mid-sentence splits from degrading retrieval quality. |
+
+```yaml
+corpus:
+  source: corpora/acme-fab/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+```
+
+**Supported file types:** `.pdf`, `.md` / `.markdown`, `.html` / `.htm`.
+
+**Embedding:** Documents are embedded using **Voyage AI `voyage-3`** (1024-dimension vectors).
+This requires a `VOYAGE_API_KEY` environment variable. The model is not configurable per client.
+
+**Incremental ingestion:** The ingest step hashes each document's content. On re-run, unchanged
+documents are skipped. Modified documents are re-chunked and re-embedded automatically.
+
+---
+
+## `agent`
+
+Controls the LLM, system prompt, and tool list for this client's agent loop.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `agent.model` | `string` | — | Claude model ID. |
+| `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/acme-fab.md`). Loaded at runtime, not inlined. |
+| `agent.max_tokens` | `int` | `4096` | Maximum output tokens per API call. |
+| `agent.effort` | `string` | `"medium"` | Claude extended thinking effort level. One of `"low"`, `"medium"`, `"high"`, `"max"`. Higher effort uses more tokens. |
+| `agent.tools` | `list[string]` | `[]` | Ordered list of tool names to register for this client. Only tools listed here are available to the agent. Unknown names fail at startup. |
+
+```yaml
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/acme-fab.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - pricing_lookup
+```
+
+> **Prompt caching:** The system prompt is always cached at the turn breakpoint using
+> Anthropic's ephemeral cache. This is unconditional — no config needed. Tool definitions
+> are sorted alphabetically before each request to ensure a stable cache prefix.
+
+> **Max iterations:** The agent loop runs for a maximum of **8 iterations** regardless of config.
+> If the loop hasn't completed in 8 tool-call cycles it raises an error.
+
+### Available tools
+
+| Tool name | Scope | Description |
+|-----------|-------|-------------|
+| `search_docs` | Shared | Semantic search over the client's pgvector namespace. Returns `search_result` blocks with citations enabled. Accepts `query` (required) and `k` (default 5, max 8). |
+| `get_document` | Shared | Retrieves full document text by `document_id` (as returned by `search_docs`). Use when a chunk doesn't contain enough context. |
+| `pricing_lookup` | `acme-fab` | Returns unit price, volume discount, and lead time for an Acme part number and quantity. |
+| `coverage_check` | `meridian-insurance` | Returns a structured coverage verdict for a named claim scenario against the HomeShield Plus policy. |
+
+`search_docs` and `get_document` are shared and can be added to any client. `pricing_lookup`
+and `coverage_check` are client-specific — they contain hardcoded catalog or policy data
+specific to those clients. Adding a new client-specific tool requires adding a file under
+`apps/api/app/tools/<client_id>/` and registering it in `apps/api/app/tools/registry.py`.
+
+---
+
+## `limits`
+
+Controls per-client rate limiting and cost guardrails.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `limits.rate_limit_per_minute` | `int` | `20` | Maximum requests per minute for this client. |
+| `limits.daily_budget_usd` | `float` | `2.00` | Maximum spend in USD per day. Requests are rejected once the budget is exhausted. |
+
+```yaml
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
+```
+
+---
+
+## `evals` (optional)
+
+Configures automated evaluation against a golden Q&A set. Omit if not using evals.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `evals.golden_set` | `string` | — | Path to a `.jsonl` file of `{question, expected_answer}` pairs, relative to the repo root. |
+| `evals.judge_model` | `string` | `claude-sonnet-4-6` | Claude model used as the LLM judge for eval scoring. |
+
+```yaml
+evals:
+  golden_set: evals/acme-fab/golden.jsonl
+  judge_model: claude-sonnet-4-6
+```
+
+---
+
+## Complete example
+
+This is the actual `acme-fab` client config from the repo:
+
+```yaml
+client_id: acme-fab
+name: "Acme Fab Equipment"
+
+branding:
+  logo: assets/acme-fab/logo.svg
+  primary_color: "#1B4F8A"
+  assistant_name: AcmeAssist
+
+corpus:
+  source: corpora/acme-fab/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/acme-fab.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - pricing_lookup
+
+evals:
+  golden_set: evals/acme-fab/golden.jsonl
+  judge_model: claude-sonnet-4-6
+
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
+```

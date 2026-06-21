@@ -1,0 +1,268 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<section class="hero">
+  <div class="hero-inner container">
+
+    <div class="badge">
+      <span class="badge-dot"></span>
+      Config-driven · RAG · Agentic workflows
+    </div>
+
+    <h1 class="headline">
+      Configure once.<br />
+      <span class="headline-accent">Deploy everywhere.</span>
+    </h1>
+
+    <p class="subline">
+      Configent spins up production-ready RAG pipelines and agentic workflows
+      from a single YAML file. Enterprise AI integration without the three-month
+      implementation cycle.
+    </p>
+
+    <div class="callout">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 6v6l4 2"/>
+      </svg>
+      New use case in under 10 minutes
+    </div>
+
+    <div class="cta-group">
+      <a href={`${base}/how-it-works`} class="btn btn-primary">
+        See how it works
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </a>
+      <a href={`${base}/demo`} class="btn btn-secondary">
+        View demo
+      </a>
+      <a href={`${base}/docs/getting-started`} class="btn btn-ghost">
+        Read the docs
+      </a>
+    </div>
+
+    <div class="hero-snippet">
+      <div class="snippet-header">
+        <span class="snippet-dot red"></span>
+        <span class="snippet-dot amber"></span>
+        <span class="snippet-dot green"></span>
+        <span class="snippet-filename">config.yaml</span>
+      </div>
+      <pre class="snippet-body"><code><span class="y-key">client_id</span><span class="y-colon">:</span> <span class="y-str">acme-fab</span>
+<span class="y-key">name</span><span class="y-colon">:</span> <span class="y-str">Acme Fab Equipment</span>
+
+<span class="y-key">branding</span><span class="y-colon">:</span>
+  <span class="y-key">assistant_name</span><span class="y-colon">:</span> <span class="y-str">AcmeAssist</span>
+  <span class="y-key">primary_color</span><span class="y-colon">:</span> <span class="y-str">"#1B4F8A"</span>
+
+<span class="y-key">corpus</span><span class="y-colon">:</span>
+  <span class="y-key">source</span><span class="y-colon">:</span> <span class="y-str">corpora/acme-fab/</span>
+  <span class="y-key">chunking</span><span class="y-colon">:</span>
+    <span class="y-key">chunk_size</span><span class="y-colon">:</span> <span class="y-num">800</span>
+    <span class="y-key">overlap</span><span class="y-colon">:</span> <span class="y-num">100</span>
+
+<span class="y-key">agent</span><span class="y-colon">:</span>
+  <span class="y-key">model</span><span class="y-colon">:</span> <span class="y-str">claude-sonnet-4-6</span>
+  <span class="y-key">system_prompt_file</span><span class="y-colon">:</span> <span class="y-str">prompts/acme-fab.md</span>
+  <span class="y-key">effort</span><span class="y-colon">:</span> <span class="y-str">medium</span>
+  <span class="y-key">tools</span><span class="y-colon">:</span>
+    <span class="y-dash">-</span> <span class="y-str">search_docs</span>
+    <span class="y-dash">-</span> <span class="y-str">get_document</span>
+    <span class="y-dash">-</span> <span class="y-str">pricing_lookup</span></code></pre>
+    </div>
+
+  </div>
+</section>
+
+<style>
+  .hero {
+    padding: 6rem 0 5rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% -10%, rgba(99,102,241,0.15) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    align-items: center;
+  }
+
+  .hero-inner > *:not(.hero-snippet) {
+    grid-column: 1;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 0.875rem;
+    background: var(--accent-subtle);
+    border: 1px solid rgba(99,102,241,0.25);
+    border-radius: 100px;
+    font-size: 0.75rem;
+    color: var(--accent);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    margin-bottom: 1.5rem;
+  }
+
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .headline {
+    margin-bottom: 1.25rem;
+    color: var(--text);
+  }
+
+  .headline-accent {
+    color: var(--accent);
+  }
+
+  .subline {
+    font-size: 1.125rem;
+    color: var(--text-muted);
+    line-height: 1.7;
+    margin-bottom: 1.5rem;
+    max-width: 48ch;
+  }
+
+  .callout {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.875rem;
+    background: rgba(52, 211, 153, 0.08);
+    border: 1px solid rgba(52, 211, 153, 0.2);
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    color: var(--green);
+    font-weight: 500;
+    margin-bottom: 2rem;
+  }
+
+  .cta-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 0;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.625rem 1.25rem;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.15s;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn:hover { text-decoration: none; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent-dim); }
+
+  .btn-secondary {
+    background: var(--bg-elevated);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); background: var(--bg-hover); }
+
+  .btn-ghost {
+    color: var(--text-muted);
+  }
+  .btn-ghost:hover { color: var(--text); }
+
+  /* ── Snippet ───────────────────────────────────────────────────── */
+  .hero-snippet {
+    grid-column: 2;
+    grid-row: 1 / 7;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+    overflow: hidden;
+    box-shadow: 0 0 60px rgba(99,102,241,0.08), 0 20px 40px rgba(0,0,0,0.4);
+  }
+
+  .snippet-header {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .snippet-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .snippet-dot.red   { background: #ff5f57; }
+  .snippet-dot.amber { background: #ffbd2e; }
+  .snippet-dot.green { background: #28ca41; }
+
+  .snippet-filename {
+    margin-left: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .snippet-body {
+    padding: 1.5rem;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.8;
+  }
+
+  /* YAML token colours */
+  .y-key   { color: #7dd3fc; }
+  .y-colon { color: var(--text-muted); }
+  .y-str   { color: #86efac; }
+  .y-num   { color: #fda4af; }
+  .y-bool  { color: #fbbf24; }
+  .y-dash  { color: var(--text-muted); }
+
+  @media (max-width: 900px) {
+    .hero-inner {
+      grid-template-columns: 1fr;
+    }
+    .hero-snippet {
+      grid-column: 1;
+      grid-row: auto;
+    }
+  }
+</style>

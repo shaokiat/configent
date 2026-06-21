@@ -1,0 +1,102 @@
+---
+interface Props {
+  filename?: string;
+  lang?: string;
+  code: string;
+}
+
+const { filename = 'config.yaml', lang = 'yaml', code } = Astro.props;
+---
+
+<div class="snippet">
+  <div class="snippet-header">
+    <span class="dots">
+      <span class="dot red"></span>
+      <span class="dot amber"></span>
+      <span class="dot green"></span>
+    </span>
+    <span class="filename">{filename}</span>
+    <button class="copy-btn" data-code={code} aria-label="Copy to clipboard">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <span class="copy-label">Copy</span>
+    </button>
+  </div>
+  <pre class="snippet-body" data-lang={lang}><code set:html={code} /></pre>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const code = btn.dataset.code ?? '';
+      await navigator.clipboard.writeText(code);
+      const label = btn.querySelector('.copy-label');
+      if (label) {
+        label.textContent = 'Copied!';
+        setTimeout(() => { label.textContent = 'Copy'; }, 2000);
+      }
+    });
+  });
+</script>
+
+<style>
+  .snippet {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+    overflow: hidden;
+    margin: 1.5rem 0;
+  }
+
+  .snippet-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dots { display: flex; gap: 0.375rem; }
+  .dot  { width: 10px; height: 10px; border-radius: 50%; }
+  .dot.red   { background: #ff5f57; }
+  .dot.amber { background: #ffbd2e; }
+  .dot.green { background: #28ca41; }
+
+  .filename {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: 0.5rem;
+  }
+
+  .copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: auto;
+    padding: 0.25rem 0.625rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  .snippet-body {
+    padding: 1.5rem;
+    border: none;
+    border-radius: 0;
+    margin: 0;
+    background: transparent;
+    font-size: 0.875rem;
+    line-height: 1.75;
+    overflow-x: auto;
+  }
+</style>

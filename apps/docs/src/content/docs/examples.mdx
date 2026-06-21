@@ -1,0 +1,342 @@
+---
+title: Example Configs
+description: Live client configs from the repo, plus aspirational examples showing the planned config surface.
+order: 3
+---
+
+<div class="lead">
+  This page has two sections. <strong>Live configs</strong> are the actual YAML files running in the project today —
+  copy these and they will work. <strong>Planned examples</strong> show the target config surface once
+  per-source ingestion, webhook tools, and additional shared tools are implemented.
+</div>
+
+---
+
+## Live configs
+
+These configs are in `config/` in the repo and run against real corpora and prompts.
+
+---
+
+## Acme Fab Equipment
+
+**Use case:** Field service and procurement assistant for industrial fabrication equipment.
+Engineers and technicians ask about maintenance procedures, error codes, and spare part specifications.
+The `pricing_lookup` tool handles real-time quote requests without leaving the chat.
+
+**Corpus:** Product manuals, spare parts catalog, maintenance runbooks — all PDFs dropped into `corpora/acme-fab/`.
+
+**What's notable:**
+- Three tools active: `search_docs` for retrieval, `get_document` when a technician needs a full procedure section, and `pricing_lookup` for part quotes
+- `effort: medium` — correct for factual lookup tasks that don't need deep reasoning
+- `daily_budget_usd: 2.00` is a conservative guard for a low-volume internal tool
+
+```yaml
+client_id: acme-fab
+name: "Acme Fab Equipment"
+
+branding:
+  logo: assets/acme-fab/logo.svg
+  primary_color: "#1B4F8A"
+  assistant_name: AcmeAssist
+
+corpus:
+  source: corpora/acme-fab/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/acme-fab.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - pricing_lookup
+
+evals:
+  golden_set: evals/acme-fab/golden.jsonl
+  judge_model: claude-sonnet-4-6
+
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
+```
+
+**What the `pricing_lookup` tool does:**
+Given a part number and quantity, it returns unit price, volume discount eligibility, discounted total,
+and lead time. The agent is instructed to confirm the part number via `search_docs` first so it can
+verify the correct SKU before quoting.
+
+**Things to try in the demo:**
+- "What's the maintenance interval for the PX-900 chamber seals?"
+- "Price me 12 units of the chamber seal kit"
+- "The LT-200 is throwing error E07 — what does that mean?"
+
+---
+
+## Meridian Insurance
+
+**Use case:** Customer-facing policy assistant for a home insurance product (HomeShield Plus).
+Policyholders ask about coverage, excess amounts, and claim procedures. The `coverage_check` tool
+returns a deterministic, auditable verdict for specific claim scenarios — no hallucinated policy clauses.
+
+**Corpus:** Policy wording document, product disclosure statement, claims guide — all PDFs in `corpora/meridian-insurance/`.
+
+**What's notable:**
+- `coverage_check` is a client-specific tool with hardcoded policy logic, intentionally separate from the LLM
+  to ensure regulatory consistency. The agent is instructed to always cross-reference verdicts against
+  `search_docs` so the user gets both a structured result and a cited policy clause.
+- `get_document` is included so the agent can surface the full section when a user wants to read the exact policy wording
+- Same chunking defaults as acme-fab — 800/100 works well for dense legal documents
+
+```yaml
+client_id: meridian-insurance
+name: "Meridian Insurance"
+
+branding:
+  logo: assets/meridian-insurance/logo.svg
+  primary_color: "#1A6B3C"
+  assistant_name: MeridianAssist
+
+corpus:
+  source: corpora/meridian-insurance/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/meridian-insurance.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - coverage_check
+
+evals:
+  golden_set: evals/meridian-insurance/golden.jsonl
+  judge_model: claude-sonnet-4-6
+
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
+```
+
+**What the `coverage_check` tool does:**
+Takes a named scenario key (`burst_pipe_sudden`, `gradual_seepage`, `unlisted_jewellery_over_5000`)
+and returns a structured verdict: `covered`, `excess_usd`, the relevant `clause`, and a plain-language summary.
+The three scenarios are enough to demo the core claim pattern (covered / excluded / sub-limit).
+
+**Things to try in the demo:**
+- "My pipe burst overnight — am I covered?"
+- "I had a slow leak under the sink for the past month, will that be covered?"
+- "I have a ring worth $8,000 that I didn't list separately on my policy"
+
+---
+
+## Adding a new client
+
+The minimum viable config for a new client using only the shared tools:
+
+```yaml
+client_id: your-client-id
+name: "Your Client Name"
+
+branding:
+  logo: assets/your-client-id/logo.svg
+  primary_color: "#000000"
+  assistant_name: YourAssistant
+
+corpus:
+  source: corpora/your-client-id/
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/your-client-id.md
+  tools:
+    - search_docs
+    - get_document
+```
+
+Then:
+1. Drop documents into `corpora/your-client-id/`
+2. Write `prompts/your-client-id.md` with the system prompt
+3. Add `config/your-client-id.yaml`
+4. Run `make ingest CLIENT=your-client-id` (or restart the API — it ingests on startup)
+
+No code changes. No deployment pipeline. The engine validates the config at startup and
+raises an error immediately if any key is wrong or any tool name is unknown.
+
+---
+
+## Planned examples
+
+> **Not yet runnable.** These configs reference features that are on the roadmap but not
+> implemented: per-source ingestion types (`pdf`, `url`, `text`), webhook tools
+> (`create_support_ticket`, `get_product_pricing`, `send_email_notification`), and
+> the `temperature` key. See the implementation gaps below each example.
+
+---
+
+### Product documentation assistant
+
+**Use case:** Customers or internal teams ask questions about a product. The assistant retrieves
+answers from manuals, FAQs, and release notes, and creates support tickets for unresolved issues.
+
+**Requires:** per-source ingestion (`type: url`), `create_support_ticket` shared tool, `temperature` key.
+
+```yaml
+# ⚠ Not yet runnable — see implementation gaps above
+client_id: product-docs
+name: "Product Documentation Assistant"
+
+branding:
+  logo: assets/product-docs/logo.svg
+  primary_color: "#0ea5e9"
+  assistant_name: DocsAssist
+
+corpus:
+  sources:
+    - type: pdf
+      path: docs/user-manual.pdf
+    - type: pdf
+      path: docs/release-notes.pdf
+    - type: url
+      url: https://docs.example.com/api-reference
+  chunking:
+    chunk_size: 512
+    overlap: 64
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/product-docs.md
+  max_tokens: 4096
+  effort: medium
+  temperature: 0.2
+  tools:
+    - name: search_docs
+      enabled: true
+    - name: create_support_ticket
+      enabled: true
+      endpoint: https://api.example.com/support/tickets
+      auth_header: Bearer sk-prod-support-...
+
+limits:
+  rate_limit_per_minute: 30
+  daily_budget_usd: 5.00
+```
+
+---
+
+### Agentic research workflow
+
+**Use case:** An internal research assistant that synthesises across reports, papers, and internal
+analysis to answer multi-hop questions. Designed for strategy teams preparing client deliverables.
+
+**Requires:** `temperature` key, higher `chunk_size` support (already works — no gap there).
+The main gap is there's no `top_k` config key; retrieval depth is hardcoded to `k=5` default in the tool.
+
+```yaml
+# ⚠ Partially runnable — temperature key not yet supported
+client_id: research-assistant
+name: "Internal Research Assistant"
+
+branding:
+  logo: assets/research/logo.svg
+  primary_color: "#8b5cf6"
+  assistant_name: ResearchAssist
+
+corpus:
+  source: corpora/research/
+  chunking:
+    chunk_size: 768
+    overlap: 128
+
+agent:
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/research-assistant.md
+  max_tokens: 8192
+  effort: high
+  temperature: 0.15
+  tools:
+    - search_docs
+    - get_document
+
+limits:
+  rate_limit_per_minute: 10
+  daily_budget_usd: 10.00
+```
+
+---
+
+### Customer-facing support bot
+
+**Use case:** A customer-facing assistant that handles tier-1 support — known questions,
+ticket creation for unknowns, and pricing lookups via a live endpoint.
+
+**Requires:** `create_support_ticket` and `get_product_pricing` as generic shared webhook tools
+(not the current `pricing_lookup` which is acme-fab specific with hardcoded catalog data).
+
+```yaml
+# ⚠ Not yet runnable — webhook tools not yet implemented
+client_id: support-bot
+name: "Support Assistant"
+
+branding:
+  logo: assets/support-bot/logo.svg
+  primary_color: "#10b981"
+  assistant_name: SupportAssist
+
+corpus:
+  sources:
+    - type: pdf
+      path: docs/product-faq.pdf
+    - type: text
+      content: |
+        Pricing: Starter $29/mo · Business $99/mo · Enterprise: custom
+        Refund policy: 30-day full refund on all plans.
+  chunking:
+    chunk_size: 384
+    overlap: 48
+
+agent:
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/support-bot.md
+  max_tokens: 2048
+  effort: low
+  temperature: 0.4
+  tools:
+    - name: search_docs
+      enabled: true
+    - name: create_support_ticket
+      enabled: true
+      endpoint: https://api.example.com/tickets
+      auth_header: Bearer sk-support-...
+    - name: get_product_pricing
+      enabled: true
+      endpoint: https://api.example.com/pricing
+
+limits:
+  rate_limit_per_minute: 60
+  daily_budget_usd: 20.00
+```
+
+---
+
+## Implementation gaps to close
+
+To make the planned examples runnable, the following changes are needed:
+
+| Gap | Where to change |
+|-----|-----------------|
+| Per-source ingestion (`type: pdf/url/text`) | Replace `CorpusConfig.source: str` with `sources: list[SourceConfig]` in `schema.py`; update `ingest.py` to dispatch by type; add URL fetching with `httpx` + `BeautifulSoup` |
+| `temperature` key | Add `temperature: float = 0.3` to `AgentConfig` in `schema.py`; pass to `_request_kwargs` in `loop.py` |
+| Tool config objects (`{name, enabled, endpoint}`) | Replace `tools: list[str]` with `list[ToolConfig]` in `AgentConfig`; update registry to pass `endpoint`/`auth_header` to executors |
+| `create_support_ticket` shared tool | Add `apps/api/app/tools/shared/create_support_ticket.py`; register in `tools/registry.py` |
+| `get_product_pricing` shared tool | Add `apps/api/app/tools/shared/get_product_pricing.py` as a generic HTTP tool; register in `tools/registry.py` |
+| `send_email_notification` shared tool | Add `apps/api/app/tools/shared/send_email_notification.py`; register in `tools/registry.py` |
+| `top_k` per-client config | Add to `CorpusConfig`; thread through to `search.py` |
