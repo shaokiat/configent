@@ -1,0 +1,33 @@
+---
+interface Props {
+  diagram: string;
+}
+const { diagram } = Astro.props;
+---
+
+<div class="mermaid-wrapper">
+  <pre class="mermaid">{diagram}</pre>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'default' : 'dark';
+  mermaid.initialize({ startOnLoad: true, theme });
+</script>
+
+<style>
+  .mermaid-wrapper {
+    margin: 2rem 0;
+    padding: 1.5rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+    text-align: center;
+  }
+
+  .mermaid {
+    background: transparent;
+  }
+</style>

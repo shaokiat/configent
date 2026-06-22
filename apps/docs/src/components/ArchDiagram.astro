@@ -24,7 +24,7 @@
     </defs>
 
     <!-- ── Config file (left) ─────────────────────────────────── -->
-    <g class="node node-config" transform="translate(30, 190)">
+    <g class="node node-config" transform="translate(30, 130)">
       <rect class="bg-surface stroke-accent" width="140" height="140" rx="10" stroke-width="1.5"/>
       <text x="70" y="38"   text-anchor="middle" class="mono-sm  y-key">client_id: acme</text>
       <text x="70" y="54"   text-anchor="middle" class="mono-sm  text-faint">knowledge_base:</text>
@@ -36,7 +36,7 @@
     </g>
 
     <!-- Arrow: config → engine -->
-    <line x1="170" y1="260" x2="210" y2="260" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="170" y1="200" x2="210" y2="200" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
 
     <!-- ── Engine outer box ───────────────────────────────────── -->
     <rect class="bg-engine stroke-dim" x="215" y="30" width="580" height="460" rx="12" stroke-width="1.5" stroke-dasharray="4 3"/>
@@ -73,17 +73,17 @@
     <text x="395" y="374" text-anchor="middle" class="label-xs text-faint">prompt cache enabled</text>
 
     <!-- Tools panel -->
-    <rect class="bg-raised stroke-dim" x="505" y="260" width="200" height="120" rx="6"/>
-    <text x="605" y="280" text-anchor="middle" class="mono-sm y-str">Active Tools</text>
-    <text x="605" y="300" text-anchor="middle" class="mono-xs text-faint">search_docs</text>
-    <text x="605" y="316" text-anchor="middle" class="mono-xs text-faint">get_document</text>
-    <text x="605" y="332" text-anchor="middle" class="mono-xs text-faint">pricing_lookup</text>
-    <text x="605" y="352" text-anchor="middle" class="label-xs text-dim">← defined in config.yaml</text>
-    <text x="605" y="370" text-anchor="middle" class="label-xs text-dim">← no code changes</text>
+    <rect class="bg-raised stroke-dim" x="520" y="260" width="185" height="120" rx="6"/>
+    <text x="612" y="280" text-anchor="middle" class="mono-sm y-str">Active Tools</text>
+    <text x="612" y="300" text-anchor="middle" class="mono-xs text-faint">search_docs</text>
+    <text x="612" y="316" text-anchor="middle" class="mono-xs text-faint">get_document</text>
+    <text x="612" y="332" text-anchor="middle" class="mono-xs text-faint">pricing_lookup</text>
+    <text x="612" y="352" text-anchor="middle" class="label-xs text-dim">← defined in config.yaml</text>
+    <text x="612" y="370" text-anchor="middle" class="label-xs text-dim">← no code changes</text>
 
     <!-- Bidirectional arrows between LLM and tools -->
-    <line x1="490" y1="300" x2="506" y2="300" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
-    <line x1="506" y1="320" x2="490" y2="320" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
+    <line x1="487" y1="300" x2="518" y2="300" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
+    <line x1="518" y1="320" x2="487" y2="320" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
 
     <!-- Arrow: agent loop → output -->
     <line x1="505" y1="400" x2="505" y2="448" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -107,9 +107,9 @@
     <line x1="810" y1="130" x2="758" y2="130" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
     <!-- Step labels -->
-    <text x="30"  y="182" class="label-xs text-faint">1. Author config</text>
+    <text x="30"  y="122" class="label-xs text-faint">1. Author config</text>
     <text x="215" y="22"  class="label-xs text-faint">2. Configent initialises pipeline</text>
-    <text x="215" y="215" class="label-xs text-accent">3. Queries run through agent loop</text>
+    <text x="215" y="208" class="label-xs text-accent">3. Queries run through agent loop</text>
     <text x="505" y="495" text-anchor="middle" class="label-xs text-faint">4. Response delivered</text>
   </svg>
 </div>

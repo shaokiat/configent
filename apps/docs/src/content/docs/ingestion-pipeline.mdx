@@ -1,0 +1,146 @@
+---
+title: Ingestion Pipeline
+description: How documents go from files on disk to searchable pgvector embeddings — parse, chunk, embed, upsert.
+order: 4
+---
+
+Before the agent can answer questions, your corpus documents must be ingested: parsed into plain text, split into overlapping chunks, embedded with Voyage AI, and stored in pgvector. This page covers each stage and the CLI that drives it.
+
+---
+
+## Overview
+
+```
+corpora/<client_id>/
+  ├── manual.pdf
+  ├── runbook.md
+  └── spec.html
+        │
+        ▼  parse_document()       → ParsedDocument { title, text }
+        ▼  chunk_document()       → list[Chunk]     (token-aware, overlapping)
+        ▼  embed(texts)           → list[list[float]] (Voyage AI voyage-3, 1024-dim)
+        ▼  db.add(Document, Chunk rows)
+        ▼  db.commit()
+```
+
+All four stages run inside a single `AsyncSession` and are committed atomically per client. A failed embed on one document rolls back that document only — already-committed documents are unaffected.
+
+---
+
+## Stage 1 — Parse
+
+`retrieval/parsers.py` maps file extensions to parsers:
+
+| Extension | Parser | Title extraction |
+|-----------|--------|-----------------|
+| `.pdf`, `.pdf` | pypdf page extraction | `path.stem` (titlecased) |
+| `.md`, `.markdown` | plain text read | First `# heading`, else `path.stem` |
+| `.html`, `.htm` | BeautifulSoup, strips `<script>`/`<style>` | `<title>` → `<h1>` → `path.stem` |
+
+Files with unsupported extensions are silently skipped by `iter_corpus()`. All parsers return a `ParsedDocument(title, text, source_path)`.
+
+---
+
+## Stage 2 — Chunk
+
+`retrieval/chunker.py` splits text into token-aware overlapping chunks using `tiktoken` (cl100k_base encoding):
+
+**Strategy (in priority order):**
+
+1. Split on double-newline (paragraph boundaries).
+2. If a paragraph exceeds `chunk_size`, split on sentence boundaries.
+3. If a single sentence still exceeds `chunk_size`, hard-split by tokens.
+
+**Overlap:** The last `overlap` tokens from the previous chunk are prepended to the next. This ensures sentences that straddle a chunk boundary appear in full in at least one chunk.
+
+Both values are configurable per client in YAML:
+
+```yaml
+corpus:
+  chunking:
+    chunk_size: 800   # tokens per chunk (default: 800)
+    overlap: 100      # overlap tokens between chunks (default: 100)
+```
+
+---
+
+## Stage 3 — Embed
+
+`retrieval/embed.py` calls Voyage AI's `voyage-3` model (1024 dimensions):
+
+- Documents are embedded with `input_type="document"`.
+- Queries at search time use `input_type="query"` via `embed_query()` — this asymmetric encoding improves retrieval quality.
+- Batches of up to 128 texts are sent per API call.
+- Rate-limit errors (429) and service errors (5xx) retry with exponential backoff, up to 6 attempts, starting at a 21s delay to respect Voyage's per-minute window.
+
+```python
+EMBEDDING_DIM = 1024  # voyage-3 output dimension
+```
+
+---
+
+## Stage 4 — Upsert
+
+`ingest.py` handles deduplication before writing:
+
+- Each document is identified by `MD5(client_id + source_uri)[:8]`.
+- Content is fingerprinted with `SHA256(text)[:32]`.
+- If a document already exists with the **same content hash**, it is skipped.
+- If the content hash has **changed**, the old document (and its chunks via cascade delete) is replaced.
+- New documents are always inserted.
+
+This makes re-ingestion cheap: only changed files are re-processed and re-embedded.
+
+---
+
+## Running the ingestion CLI
+
+```bash
+cd apps/api
+python -m app.cli ingest --client acme-fab
+```
+
+With `--force`, all documents are re-ingested regardless of content hash:
+
+```bash
+python -m app.cli ingest --client acme-fab --force
+```
+
+Sample output:
+
+```
+Ingesting corpus for acme-fab...
+┌─────────────────────────────────┬───────┐
+│ Metric                          │ Count │
+├─────────────────────────────────┼───────┤
+│ Documents added                 │     4 │
+│ Documents replaced              │     1 │
+│ Documents skipped (unchanged)   │     2 │
+│ Total chunks upserted           │   312 │
+└─────────────────────────────────┴───────┘
+```
+
+---
+
+## Database schema
+
+```
+documents
+  id            VARCHAR(64)   PK  — MD5(client_id:source_uri)[:8]
+  client_id     VARCHAR(64)       — foreign key → clients.id
+  source_uri    VARCHAR(512)      — corpus://<client_id>/<stem>
+  title         VARCHAR(512)
+  content_hash  VARCHAR(64)       — SHA256(text)[:32]; drives skip/replace logic
+  ingested_at   DATETIME
+
+chunks
+  id            INTEGER       PK  autoincrement
+  document_id   VARCHAR(64)       — FK → documents.id (CASCADE DELETE)
+  client_id     VARCHAR(64)       — denormalized for index-scoped search
+  text          TEXT
+  embedding     VECTOR(1024)      — pgvector column
+  chunk_index   INTEGER
+  metadata      JSON              — { document_title, source_uri, position }
+```
+
+The `client_id` on `chunks` is denormalized intentionally: pgvector similarity queries filter on it directly, avoiding a join to `documents` on the hot path.

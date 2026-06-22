@@ -1,0 +1,126 @@
+---
+title: Prompt Caching
+description: Two-layer caching strategy that cuts token costs as conversations grow longer.
+order: 10
+---
+
+Each API call re-sends the full prompt: system prompt + conversation history + the new message. Without caching, a 2,000-token system prompt across 10 turns costs $0.06 in input tokens alone — billed identically every single turn.
+
+## How Anthropic's cache control works
+
+Adding `cache_control: {"type": "ephemeral"}` to a content block tells Anthropic to store the computed KV states for that prefix for 5 minutes. On the next request, if the prompt up to that marker is identical, those tokens are not recomputed. This is Anthropic-specific — OpenAI caches automatically for long prompts, Gemini has its own context caching API.
+
+**Can be cached — content identical across calls:**
+- System prompt
+- Tool definitions
+- Historical conversation turns
+
+**Cannot be cached — content that changes per request:**
+- The new user message
+- Tool results
+
+The cache is a prefix match. One changed token anywhere before the marker invalidates the entire cached prefix.
+
+---
+
+## Layer 1 — System prompt
+
+```python
+"system": [{
+    "type": "text",
+    "text": system_prompt,
+    "cache_control": {"type": "ephemeral"},
+}]
+```
+
+First call writes to cache (billed at 1.25× input price); every subsequent call within the 5-minute TTL reads from cache at 10× cheaper than fresh input.
+
+The system prompt never changes during a session, so after the first write it stays in cache for the lifetime of any active conversation.
+
+| | Cost for 2,000-token prompt over 10 turns |
+|---|---|
+| No caching | 2,000 × 10 × $3.00/MTok = **$0.060** |
+| With caching | 1 write + 9 reads = **$0.013** |
+
+---
+
+## Layer 2 — Conversation history (turn breakpoint)
+
+```python
+# loop.py _with_turn_breakpoint()
+def _with_turn_breakpoint(messages: list[dict]) -> list[dict]:
+    last = dict(messages[-1])
+    content = last["content"]
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    blocks = list(content)
+    if isinstance(blocks[-1], dict):
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+    last["content"] = blocks
+    return messages[:-1] + [last]
+```
+
+The cache is a prefix match — it stores everything from the start of the prompt up to the breakpoint. Placing the breakpoint on the last message means the entire history accumulates in cache incrementally:
+
+| Turn | Breakpoint on | Cached for next call |
+|---|---|---|
+| 1 | `user_1` | `system + user_1` |
+| 2 | `user_2` | `system + user_1 + asst_1 + user_2` |
+| 3 | `user_3` | `system + user_1 + asst_1 + user_2 + asst_2 + user_3` |
+
+By turn 3, only the new assistant output is billed at full price.
+
+**Why it returns a new list:** a single turn can involve multiple API calls — once to get the tool call, again to send back the tool result. Both iterations call `_with_turn_breakpoint` on the same shared `messages` list. The last line — `return messages[:-1] + [last]` — slices all but the last message, then appends a new dict copy of it with the marker added. The original `messages` list is never modified, so each iteration starts clean and produces exactly one breakpoint. If the marker were written directly into `messages`, it would accumulate one per iteration and exceed Anthropic's 4-breakpoint limit by iteration 5.
+
+---
+
+## 4-breakpoint budget
+
+This strategy uses 2 of the 4 allowed breakpoints per request:
+
+1. System prompt
+2. Last message in history
+
+---
+
+## Tool definitions are sorted
+
+```python
+def _sorted_tool_defs(tool_names: list[str]) -> list[dict]:
+    return sorted(get_tool_definitions(tool_names), key=lambda d: d["name"])
+```
+
+The cache prefix covers `tools → system → messages`. If tool definitions serialize in a different order each call, the prefix never matches and every call is a cache write. Sorting alphabetically by name gives a stable prefix regardless of YAML order.
+
+---
+
+## Reading the logs
+
+```
+anthropic call client=acme-fab input=312 output=487 cache_creation=2048 cache_read=0
+anthropic call client=acme-fab input=89  output=12  cache_creation=0    cache_read=2048
+anthropic call client=acme-fab input=312 output=651 cache_creation=2523 cache_read=2048
+```
+
+Call 1: system prompt written to cache (`cache_creation=2048`).  
+Call 2 (tool result, same turn): system prompt served from cache (`cache_read=2048`).  
+Call 3 (next turn): history grew, new write for the expanded prefix; system prompt still from cache.
+
+After the first turn, `cache_creation_input_tokens` should be 0 for the system prompt block on every subsequent call.
+
+---
+
+## `done` event payload
+
+```json
+{
+  "input_tokens": 89,
+  "output_tokens": 651,
+  "cache_creation_input_tokens": 2523,
+  "cache_read_input_tokens": 2048,
+  "cost_usd": 0.000312,
+  "latency_ms": 1840
+}
+```
+
+Rendered as a cost + latency badge on each assistant message in the UI.

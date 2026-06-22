@@ -1,0 +1,180 @@
+---
+title: SSE Streaming
+description: How agent responses stream from FastAPI to the Next.js frontend over Server-Sent Events.
+order: 12
+---
+
+The chat endpoint returns a `StreamingResponse` immediately. As the agent loop runs, it yields SSE frames — text deltas, citation events, tool status — that the frontend consumes incrementally.
+
+SSE over WebSockets: one-way streaming over plain HTTP, no upgrade handshake, works through any proxy. For server → client streaming only, WebSockets add complexity for no benefit.
+
+---
+
+## Event contract
+
+Every frame is `event: <name>\ndata: <json>\n\n`.
+
+| Event | Payload | When |
+|---|---|---|
+| `tool` | `{name, status: "start"\|"end"}` | Before and after each tool call |
+| `text` | `{delta: str}` | Each text chunk from the model |
+| `citation` | `{index, source, title, cited_text}` | Each inline citation |
+| `done` | `{conversation_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit |
+| `error` | `{message: str}` | On any exception — replaces `done` |
+
+Example sequence for a single `search_docs` call:
+
+```
+event: tool
+data: {"name": "search_docs", "status": "start"}
+
+event: tool
+data: {"name": "search_docs", "status": "end"}
+
+event: text
+data: {"delta": "The PX-900 filter "}
+
+event: citation
+data: {"index": 1, "source": "corpora/acme-fab/px900-maintenance.md", "title": "PX-900 Maintenance Guide", "cited_text": "Replace the intake filter every 500 operating hours..."}
+
+event: text
+data: {"delta": "should be replaced every 500 operating hours."}
+
+event: done
+data: {"conversation_id": "...", "cost_usd": 0.000312, "latency_ms": 1840, ...}
+```
+
+---
+
+## FastAPI endpoint
+
+```python
+@router.post("/c/{client_id}/chat/stream")
+async def chat_stream(client_id: str, req: ChatRequest):
+    cfg = get_registry().get(client_id)
+
+    async def event_source():
+        async with AsyncSessionLocal() as db:
+            async for name, data in stream_turn(
+                req.message, cfg=cfg, client_id=client_id,
+                conversation_id=req.conversation_id, db=db,
+            ):
+                yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+```
+
+The DB session is opened inside `event_source()`, not via `Depends(get_db)`. A `Depends`-scoped session closes before `StreamingResponse` starts writing — the session would already be gone by the first yield.
+
+`X-Accel-Buffering: no` prevents nginx from holding the entire stream and releasing it as one chunk.
+
+---
+
+## `stream_turn` and `_stream_loop`
+
+`stream_turn` is an async generator that handles setup, error recovery, and the `done` event:
+
+```python
+async def stream_turn(user_message, *, cfg, client_id, conversation_id, db):
+    started = time.monotonic()
+    conversation_id, history = await _prepare_conversation(db, client_id, conversation_id)
+    result = LoopResult(messages=messages)
+    try:
+        async for event in _stream_loop(messages, ..., result=result):
+            yield event
+    except anthropic.APIError as exc:
+        await db.rollback()
+        yield ("error", {"message": f"Upstream API error: {exc.__class__.__name__}"})
+        return
+    except Exception as exc:
+        await db.rollback()
+        yield ("error", {"message": str(exc)})
+        return
+
+    await _persist_turn(db, conversation_id, len(history), result)
+    await db.commit()
+    yield ("done", {"cost_usd": round(result.usage.cost_usd, 6), ...})
+```
+
+Errors call `db.rollback()` before yielding `error` — HTTP headers are already sent, so there's no other way to signal failure.
+
+`_stream_loop` translates raw Anthropic SDK events into UC-10 tuples:
+
+```python
+async with aclient.messages.stream(**_request_kwargs(...)) as stream:
+    async for event in stream:
+        if event.type == "content_block_start":
+            if event.content_block.type == "tool_use":
+                yield ("tool", {"name": event.content_block.name, "status": "start"})
+        elif event.type == "content_block_delta":
+            if event.delta.type == "text_delta":
+                yield ("text", {"delta": event.delta.text})
+            elif event.delta.type == "citations_delta":
+                yield ("citation", {"index": citation_index, ...})
+    response = await stream.get_final_message()
+```
+
+`get_final_message()` returns the completed response after the stream closes — this is where the `usage` struct comes from for cost accounting. `tool` `status: "end"` is emitted after `asyncio.gather` completes, so the frontend knows exactly when a tool call finishes.
+
+---
+
+## Frontend
+
+`ChatPanel.tsx` uses `fetch` POST rather than `EventSource` (which is GET-only):
+
+```typescript
+const response = await fetch(`/api/c/${clientId}/chat/stream`, {
+  method: "POST",
+  body: JSON.stringify({ message, conversation_id: conversationId }),
+  headers: { "Content-Type": "application/json" },
+});
+
+for await (const { event, data } of parseSse(response.body!.getReader())) {
+  handleEvent(event, data);
+}
+```
+
+`handleEvent` drives React state:
+
+| Event | Effect |
+|---|---|
+| `tool start` | Shows a "Searching…" indicator |
+| `tool end` | Removes the indicator |
+| `text` | Appends `delta` to the current message |
+| `citation` | Attaches a numbered popover to the preceding text segment |
+| `done` | Stores `conversation_id`; renders cost + latency badge |
+| `error` | Renders the error inside the assistant bubble |
+
+Text and citations arrive interleaved, so the frontend builds `{ text, citations[] }` segments rather than a flat string. Segments with citations render as hoverable spans showing the source document and cited passage.
+
+---
+
+## Next.js proxy route
+
+Browser requests go to the Next.js API route at `apps/web/app/api/c/[client_id]/chat/stream/route.ts`, which proxies to FastAPI:
+
+```typescript
+export async function POST(req: Request, { params }) {
+  const upstream = await fetch(
+    `${process.env.API_URL}/api/c/${params.client_id}/chat/stream`,
+    { method: "POST", body: req.body, duplex: "half" }
+  );
+  return new Response(upstream.body, {
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+```
+
+The FastAPI origin stays off the browser, and CORS is handled in one place.
+
+---
+
+## Note: Streamable HTTP
+
+Streamable HTTP is the MCP spec's (2024-11-05) replacement for HTTP+SSE as an MCP server transport. It lets a single endpoint respond with either plain JSON or an SSE stream, and adds session management (`initialize` handshake, `Mcp-Session-Id` header, capability negotiation).
+
+That overhead is for MCP servers serving external clients like Claude Desktop — not for a custom chat API with a fixed event contract that always streams. If Configent ever exposes its tools as an MCP server, Streamable HTTP would be the right transport for that surface.

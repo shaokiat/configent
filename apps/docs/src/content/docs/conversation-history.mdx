@@ -1,0 +1,131 @@
+---
+title: Conversation History
+description: How conversations are created, how message history is loaded and sent to the model, and how turns are persisted.
+order: 6
+---
+
+Configent maintains multi-turn conversation state in Postgres. Every turn loads the full prior history, appends it to the API request, and persists new messages after the turn completes.
+
+---
+
+## Data model
+
+```
+conversations
+  id          UUID PK
+  client_id   VARCHAR(64)   — scopes the conversation to one client
+  started_at  DATETIME
+  total_cost  FLOAT         — accumulated USD across all turns
+  total_tokens INT
+
+messages
+  id              INTEGER PK autoincrement
+  conversation_id UUID FK → conversations.id (CASCADE DELETE)
+  role            VARCHAR(32)   — "user" | "assistant"
+  content         JSON          — raw Anthropic content block list
+  citations       JSON          — { segments: [...] } on final assistant messages
+  created_at      DATETIME
+```
+
+Messages are stored in their raw Anthropic wire format (`content` as a JSON list of content blocks). This means tool_use and tool_result blocks are preserved verbatim — no lossy serialization.
+
+---
+
+## Creating a conversation
+
+On the first turn, pass `conversation_id=null` in the chat request body. The API creates a new `Conversation` row and returns the generated UUID in the `done` SSE event:
+
+```json
+// POST /api/c/acme-fab/chat/stream
+{ "message": "What is the seal replacement interval?", "conversation_id": null }
+
+// done event
+{ "conversation_id": "3f2a1b4c-...", "input_tokens": 1240, ... }
+```
+
+Store the returned `conversation_id` in the frontend and include it on every subsequent request to continue the conversation.
+
+---
+
+## Loading history
+
+At the start of each turn, `_prepare_conversation()` loads the full message history ordered by `id`:
+
+```python
+result = await db.execute(
+    select(Message)
+    .where(Message.conversation_id == conversation_id)
+    .order_by(Message.id)
+)
+history = [{"role": m.role, "content": m.content} for m in result.scalars().all()]
+```
+
+The history is prepended to `messages` before the API call:
+
+```
+messages = history + [{"role": "user", "content": new_user_message}]
+```
+
+The full history is sent to the model on every turn — there is no sliding window or summarisation. As conversations grow, prompt caching absorbs the cost of resending historical messages. See [Prompt Caching](/prompt-caching).
+
+---
+
+## Persisting a turn
+
+After the agent loop completes, `_persist_turn()` writes the new messages added during the turn. "New" means everything after the pre-existing history plus the user message:
+
+```python
+new_messages = result.messages[history_len + 1:]
+```
+
+This slice includes:
+- Intermediate assistant messages containing `tool_use` blocks
+- Intermediate user messages containing `tool_result` blocks
+- The final assistant message with the text response
+
+The final assistant message gets an extra `citations` field with the frontend-friendly `segments` list (ordered text + citation pairs).
+
+On any exception during the turn, the session is rolled back — the conversation history is left uncorrupted and retains all messages from prior turns.
+
+---
+
+## Multi-client isolation
+
+`conversation_id` is a global UUID, but every query that loads history also implicitly scopes to a `client_id` via the `Conversation` row's foreign key. A conversation started under `acme-fab` cannot be continued as `meridian-insurance` — the router validates the `client_id` path parameter against the config registry on every request.
+
+---
+
+## Request flow (abbreviated)
+
+```
+POST /api/c/:client_id/chat/stream
+        │
+        ├─ _prepare_conversation(db, client_id, conversation_id)
+        │       if None   → INSERT conversation, return []
+        │       if set    → SELECT messages ORDER BY id, return history
+        │
+        ├─ INSERT user message
+        │
+        ├─ agent loop (1–8 iterations)
+        │       each call: [system] + [tools] + history + [new user msg] + [tool turns]
+        │       tool turns accumulate in-memory; not persisted until commit
+        │
+        ├─ _persist_turn(db, conversation_id, history_len, result)
+        │       INSERT assistant + tool_result messages
+        │       final assistant message gets citations attached
+        │
+        └─ db.commit() → yield done event
+```
+
+---
+
+## Querying history directly
+
+For debugging, you can inspect a conversation's messages directly in Postgres:
+
+```sql
+SELECT role, created_at, jsonb_pretty(content::jsonb)
+FROM messages
+WHERE conversation_id = '3f2a1b4c-...'
+ORDER BY id;
+```

@@ -1,0 +1,158 @@
+---
+title: Tools System
+description: How tools are defined, registered, and executed — and how to add a new one.
+order: 5
+---
+
+Tools are the extension points that let the agent do more than retrieve text. Each client YAML lists the tools available to its agent; the agent loop calls them as needed during a turn.
+
+---
+
+## Architecture
+
+```
+config/acme-fab.yaml            tools/registry.py
+  agent:                          _REGISTRY = {
+    tools:                          "search_docs":    (DEFINITION, execute),
+      - search_docs         →       "get_document":   (DEFINITION, execute),
+      - get_document                "pricing_lookup": (DEFINITION, execute),
+      - pricing_lookup              "coverage_check": (DEFINITION, execute),
+                                  }
+                                       │
+                                  validated at startup
+                                  (unknown names → ValueError, not 404)
+```
+
+The registry is a plain dict — no dynamic loading, no plugin system. Adding a tool means writing a module and adding one entry to `_REGISTRY`.
+
+---
+
+## Built-in tools
+
+### `search_docs` (shared)
+
+Semantic similarity search over the client's corpus. This is the primary retrieval tool; the agent is instructed to call it before answering any factual question.
+
+```python
+# Input
+{"query": "PX900 chamber seal replacement interval", "k": 5}
+
+# Output — Anthropic search_result content blocks (enables citations)
+[
+  {
+    "type": "search_result",
+    "source": "corpus://acme-fab/spare-parts-catalog",
+    "title": "Spare Parts Catalog",
+    "content": [{"type": "text", "text": "...chunk text..."}],
+    "citations": {"enabled": True}
+  },
+  ...
+]
+```
+
+Empty retrieval returns a plain `text` block telling the model no documents matched — the model is instructed to say it doesn't know rather than hallucinate.
+
+### `get_document` (shared)
+
+Fetches the full text of a document by `document_id`. Used when a search result chunk lacks enough context — for example, when a procedure spans multiple sections.
+
+```python
+# Input
+{"document_id": "a3f2b1c4"}
+
+# Output
+{"document_id": "a3f2b1c4", "title": "...", "source_uri": "...", "text": "..."}
+```
+
+The executor enforces `client_id` isolation: a document belonging to a different client returns a not-found error even if the ID is valid.
+
+### `pricing_lookup` (acme-fab)
+
+Client-specific tool. Looks up unit price, volume discounts, and lead time for an Acme part number. Backed by a hardcoded catalog in the current implementation — in production this would call an ERP or pricing API.
+
+### `coverage_check` (meridian)
+
+Client-specific tool for Meridian Insurance. Checks whether a specific procedure or treatment is covered under a policy.
+
+---
+
+## Tool lifecycle in the agent loop
+
+Each tool call goes through this sequence:
+
+```
+1. Anthropic returns stop_reason="tool_use"
+2. _execute_tool(block) calls get_tool_executor(name)(input, client_id=..., db=...)
+3. Result is wrapped in a tool_result content block
+4. tool_result is appended to messages as a new "user" turn
+5. Loop continues → next API call sees the result as context
+```
+
+Tool calls within a single iteration are executed concurrently with `asyncio.gather`. A tool that raises an exception returns `{"error": "<message>"}` rather than crashing the turn — the agent sees the error and can recover.
+
+---
+
+## Adding a new tool
+
+**1. Create the module** under `tools/<client_or_shared>/`:
+
+```python
+# tools/shared/my_tool.py
+
+DEFINITION = {
+    "name": "my_tool",
+    "description": "...",         # model reads this to decide when to call the tool
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "param": {"type": "string", "description": "..."},
+        },
+        "required": ["param"],
+    },
+}
+
+async def execute(tool_input: dict, *, client_id: str, db) -> dict | list:
+    # Return a plain dict/list → serialized as JSON in tool_result
+    # Return a list of Anthropic content blocks → passed through verbatim
+    result = do_something(tool_input["param"])
+    return {"result": result}
+```
+
+**2. Register it** in `tools/registry.py`:
+
+```python
+from app.tools.shared import my_tool
+
+_REGISTRY: dict[str, tuple[dict, Callable]] = {
+    ...
+    "my_tool": (my_tool.DEFINITION, my_tool.execute),
+}
+```
+
+**3. Add it to a client config:**
+
+```yaml
+agent:
+  tools:
+    - search_docs
+    - my_tool
+```
+
+Unknown tool names in YAML fail at startup with a clear error — validation happens in `validate_tool_names()` at config load time, not at request time.
+
+---
+
+## Return value conventions
+
+| Return type | How it's sent to the model |
+|-------------|---------------------------|
+| `dict` or `list[non-block]` | `json.dumps(result)` as a text string in `tool_result.content` |
+| `list[{"type": ..., ...}]` | Passed verbatim as `tool_result.content` blocks (enables `search_result` citation blocks) |
+
+Use the content-block form when you need the model to emit citations. Use plain JSON for everything else.
+
+---
+
+## Tool definitions and caching
+
+Tool definitions are sent with every API call. They are sorted alphabetically before being included in the request — this ensures the tool list serializes identically regardless of YAML order, which is required for Anthropic's prefix-match prompt cache to hit. See [Prompt Caching](/prompt-caching) for details.

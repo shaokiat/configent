@@ -152,9 +152,23 @@ declare module 'astro:content' {
 
 	type ContentEntryMap = {
 		"docs": {
+"agent-loop.mdx": {
+	id: "agent-loop.mdx";
+  slug: "agent-loop";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
 "config-reference.mdx": {
 	id: "config-reference.mdx";
   slug: "config-reference";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"conversation-history.mdx": {
+	id: "conversation-history.mdx";
+  slug: "conversation-history";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">
@@ -169,6 +183,34 @@ declare module 'astro:content' {
 "getting-started.mdx": {
 	id: "getting-started.mdx";
   slug: "getting-started";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"ingestion-pipeline.mdx": {
+	id: "ingestion-pipeline.mdx";
+  slug: "ingestion-pipeline";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"prompt-caching.mdx": {
+	id: "prompt-caching.mdx";
+  slug: "prompt-caching";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"sse-streaming.mdx": {
+	id: "sse-streaming.mdx";
+  slug: "sse-streaming";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"tools-system.mdx": {
+	id: "tools-system.mdx";
+  slug: "tools-system";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">

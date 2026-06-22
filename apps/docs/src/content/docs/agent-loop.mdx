@@ -1,0 +1,125 @@
+---
+title: Agent Loop
+description: Hand-rolled tool-use loop over the Anthropic API — no framework, full visibility into cost and streaming.
+order: 11
+---
+
+import Mermaid from '@/components/Mermaid.astro';
+
+The agent loop lives entirely in `apps/api/app/agent/loop.py`. No LangChain, LangGraph, or SDK tool runner — the loop covers tool execution, cost tracking, prompt caching, and SSE streaming in one place.
+
+This is a standard **tool-use loop** — similar to ReAct, but without explicit reasoning traces. The Anthropic API's native `stop_reason` field signals intent instead.
+
+## Entry points
+
+```python
+stream_turn(user_message, *, cfg, client_id, conversation_id, db)
+    → AsyncIterator[tuple[str, dict]]   # (event_name, data)
+
+run(user_message, *, cfg, client_id, conversation_id, db)
+    → (conversation_id, LoopResult)
+```
+
+`stream_turn` is the primary path used by the frontend. `run` is for tests and internal tooling. Both share the same internal logic.
+
+---
+
+## How the loop works
+
+<Mermaid diagram={`
+flowchart TD
+    A[Call Anthropic API] --> B{stop_reason?}
+
+    B -->|end_turn| C[Collect text + citations]
+    C --> D([Return to caller])
+
+    B -->|tool_use| E[Execute tools concurrently]
+    E --> F[Append tool_results to messages]
+    F --> A
+`} />
+
+Before entering the loop, the conversation history is loaded from Postgres (or a new `Conversation` row is created). The user message is persisted, then the loop starts.
+
+Each iteration calls the Anthropic API and branches on `stop_reason`, which is set by the model — the loop has no say in it.
+
+```python
+if response.stop_reason == "end_turn":
+    return collect_text_and_citations(response)
+
+if response.stop_reason == "tool_use":
+    tool_results = await asyncio.gather(*[execute(b) for b in tool_blocks])
+    messages.append({"role": "user", "content": tool_results})
+    continue  # loop again
+
+raise RuntimeError("exceeded max iterations")
+```
+
+- **`end_turn`** — collect text and citations, return the result.
+- **`tool_use`** — execute all requested tools concurrently, append results, loop again.
+- **8 iterations without finishing** — raises `RuntimeError`. Safety cap; normal queries resolve in 2–3 iterations.
+
+After the loop, all new messages from this turn are written back to Postgres. The final assistant message gets citation segments stored in a `citations` JSON column.
+
+---
+
+## Request assembly
+
+Each API call includes the system prompt with `cache_control: ephemeral` and a `_with_turn_breakpoint` marker on the message history. `thinking` is disabled and `effort` is set to `medium` explicitly — the API defaults to `high` effort with thinking enabled, which adds latency without meaningful quality gain for a chat assistant.
+
+Caching details: [Prompt Caching](/configent/docs/prompt-caching).
+
+---
+
+## Tool execution
+
+Tools run concurrently inside each `tool_use` iteration using `asyncio.gather` — one coroutine per tool block, all awaited at once. Results come back in input order and are appended as a single `user` message.
+
+```python
+tool_results = await asyncio.gather(
+    *[_execute_tool(b, client_id=client_id, db=db)
+      for b in _tool_use_blocks(response.content)]
+)
+messages.append({"role": "user", "content": list(tool_results)})
+```
+
+Concurrency is real because all executors bottom out in a database query (`await search(db, ...)`, `await db.execute(...)`). The event loop suspends each coroutine at the `await` and resumes it when Postgres responds, so multiple tools can be in-flight simultaneously without threads. See [Tools System](/configent/docs/tools-system) for how executors are structured.
+
+In practice the model usually calls one tool per iteration, so the gather is over a list of one. Errors are returned to the model as `{"error": "..."}` rather than raising, so the loop continues rather than crashing.
+
+---
+
+## Cost tracking
+
+```python
+@dataclass
+class UsageTotals:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+    @property
+    def cost_usd(self) -> float:
+        return (
+            self.input_tokens * 3.00
+            + self.output_tokens * 15.00
+            + self.cache_creation_input_tokens * 3.75
+            + self.cache_read_input_tokens * 0.30
+        ) / 1_000_000
+```
+
+`UsageTotals.add()` is called after every API call. By the time the loop exits, `cost_usd` covers all iterations including intermediate tool-call roundtrips.
+
+---
+
+## Example: one `search_docs` call
+
+```
+# iteration 1 — model calls search_docs
+anthropic call client=acme-fab input=312 output=87 cache_creation=2048 cache_read=0
+
+# iteration 2 — final answer
+anthropic call client=acme-fab input=89 output=651 cache_creation=0 cache_read=2048
+```
+
+Two API calls, one `LoopResult`. The `done` SSE event reports the aggregated totals.
