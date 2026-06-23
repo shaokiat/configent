@@ -1,0 +1,138 @@
+---
+title: Multi-Tenancy
+description: How one Configent deployment serves multiple fully-isolated clients — each with its own branding, corpus, tools, and cost limits — driven by a single YAML file per client.
+order: 2
+group: Setup
+---
+
+The core premise of Configent: drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fully branded, isolated assistant is live. No code changes, no redeployment.
+
+---
+
+## One YAML, one client
+
+Each file in `config/*.yaml` defines one client:
+
+```yaml
+# config/acme-fab.yaml
+client_id: acme-fab
+name: "Acme Fab Equipment"
+
+branding:
+  logo: assets/acme-fab/logo.svg
+  primary_color: "#1B4F8A"
+  assistant_name: "AcmeAssist"
+
+corpus:
+  source: corpora/acme-fab/
+  chunking:
+    chunk_size: 800
+    overlap: 100
+
+agent:
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/acme-fab.md
+  max_tokens: 4096
+  effort: medium
+  tools:
+    - search_docs
+    - get_document
+    - pricing_lookup
+
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00
+```
+
+Adding a second client — `config/meridian-insurance.yaml` — makes `meridian-insurance` available at `/c/meridian-insurance` without touching any other configuration or code.
+
+---
+
+## Config registry
+
+At startup, `config/registry.py` scans `config/*.yaml`, validates each file through Pydantic, and builds a module-level singleton:
+
+```
+config/*.yaml
+      │
+      ▼  yaml.safe_load()
+      ▼  ClientConfig.model_validate()   — Pydantic, strict validation
+      ▼  validate_tool_names()           — unknown tools → ValueError at startup
+      │
+_registry_instance: ConfigRegistry      — singleton, keyed by client_id
+```
+
+Validation failures raise at startup with the filename and field name — not at request time. An invalid config is caught before the first request lands.
+
+```python
+# apps/api/app/config/registry.py
+registry = get_registry()
+cfg = registry.get("acme-fab")   # KeyError if not found
+```
+
+`DEV_CONFIG_RELOAD=1` makes `.get()` reload the YAML directory on every call — useful during local config iteration without restarting the server.
+
+---
+
+## Isolation boundaries
+
+`client_id` is the isolation key. It appears as a column on every data table:
+
+| Table | `client_id` role |
+|-------|-----------------|
+| `clients` | Primary key row; config snapshot stored here |
+| `documents` | Scopes the corpus — search never crosses client boundaries |
+| `chunks` | Denormalized for index-scoped pgvector queries (no join on hot path) |
+| `conversations` | Scopes message history |
+| `traces` | Scopes per-turn observability data |
+| `eval_runs` | Scopes evaluation results |
+
+The API router validates `client_id` against the config registry on every request — a valid UUID for a different client returns 404, not the wrong client's data.
+
+---
+
+## Branding API
+
+The frontend loads branding at mount time:
+
+```
+GET /api/clients/:client_id/branding
+
+{
+  "id": "acme-fab",
+  "name": "Acme Fab Equipment",
+  "primary_color": "#1B4F8A",
+  "logo": "assets/acme-fab/logo.svg",
+  "assistant_name": "AcmeAssist"
+}
+```
+
+The Next.js shell applies `primary_color` as a CSS variable and renders `assistant_name` in the chat header — no client-specific frontend code.
+
+---
+
+## Config schema
+
+`ClientConfig` is a Pydantic model in `apps/api/app/config/schema.py`. All fields type-checked and validated at load time:
+
+| Section | Key fields |
+|---------|-----------|
+| `branding` | `logo`, `primary_color`, `assistant_name` |
+| `corpus` | `source`, `chunking.chunk_size`, `chunking.overlap` |
+| `agent` | `model`, `system_prompt_file`, `max_tokens`, `effort`, `tools` |
+| `evals` | `golden_set`, `judge_model` |
+| `limits` | `rate_limit_per_minute`, `daily_budget_usd` |
+
+`client_id` is validated as a lowercase slug (`[a-z0-9][a-z0-9-]*[a-z0-9]`). Duplicate `client_id` values across files fail at startup with the conflicting filenames named.
+
+See [Config Reference](/configent/docs/config-reference) for the full field listing.
+
+---
+
+## Adding a new client
+
+1. Create `config/<client_id>.yaml`
+2. Add documents to `corpora/<client_id>/`
+3. Write a system prompt at the path specified in `agent.system_prompt_file`
+4. Run `python -m app.cli ingest --client <client_id>`
+5. The client is live at `/c/<client_id>`

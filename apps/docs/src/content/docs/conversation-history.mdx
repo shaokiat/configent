@@ -1,10 +1,11 @@
 ---
 title: Conversation History
 description: How conversations are created, how message history is loaded and sent to the model, and how turns are persisted.
-order: 6
+order: 8
+group: Request Path
 ---
 
-Configent maintains multi-turn conversation state in Postgres. Every turn loads the full prior history, appends it to the API request, and persists new messages after the turn completes.
+Every turn loads the full prior message history from Postgres, appends it to the API request, and persists new messages after the loop completes.
 
 ---
 
@@ -27,13 +28,13 @@ messages
   created_at      DATETIME
 ```
 
-Messages are stored in their raw Anthropic wire format (`content` as a JSON list of content blocks). This means tool_use and tool_result blocks are preserved verbatim — no lossy serialization.
+Messages are stored in raw Anthropic wire format — `tool_use` and `tool_result` blocks are preserved verbatim, no lossy serialization.
 
 ---
 
 ## Creating a conversation
 
-On the first turn, pass `conversation_id=null` in the chat request body. The API creates a new `Conversation` row and returns the generated UUID in the `done` SSE event:
+On the first turn, pass `conversation_id: null`. The API creates a new `Conversation` row and returns the UUID in the `done` SSE event:
 
 ```json
 // POST /api/c/acme-fab/chat/stream
@@ -43,59 +44,42 @@ On the first turn, pass `conversation_id=null` in the chat request body. The API
 { "conversation_id": "3f2a1b4c-...", "input_tokens": 1240, ... }
 ```
 
-Store the returned `conversation_id` in the frontend and include it on every subsequent request to continue the conversation.
+Include the returned `conversation_id` on every subsequent request to continue the conversation.
 
 ---
 
 ## Loading history
 
-At the start of each turn, `_prepare_conversation()` loads the full message history ordered by `id`:
+At the start of each turn, `_prepare_conversation()` loads all prior messages ordered by `id` and prepends them to the request:
 
 ```python
-result = await db.execute(
-    select(Message)
-    .where(Message.conversation_id == conversation_id)
-    .order_by(Message.id)
-)
-history = [{"role": m.role, "content": m.content} for m in result.scalars().all()]
-```
-
-The history is prepended to `messages` before the API call:
-
-```
+history = SELECT messages WHERE conversation_id = ? ORDER BY id
 messages = history + [{"role": "user", "content": new_user_message}]
 ```
 
-The full history is sent to the model on every turn — there is no sliding window or summarisation. As conversations grow, prompt caching absorbs the cost of resending historical messages. See [Prompt Caching](/prompt-caching).
+The full history is sent on every turn — no sliding window or summarisation. As conversations grow, prompt caching absorbs the cost of resending historical messages. See [Prompt Caching](/configent/docs/prompt-caching).
 
 ---
 
 ## Persisting a turn
 
-After the agent loop completes, `_persist_turn()` writes the new messages added during the turn. "New" means everything after the pre-existing history plus the user message:
+After the agent loop completes, `_persist_turn()` writes everything added during the turn — everything after `history + user message`:
 
-```python
-new_messages = result.messages[history_len + 1:]
-```
+- Intermediate assistant messages with `tool_use` blocks
+- Intermediate user messages with `tool_result` blocks
+- The final assistant message (gets a `citations` field with the frontend-friendly `segments` list)
 
-This slice includes:
-- Intermediate assistant messages containing `tool_use` blocks
-- Intermediate user messages containing `tool_result` blocks
-- The final assistant message with the text response
-
-The final assistant message gets an extra `citations` field with the frontend-friendly `segments` list (ordered text + citation pairs).
-
-On any exception during the turn, the session is rolled back — the conversation history is left uncorrupted and retains all messages from prior turns.
+On any exception, the session rolls back — the conversation history retains all messages from prior turns.
 
 ---
 
 ## Multi-client isolation
 
-`conversation_id` is a global UUID, but every query that loads history also implicitly scopes to a `client_id` via the `Conversation` row's foreign key. A conversation started under `acme-fab` cannot be continued as `meridian-insurance` — the router validates the `client_id` path parameter against the config registry on every request.
+`conversation_id` is a global UUID, but every history query scopes to `client_id` via the `Conversation` row's foreign key. A conversation started under `acme-fab` cannot be continued as `meridian-insurance` — the router validates `client_id` against the config registry on every request.
 
 ---
 
-## Request flow (abbreviated)
+## Request flow
 
 ```
 POST /api/c/:client_id/chat/stream
@@ -120,8 +104,6 @@ POST /api/c/:client_id/chat/stream
 ---
 
 ## Querying history directly
-
-For debugging, you can inspect a conversation's messages directly in Postgres:
 
 ```sql
 SELECT role, created_at, jsonb_pretty(content::jsonb)

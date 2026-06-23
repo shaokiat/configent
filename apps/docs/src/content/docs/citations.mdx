@@ -1,0 +1,112 @@
+---
+title: Citations
+description: How Configent uses Anthropic's native citations API — search_result content blocks, inline citation markers, and the frontend-friendly segments format.
+order: 7
+group: Request Path
+---
+
+When the agent answers a question, it cites the exact document passages it drew from. Citations are produced by the Anthropic API natively — the model marks the specific text it used, not the whole chunk.
+
+---
+
+## How it works
+
+Citations flow through three layers:
+
+```
+search_docs tool result
+  └─ search_result content blocks   → sent to Anthropic API
+        └─ citations in response    → extracted from API response
+              └─ segments           → stored in DB + sent to frontend
+```
+
+### 1. `search_result` blocks
+
+When `search_docs` returns results, it formats them as `search_result` content blocks — a special Anthropic content type that enables citation tracking:
+
+```python
+# tools/shared/search_docs.py
+{
+    "type": "search_result",
+    "source": "corpus://acme-fab/spare-parts-catalog",
+    "title": "Spare Parts Catalog",
+    "content": [{"type": "text", "text": "...chunk text..."}],
+    "citations": {"enabled": True}
+}
+```
+
+These are passed verbatim as `tool_result.content` blocks — not serialized to JSON. The distinction matters: the Anthropic API only enables citation tracking when the content type is `search_result`, not when the same data is JSON-stringified.
+
+### 2. Anthropic generates citations
+
+With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on `claude-sonnet-4-6` — no beta header required.
+
+### 3. Segments extraction
+
+The agent loop extracts citation data from the API response and builds a `segments` list — alternating text and cited passages, structured for the frontend:
+
+```json
+[
+  {
+    "text": "The PX900 chamber seal should be replaced every 500 operating hours",
+    "citations": [
+      {
+        "source": "corpus://acme-fab/spare-parts-catalog",
+        "title": "Spare Parts Catalog",
+        "cited_text": "Recommended replacement interval: 500 operating hours or upon visual inspection failure"
+      }
+    ]
+  },
+  {
+    "text": " or whenever a visual inspection reveals wear.",
+    "citations": []
+  }
+]
+```
+
+Segments with empty `citations` are plain text. Segments with citations render with inline source links in the frontend.
+
+---
+
+## Storage
+
+The final assistant message stores two citation representations in the `messages` table:
+
+| Column | Contents |
+|--------|----------|
+| `content` | Raw Anthropic wire format — preserves the full API response including citation annotations |
+| `citations` | `{"segments": [...]}` — the frontend-friendly segments list |
+
+Both are stored so the raw response can be replayed for debugging while the segments format is ready to render without post-processing.
+
+---
+
+## Empty retrieval
+
+If `search_docs` finds no chunks above the similarity floor, it returns a plain `text` block instead of `search_result` blocks:
+
+```python
+{"type": "text", "text": "No documents matched the query."}
+```
+
+The system prompt instructs the model to reply that it doesn't know rather than hallucinate. No citation markers are emitted.
+
+---
+
+## Frontend rendering
+
+The `done` SSE event includes the full `segments` array. The chat panel renders each segment inline — text runs with a citation badge that expands to show the source title and the exact cited passage.
+
+```json
+// done event payload
+{
+  "conversation_id": "3f2a1b4c-...",
+  "reply": "The PX900 chamber seal should be replaced every 500 operating hours...",
+  "segments": [...],
+  "input_tokens": 1240,
+  "output_tokens": 87,
+  "cost_usd": 0.00052
+}
+```
+
+See [SSE Streaming](/configent/docs/sse-streaming) for the full event contract.

@@ -1,7 +1,8 @@
 ---
 title: Tools System
 description: How tools are defined, registered, and executed — and how to add a new one.
-order: 5
+order: 6
+group: Request Path
 ---
 
 Tools are the extension points that let the agent do more than retrieve text. Each client YAML lists the tools available to its agent; the agent loop calls them as needed during a turn.
@@ -31,13 +32,13 @@ The registry is a plain dict — no dynamic loading, no plugin system. Adding a 
 
 ### `search_docs` (shared)
 
-Semantic similarity search over the client's corpus. This is the primary retrieval tool; the agent is instructed to call it before answering any factual question.
+Semantic similarity search over the client's corpus. The primary retrieval tool — the agent is instructed to call it before answering any factual question.
 
 ```python
 # Input
 {"query": "PX900 chamber seal replacement interval", "k": 5}
 
-# Output — Anthropic search_result content blocks (enables citations)
+# Output — Anthropic search_result blocks (enables inline citations)
 [
   {
     "type": "search_result",
@@ -54,7 +55,7 @@ Empty retrieval returns a plain `text` block telling the model no documents matc
 
 ### `get_document` (shared)
 
-Fetches the full text of a document by `document_id`. Used when a search result chunk lacks enough context — for example, when a procedure spans multiple sections.
+Fetches the full text of a document by `document_id`. Used when a search chunk lacks enough context — for example, when a procedure spans multiple sections.
 
 ```python
 # Input
@@ -64,31 +65,42 @@ Fetches the full text of a document by `document_id`. Used when a search result 
 {"document_id": "a3f2b1c4", "title": "...", "source_uri": "...", "text": "..."}
 ```
 
-The executor enforces `client_id` isolation: a document belonging to a different client returns a not-found error even if the ID is valid.
+Enforces `client_id` isolation — a document belonging to a different client returns a not-found error even if the ID is valid.
 
 ### `pricing_lookup` (acme-fab)
 
-Client-specific tool. Looks up unit price, volume discounts, and lead time for an Acme part number. Backed by a hardcoded catalog in the current implementation — in production this would call an ERP or pricing API.
+Looks up unit price, volume discounts, and lead time for an Acme part number. Backed by a hardcoded catalog in the current implementation.
 
 ### `coverage_check` (meridian)
 
-Client-specific tool for Meridian Insurance. Checks whether a specific procedure or treatment is covered under a policy.
+Checks whether a specific procedure or treatment is covered under a Meridian Insurance policy.
 
 ---
 
 ## Tool lifecycle in the agent loop
 
-Each tool call goes through this sequence:
+When the model decides to call a tool, it returns a `tool_use` block in its response:
 
-```
-1. Anthropic returns stop_reason="tool_use"
-2. _execute_tool(block) calls get_tool_executor(name)(input, client_id=..., db=...)
-3. Result is wrapped in a tool_result content block
-4. tool_result is appended to messages as a new "user" turn
-5. Loop continues → next API call sees the result as context
+```json
+{
+  "type": "tool_use",
+  "id": "toolu_01A2B3",
+  "name": "search_docs",
+  "input": {"query": "PX900 seal replacement interval", "k": 5}
+}
 ```
 
-Tool calls within a single iteration are executed concurrently with `asyncio.gather`. A tool that raises an exception returns `{"error": "<message>"}` rather than crashing the turn — the agent sees the error and can recover.
+The loop executes the tool and wraps the result in a `tool_result` block, which is appended as a `user` message for the next API call:
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_01A2B3",
+  "content": [{"type": "search_result", ...}]
+}
+```
+
+The `tool_use_id` must match the `id` from the model's block — the API validates this. Tools within a single iteration run concurrently via `asyncio.gather`. A tool that raises returns `{"error": "<message>"}` rather than crashing the turn.
 
 ---
 
@@ -97,11 +109,9 @@ Tool calls within a single iteration are executed concurrently with `asyncio.gat
 **1. Create the module** under `tools/<client_or_shared>/`:
 
 ```python
-# tools/shared/my_tool.py
-
 DEFINITION = {
     "name": "my_tool",
-    "description": "...",         # model reads this to decide when to call the tool
+    "description": "...",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -112,18 +122,13 @@ DEFINITION = {
 }
 
 async def execute(tool_input: dict, *, client_id: str, db) -> dict | list:
-    # Return a plain dict/list → serialized as JSON in tool_result
-    # Return a list of Anthropic content blocks → passed through verbatim
-    result = do_something(tool_input["param"])
-    return {"result": result}
+    return {"result": do_something(tool_input["param"])}
 ```
 
 **2. Register it** in `tools/registry.py`:
 
 ```python
-from app.tools.shared import my_tool
-
-_REGISTRY: dict[str, tuple[dict, Callable]] = {
+_REGISTRY = {
     ...
     "my_tool": (my_tool.DEFINITION, my_tool.execute),
 }
@@ -138,7 +143,7 @@ agent:
     - my_tool
 ```
 
-Unknown tool names in YAML fail at startup with a clear error — validation happens in `validate_tool_names()` at config load time, not at request time.
+Unknown tool names in YAML fail at startup with a clear error — validation happens at config load time, not at request time.
 
 ---
 
@@ -155,4 +160,4 @@ Use the content-block form when you need the model to emit citations. Use plain 
 
 ## Tool definitions and caching
 
-Tool definitions are sent with every API call. They are sorted alphabetically before being included in the request — this ensures the tool list serializes identically regardless of YAML order, which is required for Anthropic's prefix-match prompt cache to hit. See [Prompt Caching](/prompt-caching) for details.
+Tool definitions are sent with every API call, sorted alphabetically before inclusion. This ensures the tool list serializes identically regardless of YAML order — required for Anthropic's prefix-match prompt cache to hit. See [Prompt Caching](/configent/docs/prompt-caching) for details.

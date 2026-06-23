@@ -1,4 +1,5 @@
 ---
+import { getCollection } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
 
 interface Props {
@@ -11,37 +12,21 @@ const { title, description } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const currentPath = Astro.url.pathname;
 
-const sidebarLinks = [
-  {
-    group: 'Getting Started',
-    links: [
-      { href: `${base}/docs/getting-started`, label: 'Quickstart' },
-    ],
-  },
-  {
-    group: 'Core Features',
-    links: [
-      { href: `${base}/docs/ingestion-pipeline`, label: 'Ingestion Pipeline' },
-      { href: `${base}/docs/tools-system`, label: 'Tools System' },
-      { href: `${base}/docs/conversation-history`, label: 'Conversation History' },
-      { href: `${base}/docs/agent-loop`, label: 'Agent Loop' },
-      { href: `${base}/docs/prompt-caching`, label: 'Prompt Caching' },
-      { href: `${base}/docs/sse-streaming`, label: 'SSE Streaming' },
-    ],
-  },
-  {
-    group: 'Reference',
-    links: [
-      { href: `${base}/docs/config-reference`, label: 'Config Reference' },
-    ],
-  },
-  {
-    group: 'Examples',
-    links: [
-      { href: `${base}/docs/examples`, label: 'Example Configs' },
-    ],
-  },
-];
+const allDocs = await getCollection('docs');
+const sorted = allDocs
+  .filter(doc => doc.data.group)
+  .sort((a, b) => (a.data.order ?? 99) - (b.data.order ?? 99));
+
+// Group docs, ordering groups by the lowest `order` value in each group
+const groupMap = new Map<string, { minOrder: number; links: { href: string; label: string }[] }>();
+for (const doc of sorted) {
+  const g = doc.data.group!;
+  if (!groupMap.has(g)) groupMap.set(g, { minOrder: doc.data.order ?? 99, links: [] });
+  groupMap.get(g)!.links.push({ href: `${base}/docs/${doc.slug}`, label: doc.data.title });
+}
+const sidebarLinks = [...groupMap.entries()]
+  .sort((a, b) => a[1].minOrder - b[1].minOrder)
+  .map(([group, { links }]) => ({ group, links }));
 
 function isActive(href: string) {
   return currentPath === href || currentPath === href + '/';

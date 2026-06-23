@@ -159,6 +159,13 @@ declare module 'astro:content' {
   collection: "docs";
   data: InferEntrySchema<"docs">
 } & { render(): Render[".mdx"] };
+"citations.mdx": {
+	id: "citations.mdx";
+  slug: "citations";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
 "config-reference.mdx": {
 	id: "config-reference.mdx";
   slug: "config-reference";
@@ -190,6 +197,13 @@ declare module 'astro:content' {
 "ingestion-pipeline.mdx": {
 	id: "ingestion-pipeline.mdx";
   slug: "ingestion-pipeline";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"multi-tenancy.mdx": {
+	id: "multi-tenancy.mdx";
+  slug: "multi-tenancy";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">

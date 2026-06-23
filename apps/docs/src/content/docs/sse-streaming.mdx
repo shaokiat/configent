@@ -1,7 +1,8 @@
 ---
 title: SSE Streaming
 description: How agent responses stream from FastAPI to the Next.js frontend over Server-Sent Events.
-order: 12
+order: 9
+group: Request Path
 ---
 
 The chat endpoint returns a `StreamingResponse` immediately. As the agent loop runs, it yields SSE frames — text deltas, citation events, tool status — that the frontend consumes incrementally.

@@ -2,6 +2,7 @@
 title: Prompt Caching
 description: Two-layer caching strategy that cuts token costs as conversations grow longer.
 order: 10
+group: Optimization
 ---
 
 Each API call re-sends the full prompt: system prompt + conversation history + the new message. Without caching, a 2,000-token system prompt across 10 turns costs $0.06 in input tokens alone — billed identically every single turn.
