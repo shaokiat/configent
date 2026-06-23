@@ -72,10 +72,12 @@ function isActive(href: string) {
   .sidebar {
     position: sticky;
     top: calc(var(--nav-height) + 1.5rem);
+    max-height: calc(100vh - var(--nav-height) - 3rem);
+    overflow-y: auto;
   }
 
   .sidebar-group {
-    margin-bottom: 1.75rem;
+    margin-bottom: 1.25rem;
   }
 
   .sidebar-group-label {
@@ -85,12 +87,12 @@ function isActive(href: string) {
     letter-spacing: 0.1em;
     text-transform: uppercase;
     padding: 0 0.75rem;
-    margin-bottom: 0.375rem;
+    margin-bottom: 0.2rem;
   }
 
   .sidebar-link {
     display: block;
-    padding: 0.4rem 0.75rem;
+    padding: 0.25rem 0.75rem;
     border-radius: var(--radius-sm);
     font-size: 0.875rem;
     color: var(--text-muted);

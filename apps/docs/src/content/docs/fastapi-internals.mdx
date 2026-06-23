@@ -1,0 +1,140 @@
+---
+title: FastAPI Internals
+description: Application bootstrap, dependency injection, error handling patterns, database layer, and Pydantic models.
+order: 14
+group: Backend
+---
+
+`apps/api/app/main.py` wires together the two routers and nothing else:
+
+```python
+app = FastAPI(title="Configent API", version="0.1.0")
+app.include_router(health.router)    # /healthz, /healthz/db
+app.include_router(clients.router)   # /api/...
+```
+
+The `ConfigRegistry` singleton is not initialized in a lifespan hook — it is created lazily on first call to `get_registry()`. Any startup error (bad YAML, unknown tool name) surfaces on the first request rather than at process start.
+
+---
+
+## Dependency injection
+
+```
+Request
+  │
+  ├─ Depends(get_db)  ──►  AsyncSessionLocal().__aenter__()
+  │                         yields AsyncSession
+  │                         __aexit__ closes on response end
+  │
+  └─ get_registry()   ──►  module-level ConfigRegistry singleton
+                            (called inline, not as a Depends)
+```
+
+`get_db` is a standard async generator dependency — FastAPI opens the session before the handler runs and closes it when the response is sent. The streaming endpoint (`/chat/stream`) cannot use this pattern because the session must outlive the HTTP headers. It opens its own session inside the `event_source` generator instead.
+
+`get_registry()` is not a `Depends`. It returns the singleton directly. Calling it multiple times is safe — it is initialized once and reused.
+
+---
+
+## Agent loop integration
+
+The router delegates immediately to `agent/loop.py`. No background tasks, no worker queue — the loop runs inline using `async`/`await`.
+
+**Sync path (`/chat`):**
+
+```python
+conv_id, result = await agent_run(req.message, cfg=cfg, ...)
+return ChatResponse(conversation_id=conv_id, reply=result.reply_text, ...)
+```
+
+The HTTP response is sent only after the final `await db.commit()`.
+
+**Streaming path (`/chat/stream`):**
+
+```python
+return StreamingResponse(event_source(), media_type="text/event-stream", ...)
+```
+
+`event_source()` is an async generator that calls `stream_turn()` (itself an async generator) and re-yields each `(name, data)` tuple as an SSE frame. FastAPI flushes each `yield` immediately — no buffering.
+
+See [Agent Loop](/configent/docs/agent-loop) for how `stream_turn` and `_stream_loop` work internally.
+
+---
+
+## Error handling
+
+| Scenario | Handling |
+|---|---|
+| Unknown `client_id` | `registry.get()` raises `KeyError` → caught in router → `HTTPException(404)` |
+| Missing system prompt file | `FileNotFoundError` → caught in router → `HTTPException(500)` |
+| Loop exceeds 8 iterations | `RuntimeError` → caught in router → `HTTPException(500)` |
+| Anthropic API error (streaming) | `anthropic.APIError` → `db.rollback()`, yield `error` event, return |
+| Any other exception (streaming) | `Exception` catch-all → `db.rollback()`, yield `error` event, return |
+| DB unreachable (`/healthz/db`) | SQLAlchemy raises → FastAPI returns `500` |
+| Invalid YAML or bad config | Raised in `config/registry.py` — process may not start if `get_registry()` is called at startup |
+| Unknown tool name in YAML | Raised in `tools/registry.validate_tool_names()` at config load time |
+
+Streaming errors cannot use HTTP status codes because headers are already sent by the time the error occurs. They surface via the `error` SSE event. The frontend renders the message inside the assistant bubble rather than crashing.
+
+---
+
+## Database layer
+
+`database.py` creates a single async engine and session factory:
+
+```python
+engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+async def get_db() -> AsyncSession:
+    async with AsyncSessionLocal() as session:
+        yield session
+```
+
+`pool_pre_ping=True` silently recycles stale connections before handing them to a handler.
+
+`expire_on_commit=False` prevents ORM objects from expiring immediately after `commit()`. This matters in the streaming path — `result` is read after the commit when building the `done` payload.
+
+**Tables:**
+
+| Table | Key columns |
+|---|---|
+| `clients` | `id (PK)`, `name`, `config_snapshot` |
+| `documents` | `id`, `client_id`, `source_uri`, `title`, `content_hash` |
+| `chunks` | `id`, `document_id`, `client_id`, `text`, `embedding (Vector)`, `chunk_index` |
+| `conversations` | `id (UUID PK)`, `client_id`, `total_cost`, `total_tokens` |
+| `messages` | `id`, `conversation_id`, `role`, `content (JSON)`, `citations (JSON)` |
+| `traces` | `id`, `conversation_id`, `span_type`, `tokens_in/out`, `cost_usd`, `latency_ms` |
+| `eval_runs` | `id`, `client_id`, `git_sha`, `scores (JSON)` |
+
+`client_id` is denormalized onto `chunks` so pgvector similarity queries can filter by tenant without joining to `documents` on the hot path.
+
+---
+
+## Pydantic models
+
+**Config schema (`app/config/schema.py`):**
+
+| Model | Purpose |
+|---|---|
+| `BrandingConfig` | `logo`, `primary_color`, `assistant_name` |
+| `ChunkingConfig` | `chunk_size` (default 800), `overlap` (default 100) |
+| `CorpusConfig` | `source` path, nested `ChunkingConfig` |
+| `AgentConfig` | `model`, `system_prompt_file`, `max_tokens`, `effort`, `tools: list[str]` |
+| `EvalsConfig` | `golden_set` path, `judge_model` |
+| `LimitsConfig` | `rate_limit_per_minute` (20), `daily_budget_usd` (2.00) |
+| `ClientConfig` | Root config; `client_id` validated as lowercase slug; `system_prompt_path()` method |
+
+**Request / response (`routers/clients.py`):**
+
+| Model | Fields |
+|---|---|
+| `ChatRequest` | `message: str`, `conversation_id: str \| None` |
+| `ChatResponse` | `conversation_id`, `reply`, `citations: list[dict]`, `segments: list[dict]` |
+
+**Internal dataclasses (`agent/loop.py`):**
+
+| Class | Purpose |
+|---|---|
+| `UsageTotals` | Accumulates token counts across all API calls in a turn; exposes `cost_usd` property |
+| `LoopResult` | Carries `messages`, `reply_text`, `citations`, `segments`, `usage` out of the loop |

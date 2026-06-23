@@ -159,6 +159,13 @@ declare module 'astro:content' {
   collection: "docs";
   data: InferEntrySchema<"docs">
 } & { render(): Render[".mdx"] };
+"api-reference.mdx": {
+	id: "api-reference.mdx";
+  slug: "api-reference";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
 "citations.mdx": {
 	id: "citations.mdx";
   slug: "citations";
@@ -183,6 +190,13 @@ declare module 'astro:content' {
 "examples.mdx": {
 	id: "examples.mdx";
   slug: "examples";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"fastapi-internals.mdx": {
+	id: "fastapi-internals.mdx";
+  slug: "fastapi-internals";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">
@@ -225,6 +239,13 @@ declare module 'astro:content' {
 "tools-system.mdx": {
 	id: "tools-system.mdx";
   slug: "tools-system";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"ui-architecture.mdx": {
+	id: "ui-architecture.mdx";
+  slug: "ui-architecture";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">

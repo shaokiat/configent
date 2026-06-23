@@ -1,0 +1,108 @@
+---
+title: UI Architecture
+description: How the Next.js frontend is structured — the RSC/client boundary, how SSE streaming is consumed, and where conversation state lives.
+order: 12
+group: Frontend
+---
+
+The frontend is a Next.js App Router app split between two rendering environments. Branding data is fetched on the server so the page arrives fully styled on first load. All chat state — messages, streaming, input — lives in the browser.
+
+---
+
+## Component tree
+
+```
+page.tsx  (RSC — runs on server)
+│  fetches /api/clients/:id/branding at render time
+│  passes BrandingData down as props
+│
+└─ ClientShell.tsx  ("use client")
+   │  header, theme toggle, back nav
+   │
+   └─ ChatPanel.tsx  ("use client")
+        message list, streaming state, input
+        drives SSE stream to FastAPI
+        renders text + citation popovers
+```
+
+---
+
+## RSC / client boundary
+
+`page.tsx` is a React Server Component. It calls the FastAPI branding endpoint before the page reaches the browser, so `ClientShell` and `ChatPanel` receive `primary_color`, `assistant_name`, and the client name as props — no client-side fetch, no loading flash.
+
+The boundary sits exactly at `ClientShell`. Everything above it (the branding fetch) runs once per request and produces no JS bundle output. Everything below it (`"use client"`) is interactive and ships to the browser.
+
+The alternative — fetching branding inside a client component — adds a waterfall: the JS bundle loads, hydrates, requests branding, then renders. The RSC path collapses all of that to a single server round-trip.
+
+If the branding fetch fails (unknown `client_id`), the RSC throws and Next.js renders its error boundary — `ChatPanel` is never mounted.
+
+---
+
+## SSE consumer
+
+`ChatPanel` connects to FastAPI's streaming endpoint with a `fetch` POST, not `EventSource`. The browser's `EventSource` API is GET-only, which means it cannot send a request body. Since each message needs a body (`message`, `conversation_id`), the chat panel uses `fetch` with a `ReadableStream` reader and a hand-written `parseSse` parser:
+
+```typescript
+const res = await fetch(`/api/c/${branding.id}/chat/stream`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ message: question, conversation_id: conversationId }),
+});
+
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+
+for (;;) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+  const { events, rest } = parseSse(buffer);
+  buffer = rest;
+  for (const { event, data } of events) handleEvent(event, data);
+}
+```
+
+`parseSse` splits on `\n\n` and returns unparsed bytes as `rest`. This handles chunks that arrive mid-frame — the next iteration picks up where the previous one left off. Malformed frames are dropped silently.
+
+`handleEvent` dispatches into React state:
+
+| Event | Effect |
+|---|---|
+| `tool start` | Shows a "Searching…" indicator below the last message |
+| `tool end` | Removes the indicator |
+| `text` | Appends the `delta` to the current assistant message |
+| `citation` | Pushes a citation part onto the current message's part list |
+| `done` | Stores `conversation_id`; attaches the cost and latency badge |
+| `error` | Renders the error string inside the assistant bubble |
+
+For the full SSE event contract, see [SSE Streaming](/configent/docs/sse-streaming).
+
+---
+
+## Conversation state
+
+The API is stateless between turns. `ChatPanel` stores `conversationId` in React state, receives it from the `done` event on the first turn, and sends it back in the body of every subsequent POST. The server uses it to load history from Postgres.
+
+No cookie, no session middleware, no in-memory store on the server. The client owns continuity; the server looks up the row.
+
+Refreshing the page clears `conversationId` and starts a new conversation. That is an intentional trade-off for a demo tool — it eliminates an entire class of session-management complexity with no meaningful cost to the use case.
+
+---
+
+## Message model
+
+Messages are not plain strings. Each assistant message is a list of `Part` values:
+
+```typescript
+type Part =
+  | { kind: "text"; text: string }
+  | { kind: "cite"; index: number; source: string; title: string; cited_text: string };
+```
+
+Text and citation events from the SSE stream arrive interleaved. The part list preserves that order, so citations render inline immediately after the passage they annotate — not as a footnote list at the bottom.
+
+`groupParts` clusters a text run with the citations that immediately follow it before rendering. This produces `{ text, cites[] }` groups, where each group renders as a paragraph with inline citation badges.
+
+See [Citations](/configent/docs/citations) for how citation data is generated on the backend.

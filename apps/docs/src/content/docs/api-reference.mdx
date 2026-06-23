@@ -1,0 +1,121 @@
+---
+title: API Reference
+description: All FastAPI endpoints — paths, request bodies, response shapes, and error codes.
+order: 13
+group: Backend
+---
+
+All client-facing routes live in `apps/api/app/routers/clients.py` under the `/api` prefix. Health routes are in `routers/health.py`.
+
+---
+
+## `GET /api/clients`
+
+Returns a summary of all loaded client configs. Used by the home page to render the client picker.
+
+```json
+[
+  {
+    "id": "acme-fab",
+    "name": "Acme Fab Equipment",
+    "branding": {
+      "logo": "assets/acme-fab/logo.svg",
+      "primary_color": "#1B4F8A",
+      "assistant_name": "AcmeAssist"
+    }
+  }
+]
+```
+
+---
+
+## `GET /api/clients/{client_id}/branding`
+
+Returns branding fields for a single client. Called by the Next.js RSC (`page.tsx`) at render time — the response is passed as props to `ClientShell` and `ChatPanel`.
+
+```json
+{
+  "id": "acme-fab",
+  "name": "Acme Fab Equipment",
+  "primary_color": "#1B4F8A",
+  "logo": "assets/acme-fab/logo.svg",
+  "assistant_name": "AcmeAssist"
+}
+```
+
+Returns `404` if `client_id` is not in the config registry.
+
+---
+
+## `POST /api/c/{client_id}/chat`
+
+Synchronous (non-streaming) chat. Runs the full agent loop and returns only after the model finishes. Primarily for testing; the frontend always uses the streaming endpoint.
+
+**Request:**
+
+```python
+class ChatRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None  # None → create new conversation
+```
+
+**Response:**
+
+```python
+class ChatResponse(BaseModel):
+    conversation_id: str
+    reply: str
+    citations: list[dict]
+    segments: list[dict]  # [{text, citations: [{source, title, cited_text}]}]
+```
+
+**Errors:** `404` client not found; `500` system prompt file missing or loop exceeded max iterations.
+
+DB session is injected via `Depends(get_db)` — the session tears down when the handler returns.
+
+---
+
+## `POST /api/c/{client_id}/chat/stream`
+
+The primary path. Returns a `StreamingResponse` immediately; the body streams SSE events as the agent loop runs.
+
+**Request body:** same as `/chat`.
+
+**Response:** `Content-Type: text/event-stream`
+
+| Event | Payload | When |
+|---|---|---|
+| `tool` | `{name, status: "start"\|"end"}` | Before and after each tool call |
+| `text` | `{delta: str}` | Each text chunk from the model |
+| `citation` | `{index, source, title, cited_text}` | Each inline citation |
+| `done` | `{conversation_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit |
+| `error` | `{message: str}` | On any exception — replaces `done` |
+
+The DB session is opened inside the `event_source()` generator — not via `Depends(get_db)`. A `Depends`-scoped session closes before `StreamingResponse` begins writing its body, so any yield after that point would hit a closed session.
+
+```python
+async def event_source():
+    async with AsyncSessionLocal() as db:
+        async for name, data in stream_turn(..., db=db):
+            yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+
+return StreamingResponse(
+    event_source(),
+    media_type="text/event-stream",
+    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+)
+```
+
+`X-Accel-Buffering: no` prevents nginx from holding the entire stream and releasing it as one chunk.
+
+For the full SSE event contract and frontend consumption, see [SSE Streaming](/configent/docs/sse-streaming).
+
+---
+
+## `GET /healthz`
+
+Liveness probe. Returns `{"status": "ok"}` immediately — no DB check.
+
+## `GET /healthz/db`
+
+Readiness probe. Executes `SELECT 1` via `Depends(get_db)`. Returns `{"status": "ok"}` or a `500` if Postgres is unreachable.
