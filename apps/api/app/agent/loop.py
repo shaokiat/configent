@@ -152,11 +152,9 @@ def _request_kwargs(
     """Assemble kwargs for one API call. `messages` is snapshotted (with the
     per-turn cache breakpoint applied) so call_args captures the state at call
     time."""
-    return {
+    kwargs: dict = {
         "model": cfg.agent.model,
         "max_tokens": cfg.agent.max_tokens,
-        "thinking": {"type": "disabled"},
-        "output_config": {"effort": cfg.agent.effort},
         "system": [
             {
                 "type": "text",
@@ -167,17 +165,44 @@ def _request_kwargs(
         "tools": tool_defs,
         "messages": _with_turn_breakpoint(messages),
     }
+    # effort / thinking are only supported on Sonnet 4+ and Opus 4+
+    if "haiku" not in cfg.agent.model:
+        kwargs["thinking"] = {"type": "disabled"}
+        kwargs["output_config"] = {"effort": cfg.agent.effort}
+    return kwargs
+
+
+def _as_dict(b: Any) -> dict:
+    return b.model_dump(exclude_none=True) if hasattr(b, "model_dump") and callable(b.model_dump) else b
 
 
 def _dump_blocks(content: list[Any]) -> list[dict]:
-    return [
-        b.model_dump() if hasattr(b, "model_dump") and callable(b.model_dump) else b
-        for b in content
-    ]
+    return [_as_dict(b) for b in content]
 
 
 def _tool_use_blocks(content: list[Any]) -> list[Any]:
     return [b for b in content if _attr_or_key(b, "type") == "tool_use"]
+
+
+def _excerpt(text: str, max_chars: int = 400) -> str:
+    """Trim a full document chunk to a readable 2-3 sentence excerpt.
+
+    The Anthropic Citations API returns the entire chunk as cited_text. This
+    reduces it to something useful as a hover preview without losing the key fact.
+    """
+    if not text:
+        return text
+    # Strip leading markdown noise (headers, dividers) before excerpting
+    import re
+    cleaned = re.sub(r"^(#{1,6}\s.*|[-*]{3,})\n?", "", text, flags=re.MULTILINE).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    # Cut at the last sentence boundary within max_chars
+    window = cleaned[:max_chars]
+    last_stop = max(window.rfind(". "), window.rfind(".\n"), window.rfind("? "), window.rfind("! "))
+    if last_stop > max_chars // 3:
+        return window[: last_stop + 1]
+    return window.rstrip() + "…"
 
 
 def _collect_segments(response: Any) -> tuple[str, list[dict], list[dict]]:
@@ -190,10 +215,7 @@ def _collect_segments(response: Any) -> tuple[str, list[dict], list[dict]]:
             continue
         block_text = _attr_or_key(block, "text", "")
         reply_text += block_text
-        cit_dicts = [
-            cit.model_dump() if hasattr(cit, "model_dump") and callable(cit.model_dump) else cit
-            for cit in (_attr_or_key(block, "citations") or [])
-        ]
+        cit_dicts = [_as_dict(cit) for cit in (_attr_or_key(block, "citations") or [])]
         citations.extend(cit_dicts)
         segments.append(
             {
@@ -202,7 +224,7 @@ def _collect_segments(response: Any) -> tuple[str, list[dict], list[dict]]:
                     {
                         "source": c.get("source"),
                         "title": c.get("title"),
-                        "cited_text": c.get("cited_text"),
+                        "cited_text": _excerpt(c.get("cited_text") or ""),
                     }
                     for c in cit_dicts
                 ],
@@ -266,9 +288,9 @@ async def _stream_loop(
     """Core agent loop, streaming. Yields UC-10 events; fills `result` in place
     (async generators cannot return a value)."""
     tool_defs = _sorted_tool_defs(cfg.agent.tools)
-    citation_index = 0
 
     for _ in range(_MAX_ITERATIONS):
+        citation_index = 0
         async with aclient.messages.stream(
             **_request_kwargs(cfg, system_prompt, tool_defs, messages)
         ) as stream:
@@ -293,7 +315,7 @@ async def _stream_loop(
                                 "index": citation_index,
                                 "source": _attr_or_key(cit, "source"),
                                 "title": _attr_or_key(cit, "title"),
-                                "cited_text": _attr_or_key(cit, "cited_text"),
+                                "cited_text": _excerpt(_attr_or_key(cit, "cited_text") or ""),
                             },
                         )
             response = await stream.get_final_message()
@@ -312,7 +334,10 @@ async def _stream_loop(
             messages.append({"role": "user", "content": list(tool_results)})
             continue
 
-        # end_turn / max_tokens
+        if response.stop_reason not in ("end_turn", "max_tokens"):
+            raise RuntimeError(
+                f"Unexpected stop_reason {response.stop_reason!r} during streamed turn"
+            )
         result.reply_text, result.citations, result.segments = _collect_segments(response)
         return
 
@@ -429,12 +454,14 @@ async def stream_turn(
             yield event
     except anthropic.APIError as exc:
         logger.exception("Anthropic API error during streamed turn (client=%s)", client_id)
+        await db.rollback()
         yield ("error", {"message": f"Upstream API error: {exc.__class__.__name__}"})
         return
     except Exception as exc:
         # The HTTP status is already sent; the SSE channel is the only way to
         # surface a failure to the client.
         logger.exception("Streamed turn failed (client=%s)", client_id)
+        await db.rollback()
         yield ("error", {"message": str(exc)})
         return
 

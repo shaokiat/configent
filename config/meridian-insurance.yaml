@@ -10,7 +10,7 @@ corpus:
     chunk_size: 800
     overlap: 100
 agent:
-  model: claude-sonnet-4-6
+  model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/meridian-insurance.md
   max_tokens: 4096
   effort: medium

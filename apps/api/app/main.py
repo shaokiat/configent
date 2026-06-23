@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()  # no-op in Docker (vars already in env); loads .env for local dev
+
 from fastapi import FastAPI
 
 from app.routers import clients, health

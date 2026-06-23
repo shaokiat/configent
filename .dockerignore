@@ -1,0 +1,14 @@
+# Python
+apps/api/.venv/
+apps/api/__pycache__/
+apps/api/.pytest_cache/
+apps/api/.ruff_cache/
+apps/api/tests/
+**/*.pyc
+
+# Node
+apps/web/node_modules/
+apps/web/.next/
+
+# Secrets / local config
+.env
