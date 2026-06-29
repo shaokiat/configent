@@ -1,0 +1,223 @@
+---
+title: Adding a New Use Case
+description: The repeatable recipe for adding a new client (assistant) to Configent, using the Configent Support bot as the worked end-to-end example.
+order: 12
+group: Examples
+---
+
+<div class="lead">
+  Configent's <a href="/configent/docs/examples#configent-support">Configent Support</a> bot was
+  added with <strong>zero engine changes</strong> — a corpus, a prompt, one config file, and one
+  small tool. This guide turns that into a recipe you can follow for any new use case, and
+  foregrounds the single decision that matters: can your assistant run on the shared tools alone,
+  or does it need a client-specific tool?
+</div>
+
+---
+
+## The anatomy of a client
+
+A new assistant is a new **client**: a tenant defined entirely by data, with no changes to the
+engine for the common case. At most you create five things:
+
+| Artifact | Path | Controls |
+|----------|------|----------|
+| **Config** | `config/<id>.yaml` | Identity, branding, model, corpus pointer, tool list, limits |
+| **Corpus** | `corpora/<id>/` | The documents the assistant answers from (`.md`, `.pdf`, `.html`) |
+| **System prompt** | `prompts/<id>.md` | Persona, grounding rules, when to use each tool |
+| **Branding asset** | `assets/<id>/logo.svg` | The logo shown in the chat UI |
+| **Golden set** *(optional)* | `evals/<id>/golden.jsonl` | Q&A pairs for offline quality checks |
+
+If your assistant only needs to answer questions from documents, those files are everything — the
+shared `search_docs` and `get_document` tools handle retrieval and citation, and you write **no
+code**.
+
+---
+
+## The one decision: shared tools, or a client-specific tool?
+
+Every client gets the shared tools for free. The only question is whether yours needs to *do*
+something deterministic that retrieval can't:
+
+- **Shared tools only** (`search_docs` + `get_document`) → a pure RAG assistant. Ask a question,
+  get a cited answer from the corpus. No new code.
+- **Add a client-specific tool** → when the assistant must return an auditable, structured result:
+  look up a live price, return a deterministic verdict, file a ticket.
+
+The three shipped clients sit on that spectrum:
+
+| Client | Client-specific tool | Why it needs one |
+|--------|----------------------|------------------|
+| **Configent Support** | `create_support_ticket` | Escalate when the docs don't answer the question, instead of guessing |
+| **Acme Fab Equipment** | `pricing_lookup` | Return a real quote (price, discount, lead time) for a part |
+| **Meridian Insurance** | `coverage_check` | Return an auditable covered / not-covered verdict for a claim scenario |
+
+**A quick checklist — you need a tool when the answer:**
+
+1. Requires a calculation or lookup that isn't in the documents, **or**
+2. Must be a structured, machine-checkable result (not prose), **or**
+3. Triggers an action (file, send, create) rather than just informing.
+
+If none of these are true, ship with the shared tools.
+
+---
+
+## Walkthrough: building the Configent Support bot
+
+Here's the exact sequence used to add the Configent Support assistant — the one powering the
+[live demo](/configent/demo).
+
+### 1. Plant the corpus
+
+The corpus lives in `corpora/configent-support/`. For this dogfood tenant, the documents are
+plain-markdown exports of the published docs (platform overview, quickstart, configuration
+reference, tools, multi-tenancy, citations, adding a client).
+
+> **Exporting published docs into a corpus.** If your source is MDX/HTML, strip the frontmatter
+> and any JSX/components so chunks contain prose, not markup. Keep each key fact on a single line
+> so it survives chunking and can be cited verbatim. Remember the corpus is a *snapshot* — re-run
+> ingestion to refresh it when the source changes.
+
+Each client's corpus is isolated: a fact planted for one client is never retrieved for another.
+
+### 2. Write the system prompt
+
+`prompts/configent-support.md` sets the persona (a developer-support engineer), the grounding
+rules (answer only from retrieved docs, cite the source, say "I don't know" on empty retrieval),
+and — critically — *when to escalate*: file a ticket only when the docs can't answer, never as a
+substitute for searching.
+
+### 3. (If needed) add a client-specific tool
+
+Configent Support needs the escalation action, so it gets one tool. A tool is a small module that
+exposes a `DEFINITION` (the Anthropic tool schema) and an async `execute` function:
+
+```python
+# apps/api/app/tools/configent_support/create_support_ticket.py
+import zlib
+from typing import Any
+
+DEFINITION = {
+    "name": "create_support_ticket",
+    "description": "File a support ticket for a question the docs can't answer ...",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "subject":  {"type": "string"},
+            "category": {"type": "string",
+                         "enum": ["billing", "bug", "account", "feature_request", "other"]},
+            "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+        },
+        "required": ["subject", "category"],
+    },
+}
+
+async def execute(tool_input: dict[str, Any], **_) -> dict:
+    # Deterministic mock: same input → same ticket id (zlib.crc32, not hash()).
+    digest = zlib.crc32(f"{tool_input['category']}:{tool_input['subject']}".lower().encode())
+    return {"ticket_id": f"CONFIGENT-{digest % 9000 + 1000}", "status": "open", ...}
+```
+
+Then register it **once** in the tool registry:
+
+```python
+# apps/api/app/tools/registry.py
+from app.tools.configent_support import create_support_ticket
+
+_REGISTRY = {
+    # ...shared + other client tools...
+    "create_support_ticket": (create_support_ticket.DEFINITION, create_support_ticket.execute),
+}
+```
+
+That one line is what makes the name available to configs. Use the shipped
+`create_support_ticket` as a copy-paste template for your own tool. Keep tools **deterministic** —
+they should return structured data the agent can cite, not invent business facts.
+
+### 4. Write the config
+
+`config/configent-support.yaml` ties it together and lists exactly the tools the assistant should
+have:
+
+```yaml
+client_id: configent-support
+name: "Configent Support"
+
+branding:
+  logo: assets/configent-support/logo.svg
+  primary_color: "#10b981"
+  assistant_name: ConfigentBot
+
+corpus:
+  source: corpora/configent-support/
+  chunking:
+    chunk_size: 512   # smaller chunks → precise lookups for short factual Q&A
+    overlap: 64
+
+agent:
+  model: claude-haiku-4-5-20251001   # fast + cheap is right for tier-1 support
+  system_prompt_file: prompts/configent-support.md
+  max_tokens: 2048
+  effort: low
+  tools:
+    - search_docs
+    - get_document
+    - create_support_ticket
+
+limits:
+  rate_limit_per_minute: 60
+  daily_budget_usd: 2.00
+```
+
+### 5. Add a branding asset
+
+Drop a `logo.svg` into `assets/configent-support/`. The UI reads `branding` to render a chat that
+looks like the client's own product.
+
+### 6. (Optional) add a golden eval set
+
+`evals/configent-support/golden.jsonl` holds Q&A pairs — including a refusal case that should
+trigger a ticket — so you can measure grounding before shipping a change. See
+[Citations](/configent/docs/citations) for how grounding is evaluated.
+
+### 7. Ingest and try it
+
+```bash
+make ingest CLIENT=configent-support   # or just restart the API — it ingests on startup
+```
+
+Open `/c/configent-support` and ask away. Re-running ingest is safe: unchanged documents are
+skipped, changed ones are re-embedded.
+
+---
+
+## What the engine validates for you
+
+You don't wire any of this manually — the platform checks it at startup:
+
+- **Config schema** is validated; a malformed config fails boot with an error naming the field and
+  the file.
+- **Tool names fail fast.** Every name in `agent.tools` is checked against the registry. An unknown
+  tool name stops startup — it can never reach a live user. (See [Tools](/configent/docs/tools-system).)
+- **Tenant isolation** is enforced at the query level: retrieval is filtered by `client_id`, so a
+  client can only ever see its own corpus. (See [Multi-Tenancy](/configent/docs/multi-tenancy).)
+
+---
+
+## New use case in five steps
+
+```text
+corpora/<id>/            1. Drop in documents
+prompts/<id>.md          2. Write the system prompt
+apps/api/app/tools/<id>/ 3. (only if needed) add + register a client-specific tool
+config/<id>.yaml         4. Write the config, listing the tools to enable
+assets/<id>/logo.svg     5. Add branding → make ingest CLIENT=<id>
+```
+
+No code change for a documents-only assistant. No deployment pipeline. If something doesn't
+validate, the startup error names the field and the file — and if you hit a genuine gap, the
+Configent Support bot will happily file you a ticket.
+
+See also: [Configuration Reference](/configent/docs/config-reference) ·
+[Tools System](/configent/docs/tools-system) ·
+[Example Configs](/configent/docs/examples)

@@ -19,6 +19,78 @@ These configs are in `config/` in the repo and run against real corpora and prom
 
 ---
 
+## Configent Support
+
+**Use case:** A customer-facing support bot — the most common assistant pattern. **ConfigentBot**
+answers questions about Configent itself, drawn from the platform's published documentation, and
+files a support ticket when a question falls outside the docs. This is the assistant powering the
+[live demo](/configent/demo), and it doubles as the worked example in the
+[Adding a New Use Case](/configent/docs/adding-a-use-case) guide.
+
+**Corpus:** Plain-markdown exports of the Configent docs — overview, quickstart, configuration
+reference, tools and the agent loop, multi-tenancy, citations, and adding a client — in
+`corpora/configent-support/`.
+
+**What's notable:**
+- It's the simplest, most relatable example: ask a question, get a cited answer from the docs;
+  ask something the docs don't cover, get a ticket. No domain knowledge required to follow it.
+- `create_support_ticket` is a client-specific tool — the agent's escalation path when retrieval
+  comes up empty, instead of guessing.
+- `model: claude-haiku-4-5-20251001` with `effort: low` — a fast, cheap model is the right call
+  for tier-1 support over a focused corpus.
+- A *dogfood tenant*: the corpus is Configent's own docs, so the assistant demonstrates the
+  platform on itself.
+
+```yaml
+client_id: configent-support
+name: "Configent Support"
+
+branding:
+  logo: assets/configent-support/logo.svg
+  primary_color: "#10b981"
+  assistant_name: ConfigentBot
+
+corpus:
+  source: corpora/configent-support/
+  chunking:
+    chunk_size: 512
+    overlap: 64
+
+agent:
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/configent-support.md
+  max_tokens: 2048
+  effort: low
+  tools:
+    - search_docs
+    - get_document
+    - create_support_ticket
+
+evals:
+  golden_set: evals/configent-support/golden.jsonl
+  judge_model: claude-sonnet-4-6
+
+limits:
+  rate_limit_per_minute: 60
+  daily_budget_usd: 2.00
+```
+
+**What the `create_support_ticket` tool does:**
+Given a `subject` and a `category` (`billing`, `bug`, `account`, `feature_request`, or `other`),
+plus an optional `priority` and `customer_email`, it returns a structured ticket: a deterministic
+`ticket_id` (e.g. `CONFIGENT-1042`), `status`, the category's target response time, and a ticket
+URL. It's a mock — no real ticketing backend — but it's reproducible: the same subject and
+category always yield the same ID. The agent is instructed to only file a ticket when the docs
+can't answer the question, not as a substitute for retrieval.
+
+**Things to try in the demo:**
+- "What tools does every client get?"
+- "How does Configent keep one client's documents from leaking into another's?"
+- "How do I add a new client?"
+- "I think ingestion is broken when the Voyage key is missing — can you log that?"
+
+---
+
 ## Acme Fab Equipment
 
 **Use case:** Field service and procurement assistant for industrial fabrication equipment.
@@ -141,45 +213,23 @@ The three scenarios are enough to demo the core claim pattern (covered / exclude
 
 ## Adding a new client
 
-The minimum viable config for a new client using only the shared tools:
+Adding a new assistant is a no-code operation: drop documents into a corpus folder, write a system
+prompt, write one YAML config, and ingest. The engine validates the config at startup and raises
+an error immediately if any key is wrong or any tool name is unknown.
 
-```yaml
-client_id: your-client-id
-name: "Your Client Name"
-
-branding:
-  logo: assets/your-client-id/logo.svg
-  primary_color: "#000000"
-  assistant_name: YourAssistant
-
-corpus:
-  source: corpora/your-client-id/
-
-agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/your-client-id.md
-  tools:
-    - search_docs
-    - get_document
-```
-
-Then:
-1. Drop documents into `corpora/your-client-id/`
-2. Write `prompts/your-client-id.md` with the system prompt
-3. Add `config/your-client-id.yaml`
-4. Run `make ingest CLIENT=your-client-id` (or restart the API — it ingests on startup)
-
-No code changes. No deployment pipeline. The engine validates the config at startup and
-raises an error immediately if any key is wrong or any tool name is unknown.
+The **[Adding a New Use Case](/configent/docs/adding-a-use-case)** guide walks the full recipe —
+using the Configent Support bot above as the worked example — including the one decision that
+matters: whether your assistant can run on the shared tools alone, or needs a client-specific tool.
 
 ---
 
 ## Planned examples
 
 > **Not yet runnable.** These configs reference features that are on the roadmap but not
-> implemented: per-source ingestion types (`pdf`, `url`, `text`), webhook tools
-> (`create_support_ticket`, `get_product_pricing`, `send_email_notification`), and
-> the `temperature` key. See the implementation gaps below each example.
+> implemented: per-source ingestion types (`pdf`, `url`, `text`), generic shared *webhook* tools
+> that call live endpoints (`get_product_pricing`, `send_email_notification`, and a webhook
+> version of `create_support_ticket` — a per-client mock of which already ships), and the
+> `temperature` key. See the implementation gaps below each example.
 
 ---
 
@@ -274,13 +324,17 @@ limits:
 
 ---
 
-### Customer-facing support bot
+### Support bot with live webhooks
 
-**Use case:** A customer-facing assistant that handles tier-1 support — known questions,
-ticket creation for unknowns, and pricing lookups via a live endpoint.
+**Use case:** The webhook-driven evolution of the live [Configent Support](#configent-support) bot.
+The shipped version uses a **mock** `create_support_ticket` (a client-specific tool with no real
+backend). This planned version swaps that for **generic shared webhook tools** that call real
+endpoints — filing tickets into an actual system and looking up pricing from a live service —
+configured purely in YAML, with no per-client code.
 
 **Requires:** `create_support_ticket` and `get_product_pricing` as generic shared webhook tools
-(not the current `pricing_lookup` which is acme-fab specific with hardcoded catalog data).
+(distinct from the current per-client mock and from `pricing_lookup`, which is acme-fab specific
+with hardcoded catalog data), plus per-source ingestion and the `temperature` key.
 
 ```yaml
 # ⚠ Not yet runnable — webhook tools not yet implemented
@@ -337,7 +391,7 @@ To make the planned examples runnable, the following changes are needed:
 | Per-source ingestion (`type: pdf/url/text`) | Replace `CorpusConfig.source: str` with `sources: list[SourceConfig]` in `schema.py`; update `ingest.py` to dispatch by type; add URL fetching with `httpx` + `BeautifulSoup` |
 | `temperature` key | Add `temperature: float = 0.3` to `AgentConfig` in `schema.py`; pass to `_request_kwargs` in `loop.py` |
 | Tool config objects (`{name, enabled, endpoint}`) | Replace `tools: list[str]` with `list[ToolConfig]` in `AgentConfig`; update registry to pass `endpoint`/`auth_header` to executors |
-| `create_support_ticket` shared tool | Add `apps/api/app/tools/shared/create_support_ticket.py`; register in `tools/registry.py` |
+| `create_support_ticket` as a generic shared webhook tool | A per-client **mock** already ships at `apps/api/app/tools/configent_support/create_support_ticket.py`. The gap is a generic, shared version that POSTs to a configurable `endpoint` instead of returning canned data |
 | `get_product_pricing` shared tool | Add `apps/api/app/tools/shared/get_product_pricing.py` as a generic HTTP tool; register in `tools/registry.py` |
 | `send_email_notification` shared tool | Add `apps/api/app/tools/shared/send_email_notification.py`; register in `tools/registry.py` |
 | `top_k` per-client config | Add to `CorpusConfig`; thread through to `search.py` |

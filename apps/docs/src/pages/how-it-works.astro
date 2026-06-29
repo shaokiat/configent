@@ -47,32 +47,32 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
                 <span class="cb-dot g"></span>
                 <span class="cb-filename">config.yaml</span>
               </div>
-              <pre class="cb-pre"><code><span class="y-key">client_id</span>: <span class="y-str">acme-fab</span>
-<span class="y-key">name</span>: <span class="y-str">Acme Fab Equipment</span>
+              <pre class="cb-pre"><code><span class="y-key">client_id</span>: <span class="y-str">configent-support</span>
+<span class="y-key">name</span>: <span class="y-str">Configent Support</span>
 
 <span class="y-key">branding</span>:
-  <span class="y-key">logo</span>: <span class="y-str">assets/acme-fab/logo.svg</span>
-  <span class="y-key">primary_color</span>: <span class="y-str">"#1B4F8A"</span>
-  <span class="y-key">assistant_name</span>: <span class="y-str">AcmeAssist</span>
+  <span class="y-key">logo</span>: <span class="y-str">assets/configent-support/logo.svg</span>
+  <span class="y-key">primary_color</span>: <span class="y-str">"#10b981"</span>
+  <span class="y-key">assistant_name</span>: <span class="y-str">ConfigentBot</span>
 
 <span class="y-key">corpus</span>:
-  <span class="y-key">source</span>: <span class="y-str">corpora/acme-fab/</span>
+  <span class="y-key">source</span>: <span class="y-str">corpora/configent-support/</span>
   <span class="y-key">chunking</span>:
-    <span class="y-key">chunk_size</span>: <span class="y-num">800</span>
-    <span class="y-key">overlap</span>: <span class="y-num">100</span>
+    <span class="y-key">chunk_size</span>: <span class="y-num">512</span>
+    <span class="y-key">overlap</span>: <span class="y-num">64</span>
 
 <span class="y-key">agent</span>:
-  <span class="y-key">model</span>: <span class="y-str">claude-sonnet-4-6</span>
-  <span class="y-key">system_prompt_file</span>: <span class="y-str">prompts/acme-fab.md</span>
-  <span class="y-key">max_tokens</span>: <span class="y-num">4096</span>
-  <span class="y-key">effort</span>: <span class="y-str">medium</span>
+  <span class="y-key">model</span>: <span class="y-str">claude-haiku-4-5-20251001</span>
+  <span class="y-key">system_prompt_file</span>: <span class="y-str">prompts/configent-support.md</span>
+  <span class="y-key">max_tokens</span>: <span class="y-num">2048</span>
+  <span class="y-key">effort</span>: <span class="y-str">low</span>
   <span class="y-key">tools</span>:
     - <span class="y-str">search_docs</span>
     - <span class="y-str">get_document</span>
-    - <span class="y-str">pricing_lookup</span>
+    - <span class="y-str">create_support_ticket</span>
 
 <span class="y-key">limits</span>:
-  <span class="y-key">rate_limit_per_minute</span>: <span class="y-num">20</span>
+  <span class="y-key">rate_limit_per_minute</span>: <span class="y-num">60</span>
   <span class="y-key">daily_budget_usd</span>: <span class="y-num">2.00</span></code></pre>
             </div>
           </div>
@@ -86,14 +86,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
               On startup, the orchestration layer reads the config and:
             </p>
             <ul>
-              <li>Loads and embeds all knowledge base sources using <code>text-embedding-3-small</code></li>
-              <li>Indexes embeddings into a client-isolated pgvector namespace</li>
-              <li>Registers only the tools marked <code>enabled: true</code> — others are never loaded</li>
-              <li>Builds the system prompt with the turn breakpoint for prompt cache optimisation</li>
+              <li>Parses, chunks, and embeds all corpus documents using Voyage AI <code>voyage-3</code> (1024-dim vectors)</li>
+              <li>Stores embeddings in pgvector, scoped per client via a <code>client_id</code> column — no cross-tenant leakage possible</li>
+              <li>Registers only the tools listed under <code>agent.tools</code> — others are never loaded into the tool schema</li>
+              <li>Builds the system prompt with a cache breakpoint so the prompt is cached across turns</li>
             </ul>
             <p>
-              Nothing is shared between clients. Each <code>client_id</code> gets an isolated
-              vector store namespace, tool registry, and session state.
+              Nothing is shared between clients. Each <code>client_id</code> gets its own
+              embeddings, tool registry, and system prompt.
             </p>
           </div>
         </div>
@@ -106,14 +106,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
               When a user sends a message, it enters a manual agentic loop:
             </p>
             <ol>
-              <li>Claude receives the conversation history + registered tool schemas</li>
-              <li>If Claude calls a tool (e.g. <code>search_knowledge_base</code>), the engine executes it and appends the result</li>
-              <li>The loop continues until Claude produces a final text response or <code>max_iterations</code> is reached</li>
-              <li>Responses stream over SSE — text tokens and citation blocks arrive in real time</li>
+              <li>Claude receives the conversation history and registered tool schemas</li>
+              <li>If Claude calls a tool (e.g. <code>search_docs</code>), the engine executes it and appends the result as a <code>tool_result</code> message</li>
+              <li>The loop continues until Claude produces a final text response or the 8-iteration limit is reached</li>
+              <li>Responses stream over SSE — text tokens and citation events arrive in real time</li>
             </ol>
             <p>
-              The loop is deterministic and inspectable. Every tool call and result is logged,
-              making it straightforward to debug or audit in enterprise contexts.
+              The loop is explicit and inspectable. Every tool call, result, token count, and cost is
+              traced to Postgres, making it straightforward to debug or audit.
             </p>
           </div>
         </div>
@@ -124,13 +124,13 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
             <h3>Response is delivered with citations</h3>
             <p>
               The final response streams to the frontend with inline citation popovers.
-              Each cited passage maps back to a specific chunk in the knowledge base,
-              with the source document and page number surfaced in the UI.
+              Each cited passage maps back to a specific chunk in the corpus,
+              with the source document title surfaced in the UI.
             </p>
             <p>
-              This is not post-hoc attribution — citations are emitted as
-              <code>search_result</code> blocks during tool execution and rendered
-              by the client in real time.
+              Citations are not post-processed — chunks are passed to the Anthropic API as
+              <code>search_result</code> content blocks, and the API attaches citation markers
+              at generation time. No regex, no attribution heuristics.
             </p>
           </div>
         </div>

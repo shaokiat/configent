@@ -51,27 +51,27 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         <span class="snippet-dot green"></span>
         <span class="snippet-filename">config.yaml</span>
       </div>
-      <pre class="snippet-body"><code><span class="y-key">client_id</span><span class="y-colon">:</span> <span class="y-str">acme-fab</span>
-<span class="y-key">name</span><span class="y-colon">:</span> <span class="y-str">Acme Fab Equipment</span>
+      <pre class="snippet-body"><code><span class="y-key">client_id</span><span class="y-colon">:</span> <span class="y-str">configent-support</span>
+<span class="y-key">name</span><span class="y-colon">:</span> <span class="y-str">Configent Support</span>
 
 <span class="y-key">branding</span><span class="y-colon">:</span>
-  <span class="y-key">assistant_name</span><span class="y-colon">:</span> <span class="y-str">AcmeAssist</span>
-  <span class="y-key">primary_color</span><span class="y-colon">:</span> <span class="y-str">"#1B4F8A"</span>
+  <span class="y-key">assistant_name</span><span class="y-colon">:</span> <span class="y-str">ConfigentBot</span>
+  <span class="y-key">primary_color</span><span class="y-colon">:</span> <span class="y-str">"#10b981"</span>
 
 <span class="y-key">corpus</span><span class="y-colon">:</span>
-  <span class="y-key">source</span><span class="y-colon">:</span> <span class="y-str">corpora/acme-fab/</span>
+  <span class="y-key">source</span><span class="y-colon">:</span> <span class="y-str">corpora/configent-support/</span>
   <span class="y-key">chunking</span><span class="y-colon">:</span>
-    <span class="y-key">chunk_size</span><span class="y-colon">:</span> <span class="y-num">800</span>
-    <span class="y-key">overlap</span><span class="y-colon">:</span> <span class="y-num">100</span>
+    <span class="y-key">chunk_size</span><span class="y-colon">:</span> <span class="y-num">512</span>
+    <span class="y-key">overlap</span><span class="y-colon">:</span> <span class="y-num">64</span>
 
 <span class="y-key">agent</span><span class="y-colon">:</span>
-  <span class="y-key">model</span><span class="y-colon">:</span> <span class="y-str">claude-sonnet-4-6</span>
-  <span class="y-key">system_prompt_file</span><span class="y-colon">:</span> <span class="y-str">prompts/acme-fab.md</span>
-  <span class="y-key">effort</span><span class="y-colon">:</span> <span class="y-str">medium</span>
+  <span class="y-key">model</span><span class="y-colon">:</span> <span class="y-str">claude-haiku-4-5-20251001</span>
+  <span class="y-key">system_prompt_file</span><span class="y-colon">:</span> <span class="y-str">prompts/configent-support.md</span>
+  <span class="y-key">effort</span><span class="y-colon">:</span> <span class="y-str">low</span>
   <span class="y-key">tools</span><span class="y-colon">:</span>
     <span class="y-dash">-</span> <span class="y-str">search_docs</span>
     <span class="y-dash">-</span> <span class="y-str">get_document</span>
-    <span class="y-dash">-</span> <span class="y-str">pricing_lookup</span></code></pre>
+    <span class="y-dash">-</span> <span class="y-str">create_support_ticket</span></code></pre>
     </div>
 
   </div>
