@@ -9,8 +9,11 @@ The canonical project name — used for the repo, database, CLI, and all user-fa
 _Avoid_: POC Factory (legacy name; see `CONFIGENT.md` and `CONFIGENT_BUILD.md`)
 
 **Client**:
-A tenant of the platform (e.g., Acme Fab Equipment, Meridian Insurance), defined entirely by one YAML file in `config/` plus a corpus directory.
+A tenant of the platform (e.g., Acme Fab Equipment, Meridian Insurance, Configent Support), defined entirely by one YAML file in `config/` plus a corpus directory.
 _Avoid_: tenant, customer
+
+**Dogfood tenant**:
+A Client whose Corpus is Configent's own published documentation, used as the primary illustrative example. The `configent-support` Client (assistant `ConfigentBot`) answers questions about the platform itself. It is a Client like any other — "Configent" stays canonical for the *platform*; `configent-support` is just a tenant that happens to document it.
 
 **Corpus**:
 The set of source documents belonging to one Client, ingested into pgvector scoped by `client_id`.
@@ -22,7 +25,7 @@ A sentence planted verbatim in a Corpus document so retrieval, citation, and eva
 A tool available to every Client (`search_docs`, `get_document`).
 
 **Client-specific tool**:
-A mock business-system tool enabled per Client via its YAML (`pricing_lookup` for Acme, `coverage_check` for Meridian).
+A mock business-system tool enabled per Client via its YAML (`pricing_lookup` for Acme, `coverage_check` for Meridian, `create_support_ticket` for Configent Support).
 
 ## Relationships
 

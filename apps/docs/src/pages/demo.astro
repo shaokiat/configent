@@ -5,36 +5,36 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 const DEMO_URL = 'https://configent-demo.vercel.app'; // placeholder
 
-const demoConfig = `client_id: acme-fab
-name: "Acme Fab Equipment"
+const demoConfig = `client_id: configent-support
+name: "Configent Support"
 
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: AcmeAssist
+  logo: assets/configent-support/logo.svg
+  primary_color: "#10b981"
+  assistant_name: ConfigentBot
 
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/configent-support/
   chunking:
-    chunk_size: 800
-    overlap: 100
+    chunk_size: 512
+    overlap: 64
 
 agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/configent-support.md
+  max_tokens: 2048
+  effort: low
   tools:
     - search_docs
     - get_document
-    - pricing_lookup
+    - create_support_ticket
 
 evals:
-  golden_set: evals/acme-fab/golden.jsonl
+  golden_set: evals/configent-support/golden.jsonl
   judge_model: claude-sonnet-4-6
 
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00`;
 ---
 
@@ -60,19 +60,19 @@ limits:
         <div class="demo-meta">
           <div class="meta-row">
             <span class="meta-key">Client ID</span>
-            <code class="meta-val">acme-fab</code>
+            <code class="meta-val">configent-support</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Model</span>
-            <code class="meta-val">claude-sonnet-4-6</code>
+            <code class="meta-val">claude-haiku-4-5-20251001</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Corpus</span>
-            <code class="meta-val">corpora/acme-fab/ · PDFs + MD</code>
+            <code class="meta-val">corpora/configent-support/ · Markdown</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Tools</span>
-            <code class="meta-val">search_docs, get_document, pricing_lookup</code>
+            <code class="meta-val">search_docs, get_document, create_support_ticket</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Embeddings</span>
@@ -91,10 +91,10 @@ limits:
         <div class="what-to-try">
           <div class="wtt-label">Things to try</div>
           <ul>
-            <li>"How does the agent loop work?"</li>
-            <li>"Show me a config for a support bot"</li>
-            <li>"What tools can I enable?"</li>
-            <li>"How is multi-tenancy handled?"</li>
+            <li>"What tools does every client get?"</li>
+            <li>"How is multi-tenancy isolated?"</li>
+            <li>"How do I add a new client?"</li>
+            <li>"I think ingestion is broken — file a ticket"</li>
           </ul>
         </div>
 
@@ -144,7 +144,7 @@ limits:
           </div>
           <div>
             <h4>Live citations</h4>
-            <p>Every factual claim links back to the source PDF chunk it was retrieved from.</p>
+            <p>Every factual claim links back to the source document chunk it was retrieved from.</p>
           </div>
         </div>
         <div class="show-item">
