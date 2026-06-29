@@ -12,17 +12,22 @@ Tools are the extension points that let the agent do more than retrieve text. Ea
 ## Architecture
 
 ```
-config/acme-fab.yaml            tools/registry.py
+config/configent-support.yaml   tools/registry.py
   agent:                          _REGISTRY = {
-    tools:                          "search_docs":    (DEFINITION, execute),
-      - search_docs         →       "get_document":   (DEFINITION, execute),
-      - get_document                "pricing_lookup": (DEFINITION, execute),
-      - pricing_lookup              "coverage_check": (DEFINITION, execute),
+    tools:                          "search_docs":           (DEFINITION, execute),
+      - search_docs         →       "get_document":          (DEFINITION, execute),
+      - get_document                "create_support_ticket": (DEFINITION, execute),
+      - create_support_ticket       "pricing_lookup":        (DEFINITION, execute),
+                                    "coverage_check":        (DEFINITION, execute),
                                   }
                                        │
                                   validated at startup
                                   (unknown names → ValueError, not 404)
 ```
+
+A client's `agent.tools` list names a subset of the registry; the two shared tools plus whichever
+client-specific tools that client needs. Configent Support uses the two shared tools plus its own
+`create_support_ticket`.
 
 The registry is a plain dict — no dynamic loading, no plugin system. Adding a tool means writing a module and adding one entry to `_REGISTRY`.
 
@@ -66,6 +71,21 @@ Fetches the full text of a document by `document_id`. Used when a search chunk l
 ```
 
 Enforces `client_id` isolation — a document belonging to a different client returns a not-found error even if the ID is valid.
+
+### `create_support_ticket` (configent-support)
+
+The escalation tool for the Configent Support bot. When a question falls outside the docs, the agent files a ticket instead of guessing. It's a deterministic mock — the same `subject` + `category` always produce the same `ticket_id` (via `zlib.crc32`, not Python's `hash()`), so it's reproducible with no real backend.
+
+```python
+# Input
+{"subject": "Ingestion fails when VOYAGE_API_KEY is unset", "category": "bug"}
+
+# Output
+{"ticket_id": "CONFIGENT-1042", "status": "open", "subject": "...", "category": "bug",
+ "priority": "normal", "eta_hours": 8, "url": "https://support.configent.dev/tickets/CONFIGENT-1042"}
+```
+
+The system prompt instructs the model to file a ticket only when retrieval comes up empty — never as a substitute for searching. See [Adding a New Use Case](/configent/docs/adding-a-use-case) for the full build.
 
 ### `pricing_lookup` (acme-fab)
 

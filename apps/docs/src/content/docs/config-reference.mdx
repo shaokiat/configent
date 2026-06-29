@@ -20,9 +20,12 @@ group: Setup
 | `name` | `string` | ✓ | Human-readable client name. Used in logs and the UI header. |
 
 ```yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+client_id: configent-support
+name: "Configent Support"
 ```
+
+> This page uses **Configent Support** — the bot powering this site's [demo](/configent/demo) — as
+> its running example. It's the simplest shipped client: a support bot over Configent's own docs.
 
 ---
 
@@ -32,15 +35,15 @@ Controls UI presentation for this client.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `branding.logo` | `string` | ✓ | Path to the client logo, relative to the repo root (e.g. `assets/acme-fab/logo.svg`). |
-| `branding.primary_color` | `string` | ✓ | Hex colour used for the chat UI accent (e.g. `"#1B4F8A"`). |
+| `branding.logo` | `string` | ✓ | Path to the client logo, relative to the repo root (e.g. `assets/configent-support/logo.svg`). |
+| `branding.primary_color` | `string` | ✓ | Hex colour used for the chat UI accent (e.g. `"#10b981"`). |
 | `branding.assistant_name` | `string` | ✓ | Name displayed in the chat header and used in the system prompt. |
 
 ```yaml
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: AcmeAssist
+  logo: assets/configent-support/logo.svg
+  primary_color: "#10b981"
+  assistant_name: ConfigentBot
 ```
 
 ---
@@ -57,10 +60,10 @@ Configures where documents come from and how they are chunked.
 
 ```yaml
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/configent-support/
   chunking:
-    chunk_size: 800
-    overlap: 100
+    chunk_size: 512   # smaller than the 800 default — precise lookups for short factual Q&A
+    overlap: 64
 ```
 
 **Supported file types:** `.pdf`, `.md` / `.markdown`, `.html` / `.htm`.
@@ -79,23 +82,28 @@ Controls the LLM, system prompt, and tool list for this client's agent loop.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `agent.model` | `string` | — | Claude model ID. |
-| `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/acme-fab.md`). Loaded at runtime, not inlined. |
+| `agent.model` | `string` | — | Claude model ID (e.g. `claude-haiku-4-5-20251001`, what all shipped clients use). |
+| `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/configent-support.md`). Loaded at runtime, not inlined. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens per API call. |
-| `agent.effort` | `string` | `"medium"` | Claude extended thinking effort level. One of `"low"`, `"medium"`, `"high"`, `"max"`. Higher effort uses more tokens. |
+| `agent.effort` | `string` | `"medium"` | Claude extended-thinking effort level. One of `"low"`, `"medium"`, `"high"`, `"max"`. **Only applied on Sonnet 4+ and Opus 4+** — it is silently skipped for Haiku models (which all shipped clients use), so it is effectively inert today. See note below. |
 | `agent.tools` | `list[string]` | `[]` | Ordered list of tool names to register for this client. Only tools listed here are available to the agent. Unknown names fail at startup. |
 
 ```yaml
 agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/configent-support.md
+  max_tokens: 2048
+  effort: low
   tools:
     - search_docs
     - get_document
-    - pricing_lookup
+    - create_support_ticket
 ```
+
+> **`effort` and Haiku:** extended thinking is only supported on Sonnet 4+ and Opus 4+. The loop
+> (`loop.py`) checks the model name and only sends `effort`/`thinking` when the model is *not* Haiku.
+> Every shipped client runs Haiku, so the `effort` key is accepted and validated but never reaches the
+> API. Switch a client to a Sonnet or Opus model and `effort` takes effect.
 
 > **Prompt caching:** The system prompt is always cached at the turn breakpoint using
 > Anthropic's ephemeral cache. This is unconditional — no config needed. Tool definitions
@@ -110,13 +118,14 @@ agent:
 |-----------|-------|-------------|
 | `search_docs` | Shared | Semantic search over the client's pgvector namespace. Returns `search_result` blocks with citations enabled. Accepts `query` (required) and `k` (default 5, max 8). |
 | `get_document` | Shared | Retrieves full document text by `document_id` (as returned by `search_docs`). Use when a chunk doesn't contain enough context. |
+| `create_support_ticket` | `configent-support` | Files a deterministic mock support ticket (stable `ticket_id`, status, target response time) when the docs can't answer a question. The escalation path for the Configent Support bot. |
 | `pricing_lookup` | `acme-fab` | Returns unit price, volume discount, and lead time for an Acme part number and quantity. |
 | `coverage_check` | `meridian-insurance` | Returns a structured coverage verdict for a named claim scenario against the HomeShield Plus policy. |
 
-`search_docs` and `get_document` are shared and can be added to any client. `pricing_lookup`
-and `coverage_check` are client-specific — they contain hardcoded catalog or policy data
-specific to those clients. Adding a new client-specific tool requires adding a file under
-`apps/api/app/tools/<client_id>/` and registering it in `apps/api/app/tools/registry.py`.
+`search_docs` and `get_document` are shared and can be added to any client. `create_support_ticket`,
+`pricing_lookup`, and `coverage_check` are client-specific — they contain hardcoded ticketing,
+catalog, or policy data specific to those clients. Adding a new client-specific tool requires adding
+a file under `apps/api/app/tools/<client_id>/` and registering it in `apps/api/app/tools/registry.py`.
 
 ---
 
@@ -148,7 +157,7 @@ Configures automated evaluation against a golden Q&A set. Omit if not using eval
 
 ```yaml
 evals:
-  golden_set: evals/acme-fab/golden.jsonl
+  golden_set: evals/configent-support/golden.jsonl
   judge_model: claude-sonnet-4-6
 ```
 
@@ -156,38 +165,39 @@ evals:
 
 ## Complete example
 
-This is the actual `acme-fab` client config from the repo:
+This is the actual `configent-support` client config from the repo — the bot powering this site's
+[demo](/configent/demo):
 
 ```yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+client_id: configent-support
+name: "Configent Support"
 
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: AcmeAssist
+  logo: assets/configent-support/logo.svg
+  primary_color: "#10b981"
+  assistant_name: ConfigentBot
 
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/configent-support/
   chunking:
-    chunk_size: 800
-    overlap: 100
+    chunk_size: 512
+    overlap: 64
 
 agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/configent-support.md
+  max_tokens: 2048
+  effort: low
   tools:
     - search_docs
     - get_document
-    - pricing_lookup
+    - create_support_ticket
 
 evals:
-  golden_set: evals/acme-fab/golden.jsonl
+  golden_set: evals/configent-support/golden.jsonl
   judge_model: claude-sonnet-4-6
 
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```

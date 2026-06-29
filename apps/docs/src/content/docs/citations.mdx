@@ -39,7 +39,7 @@ These are passed verbatim as `tool_result.content` blocks — not serialized to 
 
 ### 2. Anthropic generates citations
 
-With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on `claude-sonnet-4-6` — no beta header required.
+With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on current Claude models — including the `claude-haiku-4-5` models the shipped clients run — with no beta header required.
 
 ### 3. Segments extraction
 

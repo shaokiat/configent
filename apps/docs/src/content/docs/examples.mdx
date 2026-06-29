@@ -101,7 +101,7 @@ The `pricing_lookup` tool handles real-time quote requests without leaving the c
 
 **What's notable:**
 - Three tools active: `search_docs` for retrieval, `get_document` when a technician needs a full procedure section, and `pricing_lookup` for part quotes
-- `effort: medium` — correct for factual lookup tasks that don't need deep reasoning
+- `model: claude-haiku-4-5-20251001` — fast and cheap is the right call for factual lookup over a focused corpus
 - `daily_budget_usd: 2.00` is a conservative guard for a low-volume internal tool
 
 ```yaml
@@ -120,7 +120,7 @@ corpus:
     overlap: 100
 
 agent:
-  model: claude-sonnet-4-6
+  model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/acme-fab.md
   max_tokens: 4096
   effort: medium
@@ -164,6 +164,7 @@ returns a deterministic, auditable verdict for specific claim scenarios — no h
   `search_docs` so the user gets both a structured result and a cited policy clause.
 - `get_document` is included so the agent can surface the full section when a user wants to read the exact policy wording
 - Same chunking defaults as acme-fab — 800/100 works well for dense legal documents
+- `model: claude-haiku-4-5-20251001` — like the other shipped clients, a fast, cheap model handles grounded Q&A well
 
 ```yaml
 client_id: meridian-insurance
@@ -181,7 +182,7 @@ corpus:
     overlap: 100
 
 agent:
-  model: claude-sonnet-4-6
+  model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/meridian-insurance.md
   max_tokens: 4096
   effort: medium

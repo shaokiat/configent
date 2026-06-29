@@ -65,7 +65,18 @@ After the loop, all new messages from this turn are written back to Postgres. Th
 
 ## Request assembly
 
-Each API call includes the system prompt with `cache_control: ephemeral` and a `_with_turn_breakpoint` marker on the message history. `thinking` is disabled and `effort` is set to `medium` explicitly — the API defaults to `high` effort with thinking enabled, which adds latency without meaningful quality gain for a chat assistant.
+Each API call includes the system prompt with `cache_control: ephemeral` and a `_with_turn_breakpoint` marker on the message history.
+
+**Effort and thinking are model-dependent.** Extended thinking is only supported on Sonnet 4+ and Opus 4+, so the loop only sets `thinking: disabled` and the configured `effort` when the model is *not* Haiku:
+
+```python
+# loop.py — effort/thinking are only supported on Sonnet 4+ and Opus 4+
+if "haiku" not in cfg.agent.model:
+    kwargs["thinking"] = {"type": "disabled"}
+    kwargs["output_config"] = {"effort": cfg.agent.effort}
+```
+
+For non-Haiku models, `effort` is set explicitly rather than left to default — the API otherwise defaults to `high` effort with thinking enabled, which adds latency without meaningful quality gain for a chat assistant. Every shipped client runs Haiku, so this branch is skipped and the `effort` key in their configs is inert. See [Config Reference](/configent/docs/config-reference#agent) for the caveat.
 
 Caching details: [Prompt Caching](/configent/docs/prompt-caching).
 
@@ -110,6 +121,9 @@ class UsageTotals:
 ```
 
 `UsageTotals.add()` is called after every API call. By the time the loop exits, `cost_usd` covers all iterations including intermediate tool-call roundtrips.
+
+> The per-token rates are hardcoded Sonnet list prices. Shipped clients run Haiku (cheaper), so the
+> reported `cost_usd` is a deliberate **upper bound** — accurate enough for a cost badge, not billing.
 
 ---
 
