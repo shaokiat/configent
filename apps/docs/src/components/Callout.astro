@@ -1,0 +1,38 @@
+---
+interface Props {
+  tone?: 'warning' | 'danger';
+  title: string;
+}
+const { tone = 'warning', title } = Astro.props;
+---
+
+<div class:list={['callout', tone]}>
+  <p class="callout-title">{title}</p>
+  <div class="callout-body">
+    <slot />
+  </div>
+</div>
+
+<style>
+  .callout {
+    margin: 1.5rem 0;
+    padding: 1rem 1.25rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--amber);
+    border-radius: var(--radius);
+  }
+  .callout.danger { border-left-color: var(--red); }
+
+  .callout-title {
+    margin: 0 0 0.35rem;
+    font-weight: 600;
+    color: var(--amber);
+  }
+  .callout.danger .callout-title { color: var(--red); }
+
+  .callout-body :global(p) {
+    margin: 0;
+    color: var(--text-muted);
+  }
+</style>
