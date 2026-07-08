@@ -37,3 +37,6 @@ apps/docs/dist/
 # Alembic compiled versions (keep migrations, not compiled)
 # infra
 *.log
+
+# Interview-prep / meta docs (not for the public repo)
+private/

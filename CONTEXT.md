@@ -6,7 +6,7 @@ A config-driven enterprise AI assistant platform: one codebase spins up a brande
 
 **Configent**:
 The canonical project name — used for the repo, database, CLI, and all user-facing surfaces.
-_Avoid_: POC Factory (legacy name; see `CONFIGENT.md` and `CONFIGENT_BUILD.md`)
+_Avoid_: POC Factory (legacy name; see `docs/architecture.md` for public architecture docs — the original planning doc and build plan now live privately, untracked, since they contain interview-prep framing rather than engineering documentation)
 
 **Client**:
 A tenant of the platform (e.g., Acme Fab Equipment, Meridian Insurance, Configent Support), defined entirely by one YAML file in `config/` plus a corpus directory.
@@ -19,7 +19,7 @@ A Client whose Corpus is Configent's own published documentation, used as the pr
 The set of source documents belonging to one Client, ingested into pgvector scoped by `client_id`.
 
 **Sentinel fact**:
-A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5 in `CONFIGENT_BUILD.md` Part 1 §1).
+A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5; see the private build plan for the full list — not tracked in the public repo).
 
 **Shared tool**:
 A tool available to every Client (`search_docs`, `get_document`).
@@ -40,4 +40,4 @@ A mock business-system tool enabled per Client via its YAML (`pricing_lookup` fo
 
 ## Flagged ambiguities
 
-- "poc-factory" vs "configent" — resolved 2026-06-12: **Configent** is canonical everywhere executable (CLI command is `configent`, DB is `configent`). Planning docs consolidated into `CONFIGENT.md` and `CONFIGENT_BUILD.md`.
+- "poc-factory" vs "configent" — resolved 2026-06-12: **Configent** is canonical everywhere executable (CLI command is `configent`, DB is `configent`). Planning docs were originally consolidated into `CONFIGENT.md` and `CONFIGENT_BUILD.md`; as of 2026-07-08 those moved to a gitignored `private/` directory and the public architecture summary lives at `docs/architecture.md`.
