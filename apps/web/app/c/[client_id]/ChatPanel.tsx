@@ -54,20 +54,52 @@ function toolLabel(name: string): string {
   return `Running ${name}`;
 }
 
-const SUGGESTED: Record<string, string[]> = {
-  "acme-fab": [
-    "What's the preventive maintenance schedule for the PX-900?",
-    "How much does the chamber seal kit cost and when does it need replacing?",
-    "What safety precautions apply when venting the PX-900 chamber?",
-  ],
-  "meridian-insurance": [
-    "How do I file a claim for storm damage to my roof?",
-    "Is flood damage covered under HomeShield Plus?",
-    "What is the standard excess for accidental damage claims?",
-  ],
-};
-
 const POPOVER_W = 384; // w-96
+
+function storageKey(clientId: string): string {
+  return `configent:conv:${clientId}`;
+}
+
+interface HistorySegment {
+  text: string;
+  citations: { source: string; title: string; cited_text: string }[];
+}
+
+// Map stored citation segments (backend shape) into the Part[] shape the
+// renderer already understands, with sequential per-message citation indices
+// (mirrors the per-turn `citation_index` counter used while streaming live).
+function segmentsToParts(segments: HistorySegment[]): Part[] {
+  const parts: Part[] = [];
+  let index = 0;
+  for (const seg of segments) {
+    if (seg.text) parts.push({ kind: "text", text: seg.text });
+    for (const cite of seg.citations ?? []) {
+      index += 1;
+      parts.push({
+        kind: "cite",
+        index,
+        source: cite.source ?? "",
+        title: cite.title ?? "Source",
+        cited_text: cite.cited_text ?? "",
+      });
+    }
+  }
+  return parts;
+}
+
+interface HistoryMessage {
+  role: "user" | "assistant";
+  text?: string;
+  segments?: HistorySegment[];
+}
+
+function historyToMessages(history: HistoryMessage[]): ChatMessage[] {
+  return history.map((m) =>
+    m.role === "user"
+      ? { role: "user", text: m.text ?? "" }
+      : { role: "assistant", parts: segmentsToParts(m.segments ?? []) }
+  );
+}
 
 // Strip markdown syntax from cited_text so it reads as plain prose in the popover
 function stripMd(text: string): string {
@@ -209,11 +241,47 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const suggestions = SUGGESTED[branding.id] ?? [];
+  const suggestions = branding.suggested_questions ?? [];
+
+  // On mount, try to resume a conversation stored for this client. A 404
+  // (nightly reset, or the id belongs to a client that no longer matches)
+  // clears the stored id and starts fresh instead of surfacing an error.
+  useEffect(() => {
+    const storedId = sessionStorage.getItem(storageKey(branding.id));
+    if (!storedId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/c/${branding.id}/conversations/${storedId}`);
+        if (!res.ok) {
+          sessionStorage.removeItem(storageKey(branding.id));
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setConversationId(storedId);
+        setMessages(historyToMessages(data.messages ?? []));
+      } catch {
+        // Network hiccup: leave the stored id in place and just start fresh
+        // for this load; the user can still resume on a later visit.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branding.id]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, toolStatus]);
+
+  function startNewChat() {
+    sessionStorage.removeItem(storageKey(branding.id));
+    setConversationId(null);
+    setMessages([]);
+    setInput("");
+  }
 
   function updateLastAssistant(fn: (msg: Extract<ChatMessage, { role: "assistant" }>) => void) {
     setMessages((prev) => {
@@ -255,7 +323,9 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
       if (data.status === "start") setToolStatus(toolLabel(data.name as string));
       else setToolStatus(null);
     } else if (event === "done") {
-      setConversationId(data.conversation_id as string);
+      const newConversationId = data.conversation_id as string;
+      setConversationId(newConversationId);
+      sessionStorage.setItem(storageKey(branding.id), newConversationId);
       updateLastAssistant((msg) => {
         msg.meta = {
           cost_usd: data.cost_usd as number,
@@ -318,6 +388,20 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 w-full max-w-3xl mx-auto px-4">
+      {!isEmpty && (
+        <div className="flex justify-end pt-3 shrink-0">
+          <button
+            onClick={startNewChat}
+            disabled={streaming}
+            className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-white/40 hover:text-gray-700 dark:hover:text-white/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            New chat
+          </button>
+        </div>
+      )}
       {/* Messages */}
       <div className="flex-1 overflow-y-auto py-6 space-y-6 scroll-smooth">
         {/* Welcome state */}

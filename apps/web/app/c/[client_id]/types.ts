@@ -4,4 +4,5 @@ export interface BrandingData {
   primary_color: string;
   logo: string;
   assistant_name: string;
+  suggested_questions: string[];
 }

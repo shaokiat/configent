@@ -4,6 +4,10 @@ branding:
   logo: assets/meridian-insurance/logo.svg
   primary_color: "#1A6B3C"
   assistant_name: "MeridianAssist"
+  suggested_questions:
+    - "How do I file a claim for storm damage to my roof?"
+    - "Is flood damage covered under HomeShield Plus?"
+    - "What is the standard excess for accidental damage claims?"
 corpus:
   source: corpora/meridian-insurance/
   chunking:

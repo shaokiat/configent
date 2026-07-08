@@ -79,6 +79,39 @@ def test_config_empty_dir_loads_zero_clients(tmp_path):
     assert registry.all() == []
 
 
+def test_config_suggested_questions_default_empty(tmp_path):
+    write_yaml(tmp_path, "test-client.yaml", VALID_CONFIG)
+    registry = ConfigRegistry(config_dir=tmp_path)
+    cfg = registry.get("test-client")
+    assert cfg.branding.suggested_questions == []
+
+
+def test_config_suggested_questions_loaded(tmp_path):
+    with_questions = dict(VALID_CONFIG)
+    with_questions["branding"] = dict(VALID_CONFIG["branding"])
+    with_questions["branding"]["suggested_questions"] = [
+        "How do I add a client?",
+        "How do citations work?",
+    ]
+    write_yaml(tmp_path, "test-client.yaml", with_questions)
+    registry = ConfigRegistry(config_dir=tmp_path)
+    cfg = registry.get("test-client")
+    assert cfg.branding.suggested_questions == [
+        "How do I add a client?",
+        "How do citations work?",
+    ]
+
+
+def test_config_suggested_questions_over_max_rejected(tmp_path):
+    too_many = dict(VALID_CONFIG)
+    too_many["branding"] = dict(VALID_CONFIG["branding"])
+    too_many["branding"]["suggested_questions"] = [f"Question {i}?" for i in range(6)]
+    write_yaml(tmp_path, "test-client.yaml", too_many)
+
+    with pytest.raises(ValueError):
+        ConfigRegistry(config_dir=tmp_path)
+
+
 def test_config_unknown_tool_rejected(tmp_path):
     bad = dict(VALID_CONFIG)
     bad["agent"] = dict(VALID_CONFIG["agent"])

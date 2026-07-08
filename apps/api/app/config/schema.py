@@ -7,6 +7,7 @@ class BrandingConfig(BaseModel):
     logo: str
     primary_color: str
     assistant_name: str
+    suggested_questions: list[str] = Field(default_factory=list, max_length=5)
 
 
 class ChunkingConfig(BaseModel):

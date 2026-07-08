@@ -1,13 +1,6 @@
 import { notFound } from "next/navigation";
 import ClientShell from "./ClientShell";
-
-interface BrandingData {
-  id: string;
-  name: string;
-  primary_color: string;
-  logo: string;
-  assistant_name: string;
-}
+import type { BrandingData } from "./types";
 
 async function getBranding(clientId: string): Promise<BrandingData | null> {
   const apiUrl = process.env.API_URL ?? "http://localhost:8000";

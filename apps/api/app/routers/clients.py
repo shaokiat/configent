@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.limits import (
@@ -16,7 +17,7 @@ from app.agent.loop import run as agent_run
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
-from app.models import Conversation
+from app.models import Conversation, Message
 
 router = APIRouter(prefix="/api")
 
@@ -89,6 +90,7 @@ async def list_clients():
                 "logo": cfg.branding.logo,
                 "primary_color": cfg.branding.primary_color,
                 "assistant_name": cfg.branding.assistant_name,
+                "suggested_questions": cfg.branding.suggested_questions,
             },
         }
         for cfg in registry.all()
@@ -184,4 +186,39 @@ async def get_client_branding(client_id: str):
         "primary_color": cfg.branding.primary_color,
         "logo": cfg.branding.logo,
         "assistant_name": cfg.branding.assistant_name,
+        "suggested_questions": cfg.branding.suggested_questions,
     }
+
+
+@router.get("/c/{client_id}/conversations/{conversation_id}")
+async def get_conversation_history(
+    client_id: str,
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Renderable conversation history for reloading a conversation (B6).
+
+    Returns only user turns and final-assistant turns (with their citation
+    segments) — tool_use-only assistant messages and tool_result plumbing
+    messages are internal to the loop and are skipped.
+    """
+    await _check_conversation_ownership(db, client_id, conversation_id)
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.id)
+    )
+    messages: list[dict] = []
+    for m in result.scalars().all():
+        if m.role == "user":
+            if isinstance(m.content, str):
+                messages.append({"role": "user", "text": m.content})
+            # else: a tool_result plumbing message — not user-visible, skip.
+        elif m.role == "assistant":
+            segments = (m.citations or {}).get("segments")
+            if segments:
+                messages.append({"role": "assistant", "segments": segments})
+            # else: a tool_use-only assistant message — skip.
+
+    return {"conversation_id": conversation_id, "messages": messages}

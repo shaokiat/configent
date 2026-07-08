@@ -4,6 +4,10 @@ branding:
   logo: assets/acme-fab/logo.svg
   primary_color: "#1B4F8A"
   assistant_name: "AcmeAssist"
+  suggested_questions:
+    - "What's the preventive maintenance schedule for the PX-900?"
+    - "How much does the chamber seal kit cost and when does it need replacing?"
+    - "What safety precautions apply when venting the PX-900 chamber?"
 corpus:
   source: corpora/acme-fab/
   chunking:

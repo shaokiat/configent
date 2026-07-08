@@ -4,6 +4,10 @@ branding:
   logo: assets/configent-support/logo.svg
   primary_color: "#10b981"
   assistant_name: "ConfigentBot"
+  suggested_questions:
+    - "What files do I need to add a new client?"
+    - "How do citations work and why can't they be hallucinated?"
+    - "What tools are available to an assistant, and when do I need a custom one?"
 corpus:
   source: corpora/configent-support/
   chunking:
