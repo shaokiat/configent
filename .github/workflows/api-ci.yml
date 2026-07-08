@@ -1,0 +1,39 @@
+name: API CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/api-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/api-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Test (unit tests only — integration/e2e stay behind RUN_INTEGRATION)
+        run: uv run pytest
