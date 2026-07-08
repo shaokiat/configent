@@ -22,13 +22,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.schema import ClientConfig
-from app.models import Conversation, Message
+from app.models import Conversation, Message, Trace
 from app.tools.registry import get_tool_definitions, get_tool_executor
 
 logger = logging.getLogger("configent.agent")
 
+
+class ConversationNotFoundError(Exception):
+    """Raised when a conversation_id doesn't exist or belongs to a different client.
+
+    Routers translate this into a 404 — from the caller's point of view a
+    cross-tenant conversation_id should look indistinguishable from an unknown one.
+    """
+
+
 _REPO_ROOT = Path(__file__).parents[4]
 _MAX_ITERATIONS = 8
+_TOOL_TIMEOUT_SECONDS = 30
 
 # Sonnet 4.6 pricing, USD per MTok (architecture §4.4/§4.7): prompt tokens bill
 # at 1x fresh / 1.25x cache write / 0.1x cache read.
@@ -75,6 +85,38 @@ class LoopResult:
     usage: UsageTotals = field(default_factory=UsageTotals)
 
 
+_TRACE_FIELD_MAX_CHARS = 2000
+
+
+def _trace_payload(value: Any) -> Any:
+    """JSON-safe, size-capped representation for a trace input/output column.
+
+    Tool inputs/outputs can be arbitrarily large (a full document, a long search
+    result); traces are for observability, not replay, so they're capped rather
+    than stored verbatim.
+    """
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    if len(text) > _TRACE_FIELD_MAX_CHARS:
+        text = text[:_TRACE_FIELD_MAX_CHARS] + "…(truncated)"
+    return text
+
+
+def _model_trace(conversation_id: str, usage: Any, latency_ms: int) -> Trace:
+    """Build a span_type="model" Trace row for one Anthropic API call."""
+    totals = UsageTotals()
+    totals.add(usage)
+    return Trace(
+        conversation_id=conversation_id,
+        span_type="model",
+        tokens_in=totals.input_tokens,
+        tokens_out=totals.output_tokens,
+        cache_read_tokens=totals.cache_read_input_tokens,
+        cache_write_tokens=totals.cache_creation_input_tokens,
+        cost_usd=totals.cost_usd,
+        latency_ms=latency_ms,
+    )
+
+
 def _is_content_blocks(result: Any) -> bool:
     """Executors may return Anthropic content blocks (e.g. search_result) instead of
     plain JSON data; blocks go into tool_result content verbatim, data gets dumped."""
@@ -92,15 +134,36 @@ def _attr_or_key(block: Any, name: str, default: Any = None) -> Any:
     return value if value is not None else default
 
 
-async def _execute_tool(block: Any, *, client_id: str, db: AsyncSession) -> dict:
+async def _execute_tool(
+    block: Any, *, client_id: str, db: AsyncSession, conversation_id: str | None = None
+) -> dict:
     name = _attr_or_key(block, "name")
     tool_id = _attr_or_key(block, "id")
     inp = _attr_or_key(block, "input")
     executor = get_tool_executor(name)
+    started = time.monotonic()
     try:
-        result = await executor(inp, client_id=client_id, db=db)
+        result = await asyncio.wait_for(
+            executor(inp, client_id=client_id, db=db), timeout=_TOOL_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        result = {"error": "Tool execution timed out"}
     except Exception as exc:
         result = {"error": str(exc)}
+    latency_ms = int((time.monotonic() - started) * 1000)
+
+    if conversation_id is not None:
+        db.add(
+            Trace(
+                conversation_id=conversation_id,
+                span_type="tool",
+                tool_name=name,
+                input_=_trace_payload(inp),
+                output=_trace_payload(result),
+                latency_ms=latency_ms,
+            )
+        )
+
     return {
         "type": "tool_result",
         "tool_use_id": tool_id,
@@ -241,17 +304,22 @@ async def _run_loop(
     system_prompt: str,
     db: AsyncSession,
     aclient: anthropic.AsyncAnthropic,
+    conversation_id: str | None = None,
 ) -> LoopResult:
     """Core agent loop, non-streaming."""
     tool_defs = _sorted_tool_defs(cfg.agent.tools)
     result = LoopResult(messages=messages)
 
     for _ in range(_MAX_ITERATIONS):
+        call_started = time.monotonic()
         response = await aclient.messages.create(
             **_request_kwargs(cfg, system_prompt, tool_defs, messages)
         )
+        call_latency_ms = int((time.monotonic() - call_started) * 1000)
         _log_usage(client_id, getattr(response, "usage", None))
         result.usage.add(getattr(response, "usage", None))
+        if conversation_id is not None:
+            db.add(_model_trace(conversation_id, getattr(response, "usage", None), call_latency_ms))
 
         # Append full assistant content verbatim (tool_use blocks must not be lost)
         messages.append({"role": "assistant", "content": _dump_blocks(response.content)})
@@ -263,7 +331,7 @@ async def _run_loop(
         if response.stop_reason == "tool_use":
             tool_results = await asyncio.gather(
                 *[
-                    _execute_tool(b, client_id=client_id, db=db)
+                    _execute_tool(b, client_id=client_id, db=db, conversation_id=conversation_id)
                     for b in _tool_use_blocks(response.content)
                 ]
             )
@@ -284,6 +352,7 @@ async def _stream_loop(
     db: AsyncSession,
     aclient: anthropic.AsyncAnthropic,
     result: LoopResult,
+    conversation_id: str | None = None,
 ) -> AsyncIterator[tuple[str, dict]]:
     """Core agent loop, streaming. Yields UC-10 events; fills `result` in place
     (async generators cannot return a value)."""
@@ -291,6 +360,7 @@ async def _stream_loop(
 
     for _ in range(_MAX_ITERATIONS):
         citation_index = 0
+        call_started = time.monotonic()
         async with aclient.messages.stream(
             **_request_kwargs(cfg, system_prompt, tool_defs, messages)
         ) as stream:
@@ -320,14 +390,20 @@ async def _stream_loop(
                         )
             response = await stream.get_final_message()
 
+        call_latency_ms = int((time.monotonic() - call_started) * 1000)
         _log_usage(client_id, getattr(response, "usage", None))
         result.usage.add(getattr(response, "usage", None))
+        if conversation_id is not None:
+            db.add(_model_trace(conversation_id, getattr(response, "usage", None), call_latency_ms))
         messages.append({"role": "assistant", "content": _dump_blocks(response.content)})
 
         if response.stop_reason == "tool_use":
             tool_blocks = _tool_use_blocks(response.content)
             tool_results = await asyncio.gather(
-                *[_execute_tool(b, client_id=client_id, db=db) for b in tool_blocks]
+                *[
+                    _execute_tool(b, client_id=client_id, db=db, conversation_id=conversation_id)
+                    for b in tool_blocks
+                ]
             )
             for block in tool_blocks:
                 yield ("tool", {"name": _attr_or_key(block, "name"), "status": "end"})
@@ -349,12 +425,24 @@ async def _stream_loop(
 async def _prepare_conversation(
     db: AsyncSession, client_id: str, conversation_id: str | None
 ) -> tuple[str, list[dict]]:
-    """Create the conversation row (first turn) or load prior message history."""
+    """Create the conversation row (first turn) or load prior message history.
+
+    Raises `ConversationNotFoundError` if `conversation_id` doesn't exist or
+    belongs to a different client (A1) — history (including retrieved chunks)
+    must never leak across the client_id boundary.
+    """
     if conversation_id is None:
         conv = Conversation(client_id=client_id)
         db.add(conv)
         await db.flush()
         return conv.id, []
+
+    conv = await db.get(Conversation, conversation_id)
+    if conv is None or conv.client_id != client_id:
+        raise ConversationNotFoundError(
+            f"Conversation {conversation_id!r} not found for client {client_id!r}"
+        )
+
     result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id)
@@ -386,6 +474,17 @@ async def _persist_turn(
     await db.flush()
 
 
+async def _update_conversation_totals(
+    db: AsyncSession, conversation_id: str, usage: UsageTotals
+) -> None:
+    """Accrue this turn's cost/tokens onto Conversation.total_cost/total_tokens."""
+    conv = await db.get(Conversation, conversation_id)
+    if conv is None:
+        return
+    conv.total_cost += usage.cost_usd
+    conv.total_tokens += usage.input_tokens + usage.output_tokens
+
+
 async def run(
     user_message: str,
     *,
@@ -410,9 +509,11 @@ async def run(
         system_prompt=system_prompt,
         db=db,
         aclient=aclient,
+        conversation_id=conversation_id,
     )
 
     await _persist_turn(db, conversation_id, len(history), result)
+    await _update_conversation_totals(db, conversation_id, result.usage)
     await db.commit()
     return conversation_id, result
 
@@ -450,6 +551,7 @@ async def stream_turn(
             db=db,
             aclient=aclient,
             result=result,
+            conversation_id=conversation_id,
         ):
             yield event
     except anthropic.APIError as exc:
@@ -457,15 +559,17 @@ async def stream_turn(
         await db.rollback()
         yield ("error", {"message": f"Upstream API error: {exc.__class__.__name__}"})
         return
-    except Exception as exc:
+    except Exception:
         # The HTTP status is already sent; the SSE channel is the only way to
-        # surface a failure to the client.
+        # surface a failure to the client. Full detail stays in the logs (B2);
+        # the client only ever sees a generic message.
         logger.exception("Streamed turn failed (client=%s)", client_id)
         await db.rollback()
-        yield ("error", {"message": str(exc)})
+        yield ("error", {"message": "An internal error occurred. Please try again."})
         return
 
     await _persist_turn(db, conversation_id, len(history), result)
+    await _update_conversation_totals(db, conversation_id, result.usage)
     await db.commit()
 
     yield (

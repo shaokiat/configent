@@ -5,12 +5,64 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.limits import (
+    BudgetExceeded,
+    RateLimitExceeded,
+    check_daily_budget,
+    check_rate_limit,
+)
+from app.agent.loop import ConversationNotFoundError, stream_turn
 from app.agent.loop import run as agent_run
-from app.agent.loop import stream_turn
 from app.config.registry import get_registry
+from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
+from app.models import Conversation
 
 router = APIRouter(prefix="/api")
+
+
+def _enforce_rate_limit(client_id: str, cfg: ClientConfig) -> None:
+    try:
+        check_rate_limit(client_id, cfg.limits.rate_limit_per_minute)
+    except RateLimitExceeded:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "message": "Too many requests. Please slow down and try again shortly.",
+            },
+        ) from None
+
+
+async def _enforce_daily_budget(db: AsyncSession, cfg: ClientConfig) -> None:
+    try:
+        await check_daily_budget(db, cfg)
+    except BudgetExceeded:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "daily_budget_exceeded",
+                "message": (
+                    "This assistant has reached its daily usage budget. "
+                    "Please try again after the daily reset (UTC midnight)."
+                ),
+            },
+        ) from None
+
+
+async def _check_conversation_ownership(
+    db: AsyncSession, client_id: str, conversation_id: str | None
+) -> None:
+    """Pre-flight ownership check for the SSE path (A1): must run — and fail with a
+    plain 404 — before the StreamingResponse starts, since once the 200 status and
+    first bytes are sent there's no way to downgrade to an HTTP error status."""
+    if conversation_id is None:
+        return
+    conv = await db.get(Conversation, conversation_id)
+    if conv is None or conv.client_id != client_id:
+        raise HTTPException(
+            status_code=404, detail=f"Conversation {conversation_id!r} not found"
+        )
 
 
 class ChatRequest(BaseModel):
@@ -55,6 +107,9 @@ async def chat(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
 
+    _enforce_rate_limit(client_id, cfg)
+    await _enforce_daily_budget(db, cfg)
+
     try:
         conv_id, result = await agent_run(
             req.message,
@@ -63,6 +118,8 @@ async def chat(
             conversation_id=req.conversation_id,
             db=db,
         )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=f"System prompt not found: {exc}")
     except RuntimeError as exc:
@@ -84,6 +141,15 @@ async def chat_stream(client_id: str, req: ChatRequest):
         cfg = registry.get(client_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
+
+    _enforce_rate_limit(client_id, cfg)
+
+    # Ownership + budget checks run in their own short-lived session, before the
+    # StreamingResponse is constructed, so a rejection is a normal HTTP error
+    # response rather than something surfaced mid-stream.
+    async with AsyncSessionLocal() as preflight_db:
+        await _check_conversation_ownership(preflight_db, client_id, req.conversation_id)
+        await _enforce_daily_budget(preflight_db, cfg)
 
     async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session

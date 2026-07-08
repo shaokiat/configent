@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chunk, Document
@@ -30,9 +30,10 @@ async def search(
     Drops hits below the similarity floor so irrelevant results don't reach the model.
     """
     query_vec = await embed_query(query)
-    vec_literal = f"[{','.join(str(v) for v in query_vec)}]"
 
-    # Use pgvector's cosine distance operator (<=>); similarity = 1 - distance
+    # Use pgvector's cosine distance comparator with the query vector bound as a
+    # parameter (not interpolated into SQL text); similarity = 1 - distance.
+    similarity = (1 - Chunk.embedding.cosine_distance(query_vec)).label("similarity")
     stmt = (
         select(
             Chunk.id,
@@ -41,13 +42,11 @@ async def search(
             Chunk.chunk_index,
             Document.title.label("document_title"),
             Document.source_uri,
-            (1 - Chunk.embedding.cosine_distance(text(f"'{vec_literal}'::vector"))).label(
-                "similarity"
-            ),
+            similarity,
         )
         .join(Document, Chunk.document_id == Document.id)
         .where(Chunk.client_id == client_id)
-        .order_by(text("similarity DESC"))
+        .order_by(similarity.desc())
         .limit(k * 2)  # fetch extra and filter by floor
     )
 

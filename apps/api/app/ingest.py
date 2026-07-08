@@ -68,6 +68,7 @@ async def ingest_client(
             source_uri=source_uri,
             title=parsed.title,
             content_hash=content_hash,
+            full_text=parsed.text,
         )
         db.add(doc)
         await db.flush()

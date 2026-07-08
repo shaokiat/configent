@@ -41,6 +41,10 @@ class Document(Base):
     title: Mapped[str] = mapped_column(String(512))
     content_hash: Mapped[str] = mapped_column(String(64))
     ingested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Full parsed document text, populated at ingest time (A2). Nullable so
+    # documents ingested before this column existed still load; get_document
+    # falls back to reconstructing text from chunks for those rows.
+    full_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     chunks: Mapped[list["Chunk"]] = relationship(
         "Chunk", back_populates="document", cascade="all, delete-orphan"
