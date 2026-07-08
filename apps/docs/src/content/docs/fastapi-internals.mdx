@@ -13,7 +13,7 @@ app.include_router(health.router)    # /healthz, /healthz/db
 app.include_router(clients.router)   # /api/...
 ```
 
-The `ConfigRegistry` singleton is not initialized in a lifespan hook — it is created lazily on first call to `get_registry()`. Any startup error (bad YAML, unknown tool name) surfaces on the first request rather than at process start.
+No lifespan hook initializes `ConfigRegistry`. `get_registry()` creates it lazily on first call. Any startup error (bad YAML, unknown tool name) surfaces on the first request rather than at process start.
 
 ---
 
@@ -30,15 +30,15 @@ Request
                             (called inline, not as a Depends)
 ```
 
-`get_db` is a standard async generator dependency — FastAPI opens the session before the handler runs and closes it when the response is sent. The streaming endpoint (`/chat/stream`) cannot use this pattern because the session must outlive the HTTP headers. It opens its own session inside the `event_source` generator instead.
+`get_db` is a standard async generator dependency. FastAPI opens the session before the handler runs and closes it after sending the response. The streaming endpoint (`/chat/stream`) cannot use this pattern because the session must outlive the HTTP headers. It opens its own session inside the `event_source` generator instead.
 
-`get_registry()` is not a `Depends`. It returns the singleton directly. Calling it multiple times is safe — it is initialized once and reused.
+`get_registry()` is not a `Depends`. It returns the singleton directly. Calling it multiple times is safe. `get_registry()` initializes once and returns the same instance on every call.
 
 ---
 
 ## Agent loop integration
 
-The router delegates immediately to `agent/loop.py`. No background tasks, no worker queue — the loop runs inline using `async`/`await`.
+The router delegates immediately to `agent/loop.py`. No background tasks, no worker queue. The loop runs inline using `async`/`await`.
 
 **Sync path (`/chat`):**
 
@@ -47,7 +47,7 @@ conv_id, result = await agent_run(req.message, cfg=cfg, ...)
 return ChatResponse(conversation_id=conv_id, reply=result.reply_text, ...)
 ```
 
-The HTTP response is sent only after the final `await db.commit()`.
+FastAPI sends the HTTP response only after the final `await db.commit()`.
 
 **Streaming path (`/chat/stream`):**
 
@@ -55,7 +55,7 @@ The HTTP response is sent only after the final `await db.commit()`.
 return StreamingResponse(event_source(), media_type="text/event-stream", ...)
 ```
 
-`event_source()` is an async generator that calls `stream_turn()` (itself an async generator) and re-yields each `(name, data)` tuple as an SSE frame. FastAPI flushes each `yield` immediately — no buffering.
+`event_source()` is an async generator that calls `stream_turn()` (itself an async generator) and re-yields each `(name, data)` tuple as an SSE frame. FastAPI flushes each `yield` immediately. No buffering.
 
 See [Agent Loop](/configent/docs/agent-loop) for how `stream_turn` and `_stream_loop` work internally.
 
@@ -74,7 +74,7 @@ See [Agent Loop](/configent/docs/agent-loop) for how `stream_turn` and `_stream_
 | Invalid YAML or bad config | Raised in `config/registry.py` — process may not start if `get_registry()` is called at startup |
 | Unknown tool name in YAML | Raised in `tools/registry.validate_tool_names()` at config load time |
 
-Streaming errors cannot use HTTP status codes because headers are already sent by the time the error occurs. They surface via the `error` SSE event. The frontend renders the message inside the assistant bubble rather than crashing.
+Streaming errors cannot use HTTP status codes because FastAPI already sent the headers before the error occurs. They surface via the `error` SSE event. The frontend renders the message inside the assistant bubble rather than crashing.
 
 ---
 
@@ -93,7 +93,7 @@ async def get_db() -> AsyncSession:
 
 `pool_pre_ping=True` silently recycles stale connections before handing them to a handler.
 
-`expire_on_commit=False` prevents ORM objects from expiring immediately after `commit()`. This matters in the streaming path — `result` is read after the commit when building the `done` payload.
+`expire_on_commit=False` prevents ORM objects from expiring immediately after `commit()`. This matters in the streaming path: the handler reads `result` after the commit when building the `done` payload.
 
 **Tables:**
 

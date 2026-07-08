@@ -33,7 +33,7 @@ reference, tools and the agent loop, multi-tenancy, citations, and adding a clie
 
 **What's notable:**
 - It's the simplest, most relatable example: ask a question, get a cited answer from the docs;
-  ask something the docs don't cover, get a ticket. No domain knowledge required to follow it.
+  ask something the docs don't cover, get a ticket. No domain knowledge needed.
 - `create_support_ticket` is a client-specific tool — the agent's escalation path when retrieval
   comes up empty, instead of guessing.
 - `model: claude-haiku-4-5-20251001` with `effort: low` — a fast, cheap model is the right call
@@ -79,8 +79,7 @@ limits:
 Given a `subject` and a `category` (`billing`, `bug`, `account`, `feature_request`, or `other`),
 plus an optional `priority` and `customer_email`, it returns a structured ticket: a deterministic
 `ticket_id` (e.g. `CONFIGENT-1042`), `status`, the category's target response time, and a ticket
-URL. It's a mock — no real ticketing backend — but it's reproducible: the same subject and
-category always yield the same ID. The agent is instructed to only file a ticket when the docs
+URL. It's a mock (no real ticketing backend), but reproducible: the same subject and category always yield the same ID. The agent is instructed to only file a ticket when the docs
 can't answer the question, not as a substitute for retrieval.
 
 **Things to try in the demo:**
@@ -140,8 +139,7 @@ limits:
 
 **What the `pricing_lookup` tool does:**
 Given a part number and quantity, it returns unit price, volume discount eligibility, discounted total,
-and lead time. The agent is instructed to confirm the part number via `search_docs` first so it can
-verify the correct SKU before quoting.
+and lead time. The system prompt instructs the agent to confirm the part number via `search_docs` first so it can verify the correct SKU before quoting.
 
 **Things to try in the demo:**
 - "What's the maintenance interval for the PX-900 chamber seals?"
@@ -160,9 +158,9 @@ returns a deterministic, auditable verdict for specific claim scenarios — no h
 
 **What's notable:**
 - `coverage_check` is a client-specific tool with hardcoded policy logic, intentionally separate from the LLM
-  to ensure regulatory consistency. The agent is instructed to always cross-reference verdicts against
+  to ensure regulatory consistency. The system prompt instructs the agent to always cross-reference verdicts against
   `search_docs` so the user gets both a structured result and a cited policy clause.
-- `get_document` is included so the agent can surface the full section when a user wants to read the exact policy wording
+- The config includes `get_document` so the agent can surface the full section when a user wants to read the exact policy wording
 - Same chunking defaults as acme-fab — 800/100 works well for dense legal documents
 - `model: claude-haiku-4-5-20251001` — like the other shipped clients, a fast, cheap model handles grounded Q&A well
 
@@ -226,8 +224,7 @@ matters: whether your assistant can run on the shared tools alone, or needs a cl
 
 ## Planned examples
 
-> **Not yet runnable.** These configs reference features that are on the roadmap but not
-> implemented: per-source ingestion types (`pdf`, `url`, `text`), generic shared *webhook* tools
+> **Not yet runnable.** These configs use features not yet implemented: per-source ingestion types (`pdf`, `url`, `text`), generic shared *webhook* tools
 > that call live endpoints (`get_product_pricing`, `send_email_notification`, and a webhook
 > version of `create_support_ticket` — a per-client mock of which already ships), and the
 > `temperature` key. See the implementation gaps below each example.
@@ -237,7 +234,7 @@ matters: whether your assistant can run on the shared tools alone, or needs a cl
 ### Product documentation assistant
 
 **Use case:** Customers or internal teams ask questions about a product. The assistant retrieves
-answers from manuals, FAQs, and release notes, and creates support tickets for unresolved issues.
+answers from manuals, FAQs, and release notes. It files support tickets for unresolved issues.
 
 **Requires:** per-source ingestion (`type: url`), `create_support_ticket` shared tool, `temperature` key.
 

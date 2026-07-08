@@ -9,7 +9,7 @@ Each API call re-sends the full prompt: system prompt + conversation history + t
 
 ## How Anthropic's cache control works
 
-Adding `cache_control: {"type": "ephemeral"}` to a content block tells Anthropic to store the computed KV states for that prefix for 5 minutes. On the next request, if the prompt up to that marker is identical, those tokens are not recomputed. This is Anthropic-specific — OpenAI caches automatically for long prompts, Gemini has its own context caching API.
+Adding `cache_control: {"type": "ephemeral"}` to a content block tells Anthropic to store the computed KV states for that prefix for 5 minutes. On the next request, if the prompt up to that marker is identical, Anthropic skips recomputing those tokens. This is Anthropic-specific — OpenAI caches automatically for long prompts, Gemini has its own context caching API.
 
 **Can be cached — content identical across calls:**
 - System prompt

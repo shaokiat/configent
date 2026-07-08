@@ -1,15 +1,15 @@
 ---
 title: Agent Loop
-description: Hand-rolled tool-use loop over the Anthropic API — no framework, full visibility into cost and streaming.
+description: Hand-rolled tool-use loop over the Anthropic API. No framework, full visibility into cost and streaming.
 order: 5
 group: Request Path
 ---
 
 import Mermaid from '@/components/Mermaid.astro';
 
-The agent loop lives entirely in `apps/api/app/agent/loop.py`. No LangChain, LangGraph, or SDK tool runner — the loop covers tool execution, cost tracking, prompt caching, and SSE streaming in one place.
+The agent loop lives entirely in `apps/api/app/agent/loop.py`. No LangChain, LangGraph, or SDK tool runner. One file covers tool execution, cost tracking, prompt caching, and SSE streaming.
 
-This is a standard **tool-use loop** — similar to ReAct, but without explicit reasoning traces. The Anthropic API's native `stop_reason` field signals intent instead.
+This is a standard **tool-use loop**, like ReAct without the explicit reasoning traces. The model signals intent through the API's `stop_reason` field instead.
 
 ## Entry points
 
@@ -21,7 +21,7 @@ run(user_message, *, cfg, client_id, conversation_id, db)
     → (conversation_id, LoopResult)
 ```
 
-`stream_turn` is the primary path used by the frontend. `run` is for tests and internal tooling. Both share the same internal logic.
+`stream_turn` is the frontend path. `run` is for tests and internal tooling. Both share the same logic.
 
 ---
 
@@ -39,9 +39,9 @@ flowchart TD
     F --> A
 `} />
 
-Before entering the loop, the conversation history is loaded from Postgres (or a new `Conversation` row is created). The user message is persisted, then the loop starts.
+Before the loop starts, it loads conversation history from Postgres (or creates a new `Conversation` row) and persists the user message.
 
-Each iteration calls the Anthropic API and branches on `stop_reason`, which is set by the model — the loop has no say in it.
+Each iteration calls the Anthropic API and branches on `stop_reason`. The model sets that field; the loop has no say in it.
 
 ```python
 if response.stop_reason == "end_turn":
@@ -55,11 +55,11 @@ if response.stop_reason == "tool_use":
 raise RuntimeError("exceeded max iterations")
 ```
 
-- **`end_turn`** — collect text and citations, return the result.
-- **`tool_use`** — execute all requested tools concurrently, append results, loop again.
-- **8 iterations without finishing** — raises `RuntimeError`. Safety cap; normal queries resolve in 2–3 iterations.
+- **`end_turn`:** collect text and citations, return.
+- **`tool_use`:** run the requested tools concurrently, append results, loop again.
+- **8 iterations without finishing:** raise `RuntimeError`. A safety cap; normal queries resolve in 2–3 iterations.
 
-After the loop, all new messages from this turn are written back to Postgres. The final assistant message gets citation segments stored in a `citations` JSON column.
+After the loop, it writes the turn's new messages back to Postgres. The final assistant message stores its citation segments in a `citations` JSON column.
 
 ---
 
@@ -67,7 +67,7 @@ After the loop, all new messages from this turn are written back to Postgres. Th
 
 Each API call includes the system prompt with `cache_control: ephemeral` and a `_with_turn_breakpoint` marker on the message history.
 
-**Effort and thinking are model-dependent.** Extended thinking is only supported on Sonnet 4+ and Opus 4+, so the loop only sets `thinking: disabled` and the configured `effort` when the model is *not* Haiku:
+**Effort and thinking are model-dependent.** Extended thinking works only on Sonnet 4+ and Opus 4+. The loop sets `thinking: disabled` and the configured `effort` only when the model is *not* Haiku:
 
 ```python
 # loop.py — effort/thinking are only supported on Sonnet 4+ and Opus 4+
@@ -76,7 +76,7 @@ if "haiku" not in cfg.agent.model:
     kwargs["output_config"] = {"effort": cfg.agent.effort}
 ```
 
-For non-Haiku models, `effort` is set explicitly rather than left to default — the API otherwise defaults to `high` effort with thinking enabled, which adds latency without meaningful quality gain for a chat assistant. Every shipped client runs Haiku, so this branch is skipped and the `effort` key in their configs is inert. See [Config Reference](/configent/docs/config-reference#agent) for the caveat.
+For non-Haiku models, the loop sets `effort` explicitly. Left to default, the API uses `high` effort with thinking enabled. That adds latency without quality gain for a chat assistant. Every shipped client runs Haiku, so this branch never executes and the `effort` key in their configs is inert. See [Config Reference](/configent/docs/config-reference#agent) for the caveat.
 
 Caching details: [Prompt Caching](/configent/docs/prompt-caching).
 
@@ -84,7 +84,11 @@ Caching details: [Prompt Caching](/configent/docs/prompt-caching).
 
 ## Tool execution
 
-Tools run concurrently inside each `tool_use` iteration using `asyncio.gather` — one coroutine per tool block, all awaited at once. Results come back in input order and are appended as a single `user` message.
+When the model stops with `tool_use`, the loop resolves each requested tool, runs it, and appends the output as a `tool_result` for the next call. The loop is only the orchestrator. It never knows what a tool *does*. Each tool is a registered executor with its own definition and logic.
+
+**[Tools System](/configent/docs/tools-system)** covers how tools are defined, registered, and added. This section covers only how the loop *runs* them.
+
+**Tools run concurrently.** One coroutine per tool block, all awaited at once; results come back in input order and append as a single `user` message.
 
 ```python
 tool_results = await asyncio.gather(
@@ -94,9 +98,9 @@ tool_results = await asyncio.gather(
 messages.append({"role": "user", "content": list(tool_results)})
 ```
 
-Concurrency is real because all executors bottom out in a database query (`await search(db, ...)`, `await db.execute(...)`). The event loop suspends each coroutine at the `await` and resumes it when Postgres responds, so multiple tools can be in-flight simultaneously without threads. See [Tools System](/configent/docs/tools-system) for how executors are structured.
+The concurrency is real because every executor bottoms out in a database query (`await search(db, ...)`, `await db.execute(...)`). The event loop suspends each coroutine at its `await` and resumes it when Postgres responds, so multiple tools are in-flight at once without threads.
 
-In practice the model usually calls one tool per iteration, so the gather is over a list of one. Errors are returned to the model as `{"error": "..."}` rather than raising, so the loop continues rather than crashing.
+In practice the model usually calls one tool per iteration, so the gather is over a list of one. **Errors are contained:** an executor that raises returns `{"error": "..."}` to the model rather than crashing the loop, so the turn continues.
 
 ---
 
@@ -120,10 +124,10 @@ class UsageTotals:
         ) / 1_000_000
 ```
 
-`UsageTotals.add()` is called after every API call. By the time the loop exits, `cost_usd` covers all iterations including intermediate tool-call roundtrips.
+The loop calls `UsageTotals.add()` after every API call. By the time it exits, `cost_usd` covers all iterations, including intermediate tool-call roundtrips.
 
 > The per-token rates are hardcoded Sonnet list prices. Shipped clients run Haiku (cheaper), so the
-> reported `cost_usd` is a deliberate **upper bound** — accurate enough for a cost badge, not billing.
+> reported `cost_usd` is a deliberate **upper bound**: accurate enough for a cost badge, not billing.
 
 ---
 

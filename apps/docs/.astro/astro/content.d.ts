@@ -152,6 +152,13 @@ declare module 'astro:content' {
 
 	type ContentEntryMap = {
 		"docs": {
+"adding-a-use-case.mdx": {
+	id: "adding-a-use-case.mdx";
+  slug: "adding-a-use-case";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
 "agent-loop.mdx": {
 	id: "agent-loop.mdx";
   slug: "agent-loop";
@@ -169,6 +176,13 @@ declare module 'astro:content' {
 "citations.mdx": {
 	id: "citations.mdx";
   slug: "citations";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"concepts.mdx": {
+	id: "concepts.mdx";
+  slug: "concepts";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">
@@ -232,6 +246,13 @@ declare module 'astro:content' {
 "sse-streaming.mdx": {
 	id: "sse-streaming.mdx";
   slug: "sse-streaming";
+  body: string;
+  collection: "docs";
+  data: InferEntrySchema<"docs">
+} & { render(): Render[".mdx"] };
+"supabase-rls-poc.mdx": {
+	id: "supabase-rls-poc.mdx";
+  slug: "supabase-rls-poc";
   body: string;
   collection: "docs";
   data: InferEntrySchema<"docs">

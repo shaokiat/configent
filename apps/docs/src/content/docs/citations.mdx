@@ -5,7 +5,7 @@ order: 7
 group: Request Path
 ---
 
-When the agent answers a question, it cites the exact document passages it drew from. Citations are produced by the Anthropic API natively — the model marks the specific text it used, not the whole chunk.
+When the agent answers a question, it cites the exact document passages it drew from. The Anthropic API produces citations natively — the model marks the specific text it used, not the whole chunk.
 
 ---
 
@@ -35,11 +35,15 @@ When `search_docs` returns results, it formats them as `search_result` content b
 }
 ```
 
-These are passed verbatim as `tool_result.content` blocks — not serialized to JSON. The distinction matters: the Anthropic API only enables citation tracking when the content type is `search_result`, not when the same data is JSON-stringified.
+The loop passes these verbatim as `tool_result.content` blocks, not serialized to JSON. The distinction matters: the Anthropic API only enables citation tracking when the content type is `search_result`, not when the same data is JSON-stringified.
 
 ### 2. Anthropic generates citations
 
 With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on current Claude models — including the `claude-haiku-4-5` models the shipped clients run — with no beta header required.
+
+The attribution is the API's, not ours. Each citation comes back with its source, title, and a `cited_text` field. The API decides which block and which span supports each run of the reply. We do no string matching.
+
+**One caveat: `cited_text` is the whole chunk.** The API returns the entire matched chunk, often hundreds of tokens. The `_excerpt()` helper trims it to a ~400-character, sentence-boundary preview before it reaches the frontend. The raw version stays in the stored response.
 
 ### 3. Segments extraction
 
@@ -77,7 +81,7 @@ The final assistant message stores two citation representations in the `messages
 | `content` | Raw Anthropic wire format — preserves the full API response including citation annotations |
 | `citations` | `{"segments": [...]}` — the frontend-friendly segments list |
 
-Both are stored so the raw response can be replayed for debugging while the segments format is ready to render without post-processing.
+The database stores both: the raw response for debugging replay, and the segments list ready to render without post-processing.
 
 ---
 
@@ -95,18 +99,29 @@ The system prompt instructs the model to reply that it doesn't know rather than 
 
 ## Frontend rendering
 
-The `done` SSE event includes the full `segments` array. The chat panel renders each segment inline — text runs with a citation badge that expands to show the source title and the exact cited passage.
+Citations aren't delivered whole in `done`. They stream. As the model emits each one, the loop turns the API's `citations_delta` into a `citation` SSE event, interleaved with the `text` deltas:
 
 ```json
-// done event payload
-{
-  "conversation_id": "3f2a1b4c-...",
-  "reply": "The PX900 chamber seal should be replaced every 500 operating hours...",
-  "segments": [...],
-  "input_tokens": 1240,
-  "output_tokens": 87,
-  "cost_usd": 0.00052
-}
+// citation event payload
+{"index": 3, "source": "corpus://acme-fab/spare-parts-catalog",
+ "title": "Spare Parts Catalog", "cited_text": "Recommended replacement interval: 500 operating hours..."}
 ```
+
+```
+SSE events:  text · text · citation#1 · text · citation#2 · text · done
+                    └──────────── frontend folds ───────────┘     (usage only)
+segments:    [ {text, citations:[]}, {text, citations:[#1]}, … ]
+```
+
+The frontend rebuilds `{text, citations[]}` segments from the interleaved stream and renders each inline, with a badge that expands to the source title and cited passage.
+
+Where the segments come from differs by path:
+
+| Path | Segment assembly |
+|---|---|
+| `run()` (non-streaming) | `_collect_segments` builds the full array in one shot |
+| `stream_turn()` (SSE) | frontend rebuilds them from `citation` deltas |
+
+Either way, the final list lands in the `messages.citations` column at commit. The `done` event carries no `reply` or `segments`, only `conversation_id`, token counts, `cost_usd`, and `latency_ms`.
 
 See [SSE Streaming](/configent/docs/sse-streaming) for the full event contract.

@@ -44,7 +44,7 @@ npm install
 make up
 ```
 
-This starts all services defined in `infra/docker-compose.yml`, including a Postgres instance
+`make up` starts all services defined in `infra/docker-compose.yml`, including a Postgres instance
 with the `pgvector` extension enabled.
 
 ## 3. Set environment variables
@@ -126,7 +126,7 @@ INFO  Embedded 47 chunks → pgvector (namespace: my-assistant)
 INFO  Ingest complete: 1 added, 0 skipped, 47 total chunks
 ```
 
-Documents are hashed — re-running ingest skips unchanged files and re-embeds only modified ones.
+Documents are hashed. Re-running ingest skips unchanged files and re-embeds only modified ones.
 
 ## 7. Start the API
 

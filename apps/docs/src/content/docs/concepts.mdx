@@ -50,15 +50,13 @@ with similar meaning get similar vectors — even if they share no words.
 Configent uses **Voyage AI** (`voyage-3`, 1024 numbers per vector) to embed text. The same model
 embeds documents at ingest time and questions at query time, so the two are directly comparable.
 
-> Why a separate provider? Anthropic has no embeddings API, so a dedicated embedder is needed
-> regardless. → [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed)
+> Why a separate provider? Anthropic has no embeddings API; any RAG stack needs a separate embedder. → [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed)
 
 ---
 
 ## Chunking — splitting documents into searchable pieces
 
-You can't embed a whole 40-page PDF as one vector — the meaning gets blurred and citations become
-useless. **Chunking** splits a document into smaller passages (a few hundred tokens each) before
+You can't embed a whole 40-page PDF as one vector. The meaning blurs and citations become useless. **Chunking** splits a document into smaller passages (a few hundred tokens each) before
 embedding, so retrieval can return *the exact paragraph* that answers a question.
 
 - **`chunk_size`** — how big each piece is, in tokens. Smaller = more precise lookups; larger =
@@ -92,8 +90,7 @@ rather than noise the model might hallucinate over.
 
 ## Tools — letting the agent act, not just retrieve
 
-A **tool** is a function the model can choose to call. Claude doesn't run code itself; it *asks* for
-a tool by name with arguments, the backend runs it, and the result goes back into the conversation.
+A **tool** is a function the model can choose to call. Claude doesn't run code itself. It asks for a tool by name with arguments, the backend runs it, and the result returns to the conversation.
 
 Configent has two kinds:
 
@@ -131,14 +128,14 @@ execution are all visible in one file.
 The **system prompt** is a text file (`prompts/<client>.md`) that sets the assistant's persona and
 rules: who it is, that it must answer *only* from retrieved documents, that it must cite sources, and
 *when* to use each tool (e.g. "file a ticket only when the docs can't answer"). It's the same on
-every turn, which is also why it caches well (below).
+every turn, which is why it caches well (below).
 
 ---
 
 ## Citations — showing the receipts
 
 A grounded answer is only trustworthy if you can see *where* it came from. Configent uses Anthropic's
-native **citations**: when retrieved passages are passed as `search_result` blocks, Claude annotates
+native **citations**: when the loop passes retrieved passages as `search_result` blocks, Claude annotates
 its answer with markers pointing at the exact sentences it used. The UI renders these as inline,
 hoverable source links — not a footnote dump.
 → [Citations](/configent/docs/citations)
@@ -149,8 +146,7 @@ hoverable source links — not a footnote dump.
 
 A **client** (or **tenant**) is a single assistant — its documents, branding, prompt, tools, and
 limits — defined by one YAML file. **Multi-tenancy** means one running deployment serves many of them
-side by side, fully isolated: `client_id` scopes every database query, so one client's documents can
-*never* be retrieved for another.
+side by side, fully isolated: `client_id` scopes every database query, so one client's documents can never appear in another's retrieval.
 
 Adding a client is a no-code operation: a config file, a folder of documents, a prompt.
 → [Multi-Tenancy](/configent/docs/multi-tenancy) · [Config Reference](/configent/docs/config-reference)
@@ -170,8 +166,7 @@ updates the chat live.
 ## Prompt caching — not paying twice for the same prefix
 
 Every turn re-sends the system prompt and the full conversation history. **Prompt caching** tells
-Anthropic to remember the unchanged *prefix* of the prompt for a few minutes, so those tokens are
-billed ~10× cheaper on the next turn instead of being reprocessed from scratch. It's why a long
+Anthropic to remember the unchanged *prefix* of the prompt for a few minutes, so Anthropic bills those tokens ~10× cheaper on the next turn instead of reprocessing them from scratch. It's why a long
 conversation doesn't get linearly more expensive.
 → [Prompt Caching](/configent/docs/prompt-caching)
 
@@ -180,7 +175,7 @@ conversation doesn't get linearly more expensive.
 ## Effort — how hard the model "thinks"
 
 **Effort** controls Claude's extended-thinking budget (`low` → `max`). Higher effort spends more
-tokens reasoning before answering. One caveat worth knowing up front: extended thinking is only
+tokens reasoning before answering. One caveat: extended thinking is only
 available on Sonnet 4+ and Opus 4+, so the `effort` key has **no effect on Haiku** — which every
 shipped client uses today.
 → [Config Reference](/configent/docs/config-reference#agent)

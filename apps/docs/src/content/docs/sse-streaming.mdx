@@ -5,9 +5,9 @@ order: 9
 group: Request Path
 ---
 
-The chat endpoint returns a `StreamingResponse` immediately. As the agent loop runs, it yields SSE frames — text deltas, citation events, tool status — that the frontend consumes incrementally.
+The chat endpoint returns a `StreamingResponse` immediately. As the agent loop runs, it yields SSE frames (text deltas, citation events, tool status) that the frontend consumes incrementally.
 
-SSE over WebSockets: one-way streaming over plain HTTP, no upgrade handshake, works through any proxy. For server → client streaming only, WebSockets add complexity for no benefit.
+SSE works over plain HTTP with no upgrade handshake and passes through any proxy. For server→client-only streaming, WebSockets add complexity for no benefit.
 
 ---
 
@@ -69,7 +69,7 @@ async def chat_stream(client_id: str, req: ChatRequest):
     )
 ```
 
-The DB session is opened inside `event_source()`, not via `Depends(get_db)`. A `Depends`-scoped session closes before `StreamingResponse` starts writing — the session would already be gone by the first yield.
+The endpoint opens the DB session inside `event_source()`, not via `Depends(get_db)`. A `Depends`-scoped session closes before `StreamingResponse` starts writing. The session is gone by the first yield.
 
 `X-Accel-Buffering: no` prevents nginx from holding the entire stream and releasing it as one chunk.
 
@@ -101,7 +101,7 @@ async def stream_turn(user_message, *, cfg, client_id, conversation_id, db):
     yield ("done", {"cost_usd": round(result.usage.cost_usd, 6), ...})
 ```
 
-Errors call `db.rollback()` before yielding `error` — HTTP headers are already sent, so there's no other way to signal failure.
+Errors call `db.rollback()` before yielding `error`. HTTP headers are already sent by that point, so there is no other way to signal failure.
 
 `_stream_loop` translates raw Anthropic SDK events into UC-10 tuples:
 
@@ -119,7 +119,7 @@ async with aclient.messages.stream(**_request_kwargs(...)) as stream:
     response = await stream.get_final_message()
 ```
 
-`get_final_message()` returns the completed response after the stream closes — this is where the `usage` struct comes from for cost accounting. `tool` `status: "end"` is emitted after `asyncio.gather` completes, so the frontend knows exactly when a tool call finishes.
+`get_final_message()` returns the completed response after the stream closes. The `usage` struct for cost accounting comes from this response. `_stream_loop` emits `tool` `status: "end"` after `asyncio.gather` completes, so the frontend knows exactly when a tool call finishes.
 
 ---
 
@@ -170,7 +170,7 @@ export async function POST(req: Request, { params }) {
 }
 ```
 
-The FastAPI origin stays off the browser, and CORS is handled in one place.
+The proxy keeps the FastAPI origin off the browser and handles CORS in one place.
 
 ---
 
@@ -178,4 +178,4 @@ The FastAPI origin stays off the browser, and CORS is handled in one place.
 
 Streamable HTTP is the MCP spec's (2024-11-05) replacement for HTTP+SSE as an MCP server transport. It lets a single endpoint respond with either plain JSON or an SSE stream, and adds session management (`initialize` handshake, `Mcp-Session-Id` header, capability negotiation).
 
-That overhead is for MCP servers serving external clients like Claude Desktop — not for a custom chat API with a fixed event contract that always streams. If Configent ever exposes its tools as an MCP server, Streamable HTTP would be the right transport for that surface.
+That overhead suits MCP servers serving external clients like Claude Desktop, not a custom chat API with a fixed event contract that always streams. If Configent ever exposes its tools as an MCP server, Streamable HTTP would be the right transport for that surface.

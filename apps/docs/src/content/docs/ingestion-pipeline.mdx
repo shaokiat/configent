@@ -60,9 +60,47 @@ corpus:
 
 ## Stage 3 — Embed
 
-`retrieval/embed.py` calls Voyage AI's `voyage-3` model (1024 dimensions):
+`retrieval/embed.py` calls Voyage AI's `voyage-3` model (1024 dimensions).
 
-- Documents use `input_type="document"`, queries use `input_type="query"` — asymmetric encoding improves retrieval quality.
+### Why Voyage AI?
+
+Embeddings are a supporting component here, not the focus — the bar is "good enough for a demo", not best-in-class retrieval.
+
+- **Anthropic has no embeddings API** — a third-party embedder is required regardless. Voyage avoids a second OpenAI dependency alongside the Anthropic SDK.
+- **Free tier covers POC traffic** — no credit card needed for ingest and demo volume.
+- **`input_type` is a free quality win** — Voyage accepts `"document"` at ingest and `"query"` at search, improving recall at no extra cost. Most providers don't expose this.
+
+**Model choice** — Voyage has three general-purpose tiers:
+
+| Model | Dims | |
+|-------|------|-|
+| `voyage-3-lite` | 512 | Too much quality loss for a demo |
+| `voyage-3` | 1024 | Picked — balanced quality and cost |
+| `voyage-3-large` | 1024 | No perceptible gain at POC scale |
+
+**Downside:** free tier caps at 3 RPM — hence the retry loop below.
+
+### Voyage AI vs pgvector
+
+They solve different problems and neither knows about the other:
+
+| | Voyage AI | pgvector |
+|---|---|---|
+| **Role** | Converts text → vectors | Stores vectors, finds nearest neighbours |
+| **Language understanding** | Yes — semantic meaning | No — pure math (cosine distance) |
+| **Where** | External API call | Postgres extension, same DB |
+| **Invoked** | Ingest + every query | Every query |
+
+```
+[text]   →  Voyage AI  →  [1024 floats]  →  pgvector (stored)
+[query]  →  Voyage AI  →  [1024 floats]  →  pgvector (<=> cosine)  →  top-k chunks
+```
+
+pgvector accepts vectors from any embedding model. The only coupling is in `embed.py` and `search.py`. A dedicated vector DB (Pinecone, Qdrant) was not used because pgvector runs inside the existing Postgres instance, keeping the stack to one service.
+
+### Implementation
+
+- Documents use `input_type="document"`, queries use `input_type="query"`.
 - Batches of up to 128 texts per API call.
 - 429 and 5xx errors retry with exponential backoff, up to 6 attempts starting at 21s (respects Voyage's per-minute window).
 
@@ -113,24 +151,28 @@ Ingesting corpus for acme-fab...
 
 ## Search
 
-`retrieval/search.py` handles the retrieval side. When `search_docs` is called, it:
+`retrieval/search.py` handles the retrieval side. Cosine similarity is geometry over vectors. The stored chunks are already vectors from ingest, so the query has to become one too before anything can be compared. That is what the embed step is for. When `search_docs` is called:
 
-1. Embeds the query with `input_type="query"` (asymmetric from `input_type="document"` — improves retrieval quality)
-2. Runs a pgvector cosine similarity query scoped to `client_id`, fetching `k×2` candidates
-3. Drops hits below a similarity floor of `0.3` — irrelevant results never reach the model
-4. Returns the top `k` hits
+1. `embed_query()` embeds the query with `input_type="query"`, placing it in the same vector space as the stored chunks. The `"query"` type differs from the `"document"` type used at ingest: questions and answers have different linguistic patterns, so Voyage uses this asymmetry to improve recall.
+2. pgvector runs a cosine similarity scan scoped to `client_id`, returning `k×2` candidates ordered by similarity.
+3. The search function drops hits below a similarity floor of `0.3` before returning.
+4. The function returns the top `k` hits.
 
 ```python
 async def search(db, client_id, query, k=5, floor=0.3) -> list[Hit]:
     query_vec = await embed_query(query)
-    # cosine similarity = 1 - cosine distance (<=>)
-    rows = SELECT chunks JOIN documents
+    rows = SELECT ... (1 - embedding <=> query_vec) AS similarity
+           FROM chunks JOIN documents
            WHERE client_id = ?
            ORDER BY similarity DESC
-           LIMIT k * 2
+           LIMIT k * 2                        # over-fetch before floor filter
 
     return [hit for hit in rows if hit.similarity >= floor][:k]
 ```
+
+**Why `k×2`?** The floor filter runs in Python after the SQL query returns — pgvector can't apply it directly. If several of the top results fall below `0.3`, fetching exactly `k` rows would under-return. Fetching `k×2` gives a buffer so the final slice still has `k` good results. The default `k=5` means 10 rows are fetched from the DB and up to 5 are returned.
+
+**Why a floor at all?** Without it, the model always receives `k` chunks regardless of relevance. When the corpus doesn't contain the answer, those chunks are noise — and the model may hallucinate rather than say it doesn't know. The floor makes "no good results" an explicit, handled case.
 
 Each `Hit` carries `document_title`, `source_uri`, `text`, `similarity`, and `chunk_index` — enough for `search_docs` to build the `search_result` content blocks the citation API needs.
 

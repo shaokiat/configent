@@ -5,7 +5,7 @@ order: 2
 group: Setup
 ---
 
-The core premise of Configent: drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fully branded, isolated assistant is live. No code changes, no redeployment.
+The core premise of Configent: drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fully branded, isolated assistant goes live. No code changes, no redeployment.
 
 ---
 
@@ -62,7 +62,7 @@ config/*.yaml
 _registry_instance: ConfigRegistry      — singleton, keyed by client_id
 ```
 
-Validation failures raise at startup with the filename and field name — not at request time. An invalid config is caught before the first request lands.
+Validation failures raise at startup with the filename and field name — not at request time. The registry catches invalid configs before the first request lands.
 
 ```python
 # apps/api/app/config/registry.py
@@ -113,7 +113,7 @@ The Next.js shell applies `primary_color` as a CSS variable and renders `assista
 
 ## Config schema
 
-`ClientConfig` is a Pydantic model in `apps/api/app/config/schema.py`. All fields type-checked and validated at load time:
+`ClientConfig` is a Pydantic model in `apps/api/app/config/schema.py`. Pydantic type-checks and validates all fields at load time:
 
 | Section | Key fields |
 |---------|-----------|

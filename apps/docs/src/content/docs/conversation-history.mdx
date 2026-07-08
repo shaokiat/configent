@@ -28,7 +28,7 @@ messages
   created_at      DATETIME
 ```
 
-Messages are stored in raw Anthropic wire format — `tool_use` and `tool_result` blocks are preserved verbatim, no lossy serialization.
+The DB stores messages in raw Anthropic wire format, preserving `tool_use` and `tool_result` blocks verbatim. No lossy serialization.
 
 ---
 
@@ -57,25 +57,25 @@ history = SELECT messages WHERE conversation_id = ? ORDER BY id
 messages = history + [{"role": "user", "content": new_user_message}]
 ```
 
-The full history is sent on every turn — no sliding window or summarisation. As conversations grow, prompt caching absorbs the cost of resending historical messages. See [Prompt Caching](/configent/docs/prompt-caching).
+The loop sends the full history on every turn. No sliding window or summarization. As conversations grow, prompt caching absorbs the cost of resending historical messages. See [Prompt Caching](/configent/docs/prompt-caching).
 
 ---
 
 ## Persisting a turn
 
-After the agent loop completes, `_persist_turn()` writes everything added during the turn — everything after `history + user message`:
+After the agent loop completes, `_persist_turn()` writes everything added after `history + user message`:
 
 - Intermediate assistant messages with `tool_use` blocks
 - Intermediate user messages with `tool_result` blocks
 - The final assistant message (gets a `citations` field with the frontend-friendly `segments` list)
 
-On any exception, the session rolls back — the conversation history retains all messages from prior turns.
+On any exception, the session rolls back. The conversation history retains all messages from prior turns.
 
 ---
 
 ## Multi-client isolation
 
-`conversation_id` is a global UUID, but every history query scopes to `client_id` via the `Conversation` row's foreign key. A conversation started under `acme-fab` cannot be continued as `meridian-insurance` — the router validates `client_id` against the config registry on every request.
+`conversation_id` is a global UUID, but every history query scopes to `client_id` via the `Conversation` row's foreign key. A conversation created under `acme-fab` cannot continue as `meridian-insurance`. The router validates `client_id` against the config registry on every request.
 
 ---
 

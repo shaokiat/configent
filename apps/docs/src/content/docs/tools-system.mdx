@@ -1,6 +1,6 @@
 ---
 title: Tools System
-description: How tools are defined, registered, and executed — and how to add a new one.
+description: How tools are defined, registered, and executed, plus how to add a new one.
 order: 6
 group: Request Path
 ---
@@ -25,11 +25,10 @@ config/configent-support.yaml   tools/registry.py
                                   (unknown names → ValueError, not 404)
 ```
 
-A client's `agent.tools` list names a subset of the registry; the two shared tools plus whichever
-client-specific tools that client needs. Configent Support uses the two shared tools plus its own
+A client's `agent.tools` lists a subset of the registry: the two shared tools plus any client-specific tools it needs. Configent Support uses the two shared tools plus its own
 `create_support_ticket`.
 
-The registry is a plain dict — no dynamic loading, no plugin system. Adding a tool means writing a module and adding one entry to `_REGISTRY`.
+The registry is a plain dict: no dynamic loading, no plugin system. Adding a tool means writing a module and adding one entry to `_REGISTRY`.
 
 ---
 
@@ -37,7 +36,7 @@ The registry is a plain dict — no dynamic loading, no plugin system. Adding a 
 
 ### `search_docs` (shared)
 
-Semantic similarity search over the client's corpus. The primary retrieval tool — the agent is instructed to call it before answering any factual question.
+Semantic similarity search over the client's corpus. The primary retrieval tool. The system prompt instructs the agent to call it before answering any factual question.
 
 ```python
 # Input
@@ -56,11 +55,25 @@ Semantic similarity search over the client's corpus. The primary retrieval tool 
 ]
 ```
 
-Empty retrieval returns a plain `text` block telling the model no documents matched — the model is instructed to say it doesn't know rather than hallucinate.
+Empty retrieval returns a plain `text` block telling the model no documents matched. The system prompt instructs the model to say it doesn't know rather than hallucinate.
+
+**`execute` doesn't retrieve. It delegates.** It calls `search()` and wraps the hits as `search_result` blocks. The retrieval itself lives one layer down.
+
+```
+search_docs.execute()
+  │
+  ├─ search()                 retrieval/search.py
+  │    ├─ embed_query()       Voyage, query mode (not document)
+  │    └─ pgvector cosine     scoped to client · drop below 0.3 floor
+  │
+  └─ wrap top-k hits as search_result blocks
+```
+
+> **Same embed/pgvector path as ingest.** See [Ingestion Pipeline → Search](/configent/docs/ingestion-pipeline#search) for the full details: embedding asymmetry, the k×2 over-fetch, and why the floor exists.
 
 ### `get_document` (shared)
 
-Fetches the full text of a document by `document_id`. Used when a search chunk lacks enough context — for example, when a procedure spans multiple sections.
+Fetches the full text of a document by `document_id`. Used when a search chunk lacks enough context, for example when a procedure spans multiple sections.
 
 ```python
 # Input
@@ -70,7 +83,7 @@ Fetches the full text of a document by `document_id`. Used when a search chunk l
 {"document_id": "a3f2b1c4", "title": "...", "source_uri": "...", "text": "..."}
 ```
 
-Enforces `client_id` isolation — a document belonging to a different client returns a not-found error even if the ID is valid.
+Enforces `client_id` isolation: a document belonging to a different client returns a not-found error even if the ID is valid.
 
 ### `create_support_ticket` (configent-support)
 
@@ -99,7 +112,7 @@ Checks whether a specific procedure or treatment is covered under a Meridian Ins
 
 ## Tool lifecycle in the agent loop
 
-When the model decides to call a tool, it returns a `tool_use` block in its response:
+The [Agent Loop](/configent/docs/agent-loop#tool-execution) drives the full roundtrip; here is the tool's-eye view of it. When the model decides to call a tool, it returns a `tool_use` block in its response:
 
 ```json
 {

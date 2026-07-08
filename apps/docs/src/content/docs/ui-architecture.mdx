@@ -5,7 +5,7 @@ order: 13
 group: Frontend
 ---
 
-The frontend is a Next.js App Router app split between two rendering environments. Branding data is fetched on the server so the page arrives fully styled on first load. All chat state — messages, streaming, input — lives in the browser.
+The frontend is a Next.js App Router app split between two rendering environments. The server fetches branding data before the page reaches the browser, so the page arrives fully styled on first load. All chat state — messages, streaming, input — lives in the browser.
 
 ---
 
@@ -35,7 +35,7 @@ The boundary sits exactly at `ClientShell`. Everything above it (the branding fe
 
 The alternative — fetching branding inside a client component — adds a waterfall: the JS bundle loads, hydrates, requests branding, then renders. The RSC path collapses all of that to a single server round-trip.
 
-If the branding fetch fails (unknown `client_id`), the RSC throws and Next.js renders its error boundary — `ChatPanel` is never mounted.
+If the branding fetch fails (unknown `client_id`), the RSC throws, Next.js renders its error boundary, and `ChatPanel` never mounts.
 
 ---
 

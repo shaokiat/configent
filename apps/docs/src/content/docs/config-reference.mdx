@@ -50,7 +50,7 @@ branding:
 
 ## `corpus`
 
-Configures where documents come from and how they are chunked.
+Configures the document source and chunking settings.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -68,11 +68,10 @@ corpus:
 
 **Supported file types:** `.pdf`, `.md` / `.markdown`, `.html` / `.htm`.
 
-**Embedding:** Documents are embedded using **Voyage AI `voyage-3`** (1024-dimension vectors).
+**Embedding:** Configent embeds documents using **Voyage AI `voyage-3`** (1024-dimension vectors).
 This requires a `VOYAGE_API_KEY` environment variable. The model is not configurable per client.
 
-**Incremental ingestion:** The ingest step hashes each document's content. On re-run, unchanged
-documents are skipped. Modified documents are re-chunked and re-embedded automatically.
+**Incremental ingestion:** The ingest step hashes each document's content. On re-run, it skips unchanged documents and re-chunks and re-embeds modified ones automatically.
 
 ---
 
@@ -102,12 +101,10 @@ agent:
 
 > **`effort` and Haiku:** extended thinking is only supported on Sonnet 4+ and Opus 4+. The loop
 > (`loop.py`) checks the model name and only sends `effort`/`thinking` when the model is *not* Haiku.
-> Every shipped client runs Haiku, so the `effort` key is accepted and validated but never reaches the
-> API. Switch a client to a Sonnet or Opus model and `effort` takes effect.
+> Every shipped client runs Haiku, so the loop accepts and validates the `effort` key but never sends it to the API. Switch a client to a Sonnet or Opus model and `effort` takes effect.
 
 > **Prompt caching:** The system prompt is always cached at the turn breakpoint using
-> Anthropic's ephemeral cache. This is unconditional — no config needed. Tool definitions
-> are sorted alphabetically before each request to ensure a stable cache prefix.
+> Anthropic's ephemeral cache. This is unconditional — no config needed. The loop sorts tool definitions alphabetically before each request to ensure a stable cache prefix.
 
 > **Max iterations:** The agent loop runs for a maximum of **8 iterations** regardless of config.
 > If the loop hasn't completed in 8 tool-call cycles it raises an error.

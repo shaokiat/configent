@@ -130,7 +130,7 @@ _REGISTRY = {
 }
 ```
 
-That one line is what makes the name available to configs. Use the shipped
+That one line makes the name available to configs. Use the shipped
 `create_support_ticket` as a copy-paste template for your own tool. Keep tools **deterministic** —
 they should return structured data the agent can cite, not invent business facts.
 
@@ -195,11 +195,11 @@ skipped, changed ones are re-embedded.
 
 You don't wire any of this manually — the platform checks it at startup:
 
-- **Config schema** is validated; a malformed config fails boot with an error naming the field and
+- **Config schema:** the platform validates it; a malformed config fails boot with an error naming the field and
   the file.
 - **Tool names fail fast.** Every name in `agent.tools` is checked against the registry. An unknown
   tool name stops startup — it can never reach a live user. (See [Tools](/configent/docs/tools-system).)
-- **Tenant isolation** is enforced at the query level: retrieval is filtered by `client_id`, so a
+- **Tenant isolation:** the platform enforces it at the query level, filtering retrieval by `client_id`, so a
   client can only ever see its own corpus. (See [Multi-Tenancy](/configent/docs/multi-tenancy).)
 
 ---
