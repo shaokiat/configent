@@ -7,18 +7,19 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
     <div class="badge">
       <span class="badge-dot"></span>
-      Config-driven · RAG · Agentic workflows
+      Support agents · Guardrails · Audit trails
     </div>
 
     <h1 class="headline">
-      Configure once.<br />
-      <span class="headline-accent">Deploy everywhere.</span>
+      The escalation decision<br />
+      <span class="headline-accent">belongs in code.</span>
     </h1>
 
     <p class="subline">
-      Configent spins up production-ready RAG pipelines and agentic workflows
-      from a single YAML file. Enterprise AI integration without the three-month
-      implementation cycle.
+      Configent runs a support agent as an explicit pipeline. It answers from your
+      documentation with citations, and files a ticket when a question depends on
+      something the documentation cannot know — a branch in Python, not a choice the
+      model makes.
     </p>
 
     <div class="callout">
@@ -26,11 +27,11 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         <circle cx="12" cy="12" r="10"/>
         <path d="M12 6v6l4 2"/>
       </svg>
-      New use case in under 10 minutes
+      Every stage on the record, as it happens
     </div>
 
     <div class="cta-group">
-      <a href={`${base}/how-it-works`} class="btn btn-primary">
+      <a href={`${base}/#architecture`} class="btn btn-primary">
         See how it works
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M5 12h14M12 5l7 7-7 7"/>
@@ -49,29 +50,27 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         <span class="snippet-dot red"></span>
         <span class="snippet-dot amber"></span>
         <span class="snippet-dot green"></span>
-        <span class="snippet-filename">config.yaml</span>
+        <span class="snippet-filename">gcp-platform-support.yaml</span>
       </div>
-      <pre class="snippet-body"><code><span class="y-key">client_id</span><span class="y-colon">:</span> <span class="y-str">configent-support</span>
-<span class="y-key">name</span><span class="y-colon">:</span> <span class="y-str">Configent Support</span>
+      <pre class="snippet-body"><code><span class="y-key">client_id</span><span class="y-colon">:</span> <span class="y-str">gcp-platform-support</span>
+<span class="y-key">name</span><span class="y-colon">:</span> <span class="y-str">Cloud Platform Support</span>
 
 <span class="y-key">branding</span><span class="y-colon">:</span>
-  <span class="y-key">assistant_name</span><span class="y-colon">:</span> <span class="y-str">ConfigentBot</span>
-  <span class="y-key">primary_color</span><span class="y-colon">:</span> <span class="y-str">"#10b981"</span>
+  <span class="y-key">assistant_name</span><span class="y-colon">:</span> <span class="y-str">DeployBot</span>
+  <span class="y-key">primary_color</span><span class="y-colon">:</span> <span class="y-str">"#1a73e8"</span>
 
 <span class="y-key">corpus</span><span class="y-colon">:</span>
-  <span class="y-key">source</span><span class="y-colon">:</span> <span class="y-str">corpora/configent-support/</span>
-  <span class="y-key">chunking</span><span class="y-colon">:</span>
-    <span class="y-key">chunk_size</span><span class="y-colon">:</span> <span class="y-num">512</span>
-    <span class="y-key">overlap</span><span class="y-colon">:</span> <span class="y-num">64</span>
+  <span class="y-key">source</span><span class="y-colon">:</span> <span class="y-str">corpora/gcp-platform-support/</span>
 
 <span class="y-key">agent</span><span class="y-colon">:</span>
+  <span class="y-key">mode</span><span class="y-colon">:</span> <span class="y-str">pipeline</span>
   <span class="y-key">model</span><span class="y-colon">:</span> <span class="y-str">claude-haiku-4-5-20251001</span>
-  <span class="y-key">system_prompt_file</span><span class="y-colon">:</span> <span class="y-str">prompts/configent-support.md</span>
-  <span class="y-key">effort</span><span class="y-colon">:</span> <span class="y-str">low</span>
-  <span class="y-key">tools</span><span class="y-colon">:</span>
-    <span class="y-dash">-</span> <span class="y-str">search_docs</span>
-    <span class="y-dash">-</span> <span class="y-str">get_document</span>
-    <span class="y-dash">-</span> <span class="y-str">create_support_ticket</span></code></pre>
+  <span class="y-cmt"># discard weak retrieval</span>
+  <span class="y-key">retrieval_drop_floor</span><span class="y-colon">:</span> <span class="y-num">0.3</span>
+  <span class="y-cmt"># escalate on weak retrieval</span>
+  <span class="y-key">escalate_below</span><span class="y-colon">:</span> <span class="y-num">0.45</span>
+  <span class="y-cmt"># escalate on weak grounding</span>
+  <span class="y-key">confidence_threshold</span><span class="y-colon">:</span> <span class="y-num">0.6</span></code></pre>
     </div>
 
   </div>
@@ -254,6 +253,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   .y-str   { color: var(--y-str); }
   .y-num   { color: var(--y-num); }
   .y-bool  { color: var(--y-bool); }
+  .y-cmt   { color: var(--text-faint); font-style: italic; }
   .y-dash  { color: var(--text-muted); }
 
   @media (max-width: 900px) {

@@ -1,14 +1,16 @@
 ---
-// Architecture flow diagram — fills driven by CSS variables so light/dark theme works
+// Architecture flow diagram — fills driven by CSS variables so light/dark theme works.
+// Draws the pipeline engine: fixed stages, the guardrail branch evaluated in Python,
+// and the durable step trail underneath.
 ---
 
 <div class="diagram-wrap">
   <svg
     class="arch-svg"
-    viewBox="0 0 960 520"
+    viewBox="0 0 960 580"
     xmlns="http://www.w3.org/2000/svg"
     role="img"
-    aria-label="Configent architecture: config file feeds into the orchestration layer which initialises RAG and tools, runs the agent loop, and produces structured output"
+    aria-label="Configent pipeline architecture: a config file feeds the engine, which retrieves passages from pgvector, scores their groundedness, then branches in Python to either answer with citations or escalate and file a ticket over HTTP. Every stage commits to the run's step trail before the next begins."
   >
     <defs>
       <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
@@ -17,6 +19,9 @@
       <marker id="arrow-dim" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
         <polygon class="stroke-dim-fill" points="0 0, 8 3, 0 6"/>
       </marker>
+      <marker id="arrow-amber" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/>
+      </marker>
       <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
         <feGaussianBlur stdDeviation="3" result="blur"/>
         <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
@@ -24,93 +29,109 @@
     </defs>
 
     <!-- ── Config file (left) ─────────────────────────────────── -->
-    <g class="node node-config" transform="translate(30, 130)">
-      <rect class="bg-surface stroke-accent" width="140" height="140" rx="10" stroke-width="1.5"/>
-      <text x="70" y="38"   text-anchor="middle" class="mono-sm  y-key">client_id: acme</text>
-      <text x="70" y="54"   text-anchor="middle" class="mono-sm  text-faint">knowledge_base:</text>
-      <text x="70" y="70"   text-anchor="middle" class="mono-sm  text-faint">  sources: [...]</text>
-      <text x="70" y="86"   text-anchor="middle" class="mono-sm  text-faint">agent:</text>
-      <text x="70" y="102"  text-anchor="middle" class="mono-sm  text-faint">  model: claude</text>
-      <text x="70" y="118"  text-anchor="middle" class="mono-sm  text-faint">tools: [...]</text>
-      <text x="70" y="136"  text-anchor="middle" class="mono-sm-bold y-key">config.yaml</text>
+    <g class="node node-config" transform="translate(20, 160)">
+      <rect class="bg-surface stroke-accent" width="160" height="178" rx="10" stroke-width="1.5"/>
+      <text x="12" y="30"  class="mono-sm text-faint">client_id:</text>
+      <text x="20" y="45"  class="mono-sm y-key">gcp-platform-support</text>
+      <text x="12" y="66"  class="mono-sm text-faint">agent:</text>
+      <text x="20" y="81"  class="mono-sm y-bool">mode: pipeline</text>
+      <text x="20" y="97"  class="mono-sm text-faint">retrieval_drop_floor:</text>
+      <text x="28" y="112" class="mono-sm y-str">0.30</text>
+      <text x="20" y="128" class="mono-sm text-faint">escalate_below:</text>
+      <text x="28" y="143" class="mono-sm y-str">0.45</text>
+      <text x="80" y="167" text-anchor="middle" class="mono-sm-bold y-key">config.yaml</text>
     </g>
 
     <!-- Arrow: config → engine -->
-    <line x1="170" y1="200" x2="210" y2="200" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="182" y1="250" x2="198" y2="250" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
 
     <!-- ── Engine outer box ───────────────────────────────────── -->
-    <rect class="bg-engine stroke-dim" x="215" y="30" width="580" height="460" rx="12" stroke-width="1.5" stroke-dasharray="4 3"/>
-    <text x="505" y="58" text-anchor="middle" class="label-xs text-faint letter-wide">CONFIGENT ENGINE</text>
+    <rect class="bg-engine stroke-dim" x="200" y="30" width="560" height="512" rx="12" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="480" y="54" text-anchor="middle" class="label-xs text-faint letter-wide">CONFIGENT PIPELINE ENGINE</text>
 
-    <!-- ── Orchestration layer ────────────────────────────────── -->
-    <rect class="bg-surface stroke-dim" x="235" y="70" width="540" height="100" rx="8" stroke-width="1"/>
-    <text x="505" y="95" text-anchor="middle" class="label-sm text-muted" font-weight="500">Orchestration Layer</text>
+    <!-- ── Stage 1: retrieve ──────────────────────────────────── -->
+    <rect class="bg-surface stroke-dim" x="330" y="72" width="300" height="54" rx="8" stroke-width="1"/>
+    <text x="480" y="94"  text-anchor="middle" class="mono-sm-bold y-key">retrieve</text>
+    <text x="480" y="112" text-anchor="middle" class="label-xs text-faint">embed query → pgvector · discard below 0.30</text>
 
-    <!-- Tool Registry box -->
-    <rect class="bg-raised stroke-dim" x="255" y="105" width="220" height="50" rx="6"/>
-    <text x="365" y="125" text-anchor="middle" class="mono-sm y-bool">Tool Registry</text>
-    <text x="365" y="143" text-anchor="middle" class="label-xs text-faint">register + validate tools from config</text>
+    <line x1="480" y1="126" x2="480" y2="148" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <!-- RAG Setup box -->
-    <rect class="bg-raised stroke-dim" x="495" y="105" width="260" height="50" rx="6"/>
-    <text x="625" y="125" text-anchor="middle" class="mono-sm y-key">RAG Pipeline</text>
-    <text x="625" y="143" text-anchor="middle" class="label-xs text-faint">embed docs → pgvector → retrieval</text>
+    <!-- ── Stage 2: score ─────────────────────────────────────── -->
+    <rect class="bg-surface stroke-dim" x="330" y="150" width="300" height="54" rx="8" stroke-width="1"/>
+    <text x="480" y="172" text-anchor="middle" class="mono-sm-bold y-key">score</text>
+    <text x="480" y="190" text-anchor="middle" class="label-xs text-faint">cheap model rates groundedness 0.00–1.00</text>
 
-    <!-- Arrow: orchestration → agent loop -->
-    <line x1="505" y1="170" x2="505" y2="215" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <line x1="480" y1="204" x2="480" y2="224" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <!-- ── Agent Loop ──────────────────────────────────────────── -->
-    <rect class="bg-surface stroke-accent" x="285" y="220" width="440" height="180" rx="8" stroke-width="1.5" filter="url(#glow)"/>
-    <text x="505" y="248" text-anchor="middle" class="label-sm text-muted" font-weight="500">Agent Loop</text>
+    <!-- ── The guardrail: a branch in Python ──────────────────── -->
+    <rect class="bg-surface stroke-accent" x="290" y="226" width="380" height="58" rx="8" stroke-width="1.5" filter="url(#glow)"/>
+    <text x="480" y="248" text-anchor="middle" class="label-sm text-primary" font-weight="600">Guardrail · evaluated in Python</text>
+    <text x="480" y="268" text-anchor="middle" class="mono-xs text-accent">similarity &lt; 0.45  OR  groundedness &lt; 0.60  →  escalate</text>
 
-    <!-- Claude LLM -->
-    <rect class="bg-raised stroke-accent-soft" x="305" y="260" width="180" height="120" rx="6" stroke-width="1"/>
-    <text x="395" y="285" text-anchor="middle" class="mono-sm-bold text-primary">Claude LLM</text>
-    <text x="395" y="303" text-anchor="middle" class="label-xs text-accent">claude-sonnet-4-6</text>
-    <text x="395" y="323" text-anchor="middle" class="label-xs text-faint">↑ tool results</text>
-    <text x="395" y="339" text-anchor="middle" class="label-xs text-faint">↓ tool calls</text>
-    <text x="395" y="358" text-anchor="middle" class="label-xs text-faint">streaming via SSE</text>
-    <text x="395" y="374" text-anchor="middle" class="label-xs text-faint">prompt cache enabled</text>
+    <!-- Branch: left to answer -->
+    <polyline points="400,284 400,300 336,300 336,318" fill="none" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="352" y="314" class="label-xs text-green">pass</text>
+    <!-- Branch: right to escalate -->
+    <polyline points="560,284 560,300 626,300 626,318" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+    <text x="576" y="314" text-anchor="end" class="label-xs text-amber">fail</text>
 
-    <!-- Tools panel -->
-    <rect class="bg-raised stroke-dim" x="520" y="260" width="185" height="120" rx="6"/>
-    <text x="612" y="280" text-anchor="middle" class="mono-sm y-str">Active Tools</text>
-    <text x="612" y="300" text-anchor="middle" class="mono-xs text-faint">search_docs</text>
-    <text x="612" y="316" text-anchor="middle" class="mono-xs text-faint">get_document</text>
-    <text x="612" y="332" text-anchor="middle" class="mono-xs text-faint">pricing_lookup</text>
-    <text x="612" y="352" text-anchor="middle" class="label-xs text-dim">← defined in config.yaml</text>
-    <text x="612" y="370" text-anchor="middle" class="label-xs text-dim">← no code changes</text>
+    <!-- ── Branch A: answer ───────────────────────────────────── -->
+    <rect class="bg-raised stroke-dim" x="222" y="320" width="228" height="72" rx="8" stroke-width="1"/>
+    <text x="336" y="342" text-anchor="middle" class="mono-sm-bold y-key">answer</text>
+    <text x="336" y="360" text-anchor="middle" class="label-xs text-faint">search_result blocks as</text>
+    <text x="336" y="374" text-anchor="middle" class="label-xs text-faint">top-level user content</text>
+    <text x="336" y="386" text-anchor="middle" class="label-xs text-faint">no tools sent to this call</text>
 
-    <!-- Bidirectional arrows between LLM and tools -->
-    <line x1="487" y1="300" x2="518" y2="300" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
-    <line x1="518" y1="320" x2="487" y2="320" class="stroke-dim-line" stroke-width="1" marker-end="url(#arrow-dim)"/>
+    <!-- ── Branch B: escalate → ticket ────────────────────────── -->
+    <rect class="bg-raised stroke-dim" x="512" y="320" width="228" height="52" rx="8" stroke-width="1"/>
+    <text x="626" y="342" text-anchor="middle" class="mono-sm-bold y-str">escalate</text>
+    <text x="626" y="360" text-anchor="middle" class="label-xs text-faint">draft a structured ticket</text>
 
-    <!-- Arrow: agent loop → output -->
-    <line x1="505" y1="400" x2="505" y2="448" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="626" y1="372" x2="626" y2="392" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
 
-    <!-- ── Output ──────────────────────────────────────────────── -->
-    <rect class="bg-output stroke-green" x="330" y="450" width="350" height="24" rx="6" stroke-width="1"/>
-    <text x="505" y="467" text-anchor="middle" class="label-sm text-green" font-weight="500">
-      Streamed response · Inline citations · Structured tool output
+    <rect class="bg-raised stroke-dim" x="512" y="394" width="228" height="52" rx="8" stroke-width="1"/>
+    <text x="626" y="416" text-anchor="middle" class="mono-sm-bold y-str">ticket</text>
+    <text x="626" y="434" text-anchor="middle" class="label-xs text-faint">HTTP POST · Idempotency-Key</text>
+
+    <!-- ── Outputs ────────────────────────────────────────────── -->
+    <line x1="336" y1="392" x2="336" y2="462" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect class="bg-output stroke-green" x="222" y="464" width="228" height="26" rx="6" stroke-width="1"/>
+    <text x="336" y="481" text-anchor="middle" class="label-sm text-green" font-weight="500">Cited answer</text>
+
+    <line x1="626" y1="446" x2="626" y2="462" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+    <rect class="bg-surface stroke-amber" x="512" y="464" width="228" height="26" rx="6" stroke-width="1"/>
+    <text x="626" y="481" text-anchor="middle" class="label-sm text-amber" font-weight="500">Filed ticket · id from the service</text>
+
+    <!-- ── Durable step trail ─────────────────────────────────── -->
+    <rect class="bg-raised stroke-dim" x="222" y="502" width="518" height="28" rx="6" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="481" y="520" text-anchor="middle" class="label-xs text-muted">
+      Run.steps · each stage commits on its own session before the next one starts
     </text>
 
-    <!-- ── Documents input (top right) ───────────────────────── -->
-    <g transform="translate(810, 90)">
-      <rect class="bg-surface stroke-dim" width="120" height="80" rx="8" stroke-width="1"/>
-      <text x="60" y="28"  text-anchor="middle" class="label-sm text-muted">Input Documents</text>
-      <text x="60" y="46"  text-anchor="middle" class="mono-xs text-faint">PDF / URL / text</text>
-      <text x="60" y="62"  text-anchor="middle" class="mono-xs text-faint">embed on startup</text>
-      <text x="60" y="76"  text-anchor="middle" class="label-xs text-faint">pgvector index</text>
+    <!-- ── Corpus input (top right) ───────────────────────────── -->
+    <g transform="translate(790, 72)">
+      <rect class="bg-surface stroke-dim" width="150" height="82" rx="8" stroke-width="1"/>
+      <text x="75" y="26" text-anchor="middle" class="label-sm text-muted">Corpus</text>
+      <text x="75" y="44" text-anchor="middle" class="mono-xs text-faint">Google Cloud docs</text>
+      <text x="75" y="60" text-anchor="middle" class="mono-xs text-faint">chunk → embed</text>
+      <text x="75" y="75" text-anchor="middle" class="label-xs text-faint">pgvector · per client_id</text>
     </g>
+    <line x1="788" y1="113" x2="634" y2="105" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <!-- Arrow: docs → RAG -->
-    <line x1="810" y1="130" x2="758" y2="130" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <!-- ── Ticket service (right) ─────────────────────────────── -->
+    <g transform="translate(790, 388)">
+      <rect class="bg-surface stroke-amber" width="150" height="64" rx="8" stroke-width="1"/>
+      <text x="75" y="24" text-anchor="middle" class="label-sm text-muted">Ticket service</text>
+      <text x="75" y="42" text-anchor="middle" class="mono-xs text-faint">separate process</text>
+      <text x="75" y="57" text-anchor="middle" class="label-xs text-faint">assigns the ticket id</text>
+    </g>
+    <line x1="744" y1="420" x2="786" y2="420" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
 
-    <!-- Step labels -->
-    <text x="30"  y="122" class="label-xs text-faint">1. Author config</text>
-    <text x="215" y="22"  class="label-xs text-faint">2. Configent initialises pipeline</text>
-    <text x="215" y="208" class="label-xs text-accent">3. Queries run through agent loop</text>
-    <text x="505" y="495" text-anchor="middle" class="label-xs text-faint">4. Response delivered</text>
+    <!-- ── Step labels ────────────────────────────────────────── -->
+    <text x="20"  y="150" class="label-xs text-faint">1. Author config</text>
+    <text x="206" y="66"  class="label-xs text-faint">2. Stages run in a fixed order</text>
+    <text x="206" y="222" class="label-xs text-accent">3. The branch is code, not a model choice</text>
+    <text x="206" y="562" class="label-xs text-faint">4. Nothing is lost if the process dies mid-run</text>
   </svg>
 </div>
 
@@ -142,6 +163,7 @@
   .stroke-accent-soft { stroke: #6366f1; }
   .stroke-dim         { stroke: var(--svg-stroke); }
   .stroke-green       { stroke: var(--svg-green-text); }
+  .stroke-amber       { stroke: #f59e0b; }
 
   /* Lines and marker fill */
   .stroke-dim-line { stroke: var(--svg-stroke); }
@@ -154,6 +176,7 @@
   .text-dim     { fill: var(--svg-text-dim); }
   .text-accent  { fill: #6366f1; }
   .text-green   { fill: var(--svg-green-text); }
+  .text-amber   { fill: #f59e0b; }
 
   /* YAML token colours (reuse site tokens) */
   .y-key  { fill: var(--y-key); }

@@ -3,13 +3,18 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const currentPath = Astro.url.pathname;
 
 const links = [
-  { href: `${base}/how-it-works`, label: 'How It Works' },
-  { href: `${base}/demo`,         label: 'Demo' },
+  { href: `${base}/#architecture`, label: 'Architecture' },
+  { href: `${base}/demo`,          label: 'Demo' },
   { href: `${base}/docs/getting-started`, label: 'Docs' },
 ];
 
 function isActive(href: string) {
   if (href.includes('/docs/')) return currentPath.includes('/docs/');
+  // Anchor links into the home page are active only on the home page itself.
+  if (href.includes('#')) {
+    const path = href.split('#')[0].replace(/\/$/, '');
+    return currentPath === path || currentPath === path + '/';
+  }
   return currentPath === href || currentPath === href + '/';
 }
 ---
