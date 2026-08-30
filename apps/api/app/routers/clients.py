@@ -87,6 +87,9 @@ async def list_clients():
         {
             "id": cfg.client_id,
             "name": cfg.name,
+            # The engine this client runs on. The landing page groups clients by it,
+            # so a pipeline client is never presented as a free-form assistant.
+            "mode": cfg.agent.mode,
             "branding": {
                 "logo": cfg.branding.logo,
                 "primary_color": cfg.branding.primary_color,
@@ -207,6 +210,9 @@ async def get_client_branding(client_id: str):
     return {
         "id": cfg.client_id,
         "name": cfg.name,
+        # Drives the header badge: a pipeline client advertises its guardrail, not
+        # the free-form loop's citation behaviour.
+        "mode": cfg.agent.mode,
         "primary_color": cfg.branding.primary_color,
         "logo": cfg.branding.logo,
         "assistant_name": cfg.branding.assistant_name,
