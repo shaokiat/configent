@@ -94,19 +94,64 @@ Full write-up: [`docs/architecture.md`](docs/architecture.md).)*
   config-driven branding per client.
 - **CI** — ruff + the unit test suite on every push and PR.
 
-## Running locally
+## Running the demo
 
 ```bash
-# Start Postgres + API + web
-make up
+cp .env.example .env          # add ANTHROPIC_API_KEY and VOYAGE_API_KEY
+make dev                      # Postgres + mock ticket service, then API and web
 
-# Docs dev server → http://localhost:4321/configent
-make docs
+cd apps/api && .venv/bin/alembic upgrade head
+.venv/bin/python -m app.cli --client gcp-platform-support   # ~30s, embeds the corpus
 ```
 
-Requires `.env` with `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY`. See the
-[quickstart](https://shaokiat.github.io/configent/docs/getting-started/) for full
-setup steps.
+Then open **http://localhost:3000/c/gcp-platform-support**.
+
+`make up` runs the same stack in Docker instead; `make docs` serves the docs site on
+:4321.
+
+### What to try, and what to watch
+
+The demo is the **Cloud Platform Support** client (DeployBot): it answers Cloud Run,
+GKE and IAM questions from a snapshot of public Google Cloud documentation, and
+escalates to a ticket when a question depends on your own project. **Expand the step
+trail above each reply** — that is the part worth looking at.
+
+| Ask | What happens | What the trail shows |
+|---|---|---|
+| *"My Cloud Run container fails to start — what does the PORT error mean?"* | Answered with citations | 3 steps; groundedness ~0.95, both signals above threshold |
+| *"Why won't my GKE node pool scale down after I deleted the workload?"* | Answered by synthesising the four documented causes | Retrieval names the source document it matched |
+| *"Can you raise my Cloud Run instance quota for europe-west1?"* | **Escalated**; a ticket is filed over HTTP | 4 steps, `escalated` badge, and the threshold that failed |
+
+The third one is the interesting case. Retrieval scores ~0.50 — *above* the
+escalation floor, because the corpus really does contain Cloud Run autoscaling
+documentation. The groundedness check comes back ~0.10 and forces the branch: the
+right documents were retrieved, and they do not contain the answer. Neither signal
+would have caught it alone.
+
+Nothing about that decision is left to the model. The escalate/answer branch is an
+`if` statement, and the answering model is never given the ticket tool at all — see
+[D2](docs/decisions.md).
+
+### Watching it fail
+
+```bash
+# Ticket service returns 503 on every call
+FAIL_RATE=1.0 docker compose -f infra/docker-compose.yml up -d --force-recreate mockticket
+
+# ...and back to healthy
+docker compose -f infra/docker-compose.yml up -d --force-recreate mockticket
+
+# Kill the process mid-run, after the ticket has already been filed
+CRASH_AFTER=ticket make dev
+```
+
+`FAIL_RATE` and `LATENCY_MS` on the mock ticket service, and `CRASH_AFTER=<stage>` on
+the API, exist so the failure paths are demonstrable on command rather than by
+waiting for something to break.
+
+**The ticket service is a mock** (`apps/mockticket/`) — a real HTTP service with a
+real schema and idempotency contract, but written for this repo. It is not an
+integration with a real support desk.
 
 ## Status
 
@@ -116,8 +161,16 @@ native citations; prompt caching; per-client rate limiting and daily budget
 enforcement; per-span tracing with cost/latency; cross-tenant conversation
 ownership checks; streaming chat UI; CI (ruff + unit tests).
 
+**Support agent (week 1 of 4 complete):** a fixed-stage pipeline for the
+`gcp-platform-support` client — deterministic retrieval, a cheap-model groundedness
+check, and an escalation branch decided in Python; every stage committed to a `runs`
+row and streamed as an SSE `step` event; tickets filed over real HTTP with a
+positional idempotency key. Plan and exit gates:
+[`docs/support-agent-plan.md`](docs/support-agent-plan.md).
+
 **In progress / planned:**
-- Eval harness — golden sets + LLM judge (currently 6 golden rows for one client,
+- Checkpoint/resume for interrupted runs (week 2)
+- Eval harness — golden sets + LLM judge (10 golden rows for the support client,
   no runner or judge yet)
 - Admin console for cost/latency/conversation observability
 - Live deployment (no hosted URL yet)
@@ -126,6 +179,8 @@ ownership checks; streaming chat UI; CI (ruff + unit tests).
 ## Docs
 
 - [Architecture](docs/architecture.md)
+- [Support agent plan](docs/support-agent-plan.md) · [pipeline diagram](docs/support-agent-pipeline.html)
+- [Decision log](docs/decisions.md) — including what this deliberately does not build
 - [Full docs site](https://shaokiat.github.io/configent/)
 - [Config reference](https://shaokiat.github.io/configent/docs/config-reference/)
 - [Examples](https://shaokiat.github.io/configent/docs/examples/)

@@ -1,13 +1,18 @@
 ---
 title: Agent Loop
 description: Hand-rolled tool-use loop over the Anthropic API. No framework, full visibility into cost and streaming.
-order: 5
+order: 8
 group: Request Path
 ---
 
 import Mermaid from '@/components/Mermaid.astro';
 
 The agent loop lives entirely in `apps/api/app/agent/loop.py`. No LangChain, LangGraph, or SDK tool runner. One file covers tool execution, cost tracking, prompt caching, and SSE streaming.
+
+> **This page describes `agent.mode: loop`, the default.** A client can instead run
+> [Pipeline Mode](/configent/docs/pipeline-mode) — fixed stages with the routing decision
+> made in Python. The two engines share primitives and the SSE contract; the loop is
+> untouched by the pipeline's existence and still serves every client that doesn't opt in.
 
 This is a standard **tool-use loop**, like ReAct without the explicit reasoning traces. The model signals intent through the API's `stop_reason` field instead.
 

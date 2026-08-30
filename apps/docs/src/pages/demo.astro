@@ -3,54 +3,99 @@ import BaseLayout from '@/layouts/BaseLayout.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-const DEMO_URL = 'https://configent-demo.vercel.app'; // placeholder
-
-const demoConfig = `client_id: configent-support
-name: "Configent Support"
+const demoConfig = `client_id: gcp-platform-support
+name: "Cloud Platform Support"
 
 branding:
-  logo: assets/configent-support/logo.svg
-  primary_color: "#10b981"
-  assistant_name: ConfigentBot
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
 
 corpus:
-  source: corpora/configent-support/
+  source: corpora/gcp-platform-support/
   chunking:
     chunk_size: 512
     overlap: 64
 
 agent:
+  mode: pipeline
   model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/configent-support.md
+  system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   effort: low
+  # Retrieval below this similarity is discarded before the model sees it.
+  retrieval_drop_floor: 0.3
+  # The best surviving hit being weaker than this forces escalation.
+  escalate_below: 0.45
+  # The cheap scorer's own groundedness confidence, below which we escalate.
+  confidence_threshold: 0.6
   tools:
     - search_docs
     - get_document
-    - create_support_ticket
-
-evals:
-  golden_set: evals/configent-support/golden.jsonl
-  judge_model: claude-sonnet-4-6
+    - create_escalation_ticket
 
 limits:
   rate_limit_per_minute: 60
   daily_budget_usd: 2.00`;
+
+// The three suggested questions ship in the config, ordered one per branch so a
+// walkthrough covers the whole decision surface in three turns.
+const questions = [
+  {
+    branch: 'Answered — single document',
+    text: 'My Cloud Run container fails to start — what does the PORT error mean?',
+  },
+  {
+    branch: 'Answered — synthesised across documents',
+    text: "Why won't my GKE node pool scale down after I deleted the workload?",
+  },
+  {
+    branch: 'Escalated — depends on your project',
+    text: 'Can you raise my Cloud Run instance quota for europe-west1?',
+  },
+];
+
+// Both trails below are the observed output of the week 1 exit gates (G1.1, G1.2),
+// not illustrations. Details are shown only where the gate recorded a number.
+const answeredRun = {
+  question: 'My Cloud Run container fails to start — what does the PORT error mean?',
+  outcome: 'answered' as const,
+  steps: [
+    { stage: 'Searched the documentation', detail: 'passages above the 0.30 drop floor' },
+    { stage: 'Scored the evidence', detail: 'groundedness at or above the 0.60 threshold' },
+    { stage: 'Answered from sources', detail: '3 citations' },
+  ],
+  footer: '3 step events + done · 3 citations · 7.0s',
+};
+
+const escalatedRun = {
+  question: 'Can you raise my Cloud Run instance quota for europe-west1?',
+  outcome: 'escalated' as const,
+  steps: [
+    { stage: 'Searched the documentation', detail: 'best match 0.50 — above the escalate floor' },
+    { stage: 'Scored the evidence', detail: 'groundedness 0.05 — below the 0.60 threshold' },
+    { stage: 'Escalated to a human', detail: 'quota_or_billing · priority high' },
+    { stage: 'Filed a ticket', detail: 'PLATFORM-1043' },
+  ],
+  footer: '4 step events + done · $0.014 · 5.0s',
+};
 ---
 
 <BaseLayout
   title="Demo"
-  description="Try the Configent live demo — a fully functional RAG assistant running on a single config file."
+  description="Walk through the Cloud Platform Support agent — an explicit pipeline that answers from Google Cloud documentation or escalates to a filed ticket, with every stage on the record."
 >
 
   <div class="page container">
     <div class="page-header">
       <div class="page-label">Live Demo</div>
-      <h1>See Configent in action</h1>
+      <h1>Watch the agent decide</h1>
       <p class="lead">
-        The demo below is a live deployment of Configent with a single
-        <code>config.yaml</code>. The assistant answers questions about its own
-        documentation — no custom code, only the config shown below.
+        <strong>DeployBot</strong> answers Cloud Run, GKE and IAM questions from public
+        Google Cloud documentation, with citations. When a question depends on your own
+        project — quota, billing, IAM policy, cluster state — it can't be answered from
+        those documents, so the agent files a ticket instead. That decision is a branch
+        in Python, not a choice the model makes, and every stage of it is on the record.
       </p>
     </div>
 
@@ -60,7 +105,15 @@ limits:
         <div class="demo-meta">
           <div class="meta-row">
             <span class="meta-key">Client ID</span>
-            <code class="meta-val">configent-support</code>
+            <code class="meta-val">gcp-platform-support</code>
+          </div>
+          <div class="meta-row">
+            <span class="meta-key">Assistant</span>
+            <code class="meta-val">DeployBot</code>
+          </div>
+          <div class="meta-row">
+            <span class="meta-key">Agent mode</span>
+            <code class="meta-val green">pipeline</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Model</span>
@@ -68,43 +121,48 @@ limits:
           </div>
           <div class="meta-row">
             <span class="meta-key">Corpus</span>
-            <code class="meta-val">corpora/configent-support/ · Markdown</code>
+            <code class="meta-val">10 Google Cloud docs · CC BY 4.0</code>
           </div>
           <div class="meta-row">
-            <span class="meta-key">Tools</span>
-            <code class="meta-val">search_docs, get_document, create_support_ticket</code>
+            <span class="meta-key">Escalation</span>
+            <code class="meta-val">HTTP POST → mock ticket service</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Embeddings</span>
             <code class="meta-val">Voyage AI voyage-3</code>
           </div>
           <div class="meta-row">
-            <span class="meta-key">Prompt caching</span>
-            <code class="meta-val green">always on</code>
-          </div>
-          <div class="meta-row">
             <span class="meta-key">Custom code</span>
-            <code class="meta-val dim">none</code>
+            <code class="meta-val dim">one config, one pipeline module</code>
           </div>
         </div>
 
         <div class="what-to-try">
-          <div class="wtt-label">Things to try</div>
+          <div class="wtt-label">Things to try — one per branch</div>
           <ul>
-            <li>"What tools does every client get?"</li>
-            <li>"How is multi-tenancy isolated?"</li>
-            <li>"How do I add a new client?"</li>
-            <li>"I think ingestion is broken — file a ticket"</li>
+            {questions.map(q => (
+              <li>
+                <span class="q-branch">{q.branch}</span>
+                <span class="q-text">{q.text}</span>
+              </li>
+            ))}
           </ul>
         </div>
 
-        <a href={DEMO_URL} class="launch-btn" target="_blank" rel="noopener noreferrer">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="5 3 19 12 5 21 5 3"/>
-          </svg>
-          Launch demo
-          <span class="launch-hint">opens in new tab</span>
-        </a>
+        <div class="run-local">
+          <div class="rl-label">Run it locally</div>
+          <pre class="rl-pre"><code>make dev</code></pre>
+          <p class="rl-note">
+            Starts Postgres, the mock ticket service, the API and the web app. The
+            assistant is at <code>localhost:3000/c/gcp-platform-support</code>.
+          </p>
+          <a href={`${base}/docs/getting-started`} class="rl-link">
+            Full setup in the quickstart
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </a>
+        </div>
       </div>
 
       <div class="demo-right">
@@ -113,13 +171,48 @@ limits:
             <span class="dot r"></span>
             <span class="dot a"></span>
             <span class="dot g"></span>
-            <span class="config-panel-filename">config.yaml</span>
+            <span class="config-panel-filename">config/gcp-platform-support.yaml</span>
             <span class="config-panel-badge">full config for this demo</span>
           </div>
           <pre class="config-panel-body"><code>{demoConfig}</code></pre>
         </div>
       </div>
     </div>
+
+    <!-- ── The two trails ──────────────────────────────────────── -->
+    <section class="section">
+      <h2>Two questions, two branches</h2>
+      <p class="section-sub">
+        Each stage emits a <code>step</code> event as it finishes, and the UI renders
+        them above the reply. The trails below are the recorded output of the week 1
+        exit gates, not mock-ups.
+      </p>
+
+      <div class="trail-grid">
+        {[answeredRun, escalatedRun].map(run => (
+          <div class:list={['trail-card', run.outcome]}>
+            <div class="trail-q">{run.question}</div>
+            <ol class="trail-steps">
+              {run.steps.map(s => (
+                <li>
+                  <span class="ts-stage">{s.stage}</span>
+                  <span class="ts-detail">{s.detail}</span>
+                </li>
+              ))}
+            </ol>
+            <div class="trail-footer">{run.footer}</div>
+          </div>
+        ))}
+      </div>
+
+      <div class="trail-note">
+        <strong>Read the escalated trail closely.</strong> Retrieval scored 0.50 — above
+        the 0.45 escalate floor, so the first signal passed. The second signal caught it:
+        groundedness 0.05 says the retrieved passage does not contain the answer. That is
+        the "found the right document, which doesn't answer the question" case, and it is
+        why the guardrail reads two signals rather than one.
+      </div>
+    </section>
 
     <!-- ── What the demo shows ─────────────────────────────────── -->
     <section class="section">
@@ -128,23 +221,32 @@ limits:
         <div class="show-item">
           <div class="show-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              <path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+              <path d="M18 9a9 9 0 0 1-9 9"/>
             </svg>
           </div>
           <div>
-            <h4>Streaming responses</h4>
-            <p>Text arrives token by token over SSE. No waiting for the full response.</p>
+            <h4>The decision is a Python branch</h4>
+            <p>
+              Retrieval similarity and a groundedness score are compared against two
+              configured thresholds. The model is never asked whether it should escalate.
+            </p>
           </div>
         </div>
         <div class="show-item">
           <div class="show-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+              <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+              <line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>
+              <line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
             </svg>
           </div>
           <div>
-            <h4>Live citations</h4>
-            <p>Every factual claim links back to the source document chunk it was retrieved from.</p>
+            <h4>Every stage is on the record</h4>
+            <p>
+              Each stage commits to <code>Run.steps</code> before the next one starts, so
+              the trail survives a reload — and a process death mid-run.
+            </p>
           </div>
         </div>
         <div class="show-item">
@@ -155,20 +257,58 @@ limits:
             </svg>
           </div>
           <div>
-            <h4>Multi-turn context</h4>
-            <p>The assistant maintains conversation history within a session. Follow-up questions work naturally.</p>
+            <h4>The ticket is a real HTTP call</h4>
+            <p>
+              Escalation POSTs to a separate ticket service over the network, with an
+              idempotency key. The service assigns the id, so nothing is faked in-process.
+            </p>
           </div>
         </div>
         <div class="show-item">
           <div class="show-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              <rect x="3" y="11" width="18" height="11" rx="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
           </div>
           <div>
-            <h4>Tool calling</h4>
-            <p>The knowledge base search tool is invoked automatically when needed, and the call is visible in the UI.</p>
+            <h4>The answering model can't escalate</h4>
+            <p>
+              Its request payload carries no ticket tool definition — no <code>tools</code>
+              key at all. Asserted in a test, not by inspection.
+            </p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Build status ─────────────────────────────────────────── -->
+    <section class="section">
+      <h2>What's built</h2>
+      <div class="status-list">
+        <div class="status-row done">
+          <span class="status-mark">✓</span>
+          <span class="status-week">Week 1</span>
+          <span class="status-text">
+            Explicit pipeline, the two-signal guardrail, a real HTTP ticket call, and the
+            step trail in the UI. All four exit gates verified.
+          </span>
+        </div>
+        <div class="status-row next">
+          <span class="status-mark">○</span>
+          <span class="status-week">Week 2</span>
+          <span class="status-text">
+            Validated schemas between stages, checkpoint and resume, and a ticket that is
+            filed exactly once across a crash.
+          </span>
+        </div>
+        <div class="status-row next">
+          <span class="status-mark">○</span>
+          <span class="status-week">Week 3</span>
+          <span class="status-text">
+            A golden set and eval runs producing decision accuracy, citation accuracy and
+            $/query from logged tokens.
+          </span>
         </div>
       </div>
     </section>
@@ -177,10 +317,10 @@ limits:
     <section class="section deploy-section">
       <div class="deploy-inner">
         <div>
-          <h2>Deploy your own instance</h2>
+          <h2>Point it at your own documents</h2>
           <p>
-            Clone the repo, write a config for your use case, and you have the same
-            assistant — pointed at your own documents.
+            The pipeline reads its thresholds, corpus and prompts from config. A different
+            support domain is a new YAML file and a folder of documents.
           </p>
         </div>
         <a href={`${base}/docs/getting-started`} class="btn-outline">
@@ -202,7 +342,7 @@ limits:
   }
 
   .page-header {
-    max-width: 64ch;
+    max-width: 68ch;
     margin-bottom: 3rem;
   }
 
@@ -223,6 +363,7 @@ limits:
     line-height: 1.7;
     margin: 0;
   }
+  .lead strong { color: var(--text); font-weight: 600; }
 
   /* ── Demo hero ────────────────────────────────────────────────── */
   .demo-hero {
@@ -230,6 +371,7 @@ limits:
     grid-template-columns: 1fr 1fr;
     gap: 2rem;
     margin-bottom: 4rem;
+    align-items: start;
   }
 
   .demo-left {
@@ -257,7 +399,7 @@ limits:
 
   .meta-key {
     color: var(--text-muted);
-    width: 130px;
+    width: 110px;
     flex-shrink: 0;
   }
 
@@ -273,6 +415,7 @@ limits:
   .meta-val.green { color: var(--green); border-color: rgba(52,211,153,0.2); background: rgba(52,211,153,0.06); }
   .meta-val.dim   { color: var(--text-faint); }
 
+  /* ── Things to try ────────────────────────────────────────────── */
   .what-to-try {
     background: var(--bg-surface);
     border: 1px solid var(--border);
@@ -299,37 +442,79 @@ limits:
   }
 
   .what-to-try li {
-    font-family: var(--font-mono);
-    font-size: 0.825rem;
-    color: var(--text-muted);
-    padding: 0.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.625rem 0.75rem;
     background: var(--bg-elevated);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
   }
-  .what-to-try li::before { content: '›'; color: var(--accent); margin-right: 0.5rem; }
 
-  .launch-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    padding: 1rem 1.5rem;
-    background: var(--accent);
-    color: #fff;
-    border-radius: var(--radius-lg);
-    font-size: 1rem;
+  .q-branch {
+    font-size: 0.7rem;
     font-weight: 600;
-    text-decoration: none;
-    transition: background 0.15s;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
   }
-  .launch-btn:hover { background: var(--accent-dim); text-decoration: none; }
 
-  .launch-hint {
-    margin-left: auto;
-    font-size: 0.75rem;
-    opacity: 0.65;
-    font-weight: 400;
+  .q-text {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--text-muted);
   }
+
+  /* ── Run locally ──────────────────────────────────────────────── */
+  .run-local {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+  }
+
+  .rl-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+  }
+
+  .rl-pre {
+    margin: 0 0 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    color: var(--text);
+    overflow-x: auto;
+  }
+
+  .rl-note {
+    margin: 0 0 0.875rem;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+  .rl-note code {
+    font-size: 0.8rem;
+    word-break: break-all;
+  }
+
+  .rl-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .rl-link:hover { text-decoration: underline; }
 
   /* ── Config panel ─────────────────────────────────────────────── */
   .config-panel {
@@ -337,7 +522,6 @@ limits:
     border-radius: var(--radius-lg);
     background: var(--bg-surface);
     overflow: hidden;
-    height: 100%;
   }
 
   .config-panel-header {
@@ -349,7 +533,7 @@ limits:
     border-bottom: 1px solid var(--border);
   }
 
-  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .dot.r { background: #ff5f57; }
   .dot.a { background: #ffbd2e; }
   .dot.g { background: #28ca41; }
@@ -369,6 +553,7 @@ limits:
     border: 1px solid rgba(99,102,241,0.2);
     border-radius: 100px;
     padding: 0.15rem 0.5rem;
+    white-space: nowrap;
   }
 
   .config-panel-body {
@@ -378,15 +563,123 @@ limits:
     border: none;
     border-radius: 0;
     font-size: 0.8rem;
-    line-height: 1.75;
+    line-height: 1.7;
     overflow-x: auto;
     color: var(--text-muted);
   }
 
-  /* ── What the demo shows ──────────────────────────────────────── */
+  /* ── Sections ─────────────────────────────────────────────────── */
   .section { margin-bottom: 4rem; }
-  .section h2 { color: var(--text); margin-bottom: 1.5rem; }
+  .section h2 { color: var(--text); margin-bottom: 0.75rem; }
 
+  .section-sub {
+    font-size: 0.9375rem;
+    color: var(--text-muted);
+    line-height: 1.7;
+    max-width: 68ch;
+    margin: 0 0 1.75rem;
+  }
+
+  /* ── Step trails ──────────────────────────────────────────────── */
+  .trail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+
+  .trail-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem;
+    border-top: 2px solid var(--border-accent);
+    display: flex;
+    flex-direction: column;
+  }
+  .trail-card.escalated { border-top-color: #f59e0b; }
+
+  .trail-q {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.5;
+    padding-bottom: 1rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trail-steps {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+  }
+
+  .trail-steps li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding-left: 1.25rem;
+    position: relative;
+  }
+  .trail-steps li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.35rem;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .trail-card.escalated .trail-steps li:nth-child(n+3)::before { background: #f59e0b; }
+  .trail-steps li:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 1.1rem;
+    bottom: -0.75rem;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .ts-stage {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .ts-detail {
+    font-family: var(--font-mono);
+    font-size: 0.775rem;
+    color: var(--text-muted);
+  }
+
+  .trail-footer {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-faint);
+    padding-top: 0.875rem;
+    border-top: 1px solid var(--border);
+    margin-top: auto;
+  }
+
+  .trail-note {
+    margin-top: 1.25rem;
+    padding: 1rem 1.25rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    line-height: 1.7;
+    color: var(--text-muted);
+  }
+  .trail-note strong { color: var(--text); }
+
+  /* ── What the demo shows ──────────────────────────────────────── */
   .show-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -419,6 +712,42 @@ limits:
   .show-item h4 { color: var(--text); margin-bottom: 0.375rem; }
   .show-item p  { font-size: 0.875rem; color: var(--text-muted); line-height: 1.6; margin: 0; }
 
+  /* ── Build status ─────────────────────────────────────────────── */
+  .status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .status-row {
+    display: grid;
+    grid-template-columns: 20px 72px 1fr;
+    gap: 0.875rem;
+    align-items: baseline;
+    padding: 0.875rem 1.25rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .status-mark { font-size: 0.9rem; }
+  .status-row.done .status-mark { color: var(--green); }
+  .status-row.next .status-mark { color: var(--text-faint); }
+
+  .status-week {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .status-row.next .status-week { color: var(--text-muted); }
+
+  .status-text {
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+  .status-row.next .status-text { color: var(--text-faint); }
+
   /* ── Deploy section ───────────────────────────────────────────── */
   .deploy-section { margin-bottom: 0; }
 
@@ -434,7 +763,7 @@ limits:
   }
 
   .deploy-inner h2 { margin: 0 0 0.25rem; color: var(--text); }
-  .deploy-inner p  { margin: 0; font-size: 0.9rem; color: var(--text-muted); }
+  .deploy-inner p  { margin: 0; font-size: 0.9rem; color: var(--text-muted); max-width: 60ch; }
 
   .btn-outline {
     display: inline-flex;
@@ -454,8 +783,12 @@ limits:
   .btn-outline:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
 
   @media (max-width: 900px) {
-    .demo-hero  { grid-template-columns: 1fr; }
-    .show-grid  { grid-template-columns: 1fr; }
+    .demo-hero   { grid-template-columns: 1fr; }
+    .trail-grid  { grid-template-columns: 1fr; }
+    .show-grid   { grid-template-columns: 1fr; }
     .deploy-inner { flex-direction: column; align-items: flex-start; }
+    .status-row  { grid-template-columns: 20px 1fr; }
+    .status-week { grid-column: 2; }
+    .status-text { grid-column: 2; }
   }
 </style>

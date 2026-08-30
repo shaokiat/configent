@@ -14,11 +14,31 @@ interface TurnMeta {
   cost_usd: number;
   latency_ms: number;
   cache_read_input_tokens: number;
+  escalated?: boolean;
+  confidence?: number;
+  ticket_id?: string | null;
+}
+
+// One completed pipeline stage. Emitted by the `step` SSE event and rendered as an
+// audit trail beside the answer — the same data the backend commits to Run.steps, so
+// what the user watches and what is recorded cannot drift.
+export interface RunStep {
+  seq: number;
+  stage: string;
+  status: string;
+  reasoning?: string | null;
+  latency_ms?: number;
+  confidence?: number;
+  n_hits?: number;
+  top_similarity?: number;
+  n_citations?: number;
+  ticket_id?: string;
+  cost_usd?: number;
 }
 
 type ChatMessage =
   | { role: "user"; text: string }
-  | { role: "assistant"; parts: Part[]; meta?: TurnMeta; error?: string };
+  | { role: "assistant"; parts: Part[]; meta?: TurnMeta; error?: string; steps?: RunStep[] };
 
 interface SseEvent {
   event: string;
@@ -91,13 +111,20 @@ interface HistoryMessage {
   role: "user" | "assistant";
   text?: string;
   segments?: HistorySegment[];
+  // Present for pipeline turns: the stage trail, replayed from the run that produced
+  // this message so a reload does not lose the audit trail.
+  steps?: RunStep[];
 }
 
 function historyToMessages(history: HistoryMessage[]): ChatMessage[] {
   return history.map((m) =>
     m.role === "user"
       ? { role: "user", text: m.text ?? "" }
-      : { role: "assistant", parts: segmentsToParts(m.segments ?? []) }
+      : {
+          role: "assistant",
+          parts: segmentsToParts(m.segments ?? []),
+          ...(m.steps?.length ? { steps: m.steps } : {}),
+        }
   );
 }
 
@@ -117,13 +144,27 @@ function stripMd(text: string): string {
 type CitePart = Extract<Part, { kind: "cite" }>;
 
 // Group consecutive text parts with the citations that immediately follow them
-// so citations render inline after their source paragraph, not as orphaned blocks
+// so citations render inline after their source paragraph, not as orphaned blocks.
+//
+// A group may only end at a markdown *block* boundary. The API returns one text block
+// per cited span, so a cited numbered list arrives as "1. " / cite / "item text. 2. " /
+// cite / ... — splitting on every citation would render each fragment as its own
+// markdown document and the list collapses into broken single-item lists. Citations
+// that land mid-block are held and rendered after the block completes.
+function endsBlock(text: string): boolean {
+  return /\n[ \t]*\n[ \t]*$/.test(text);
+}
+
 function groupParts(parts: Part[]): { text: string; cites: CitePart[] }[] {
   const groups: { text: string; cites: CitePart[] }[] = [];
   let cur = { text: "", cites: [] as CitePart[] };
   for (const part of parts) {
     if (part.kind === "text") {
-      if (cur.cites.length > 0) { groups.push(cur); cur = { text: "", cites: [] }; }
+      const boundary = endsBlock(cur.text) || /^[ \t]*\n[ \t]*\n/.test(part.text);
+      if (cur.cites.length > 0 && boundary) {
+        groups.push(cur);
+        cur = { text: "", cites: [] };
+      }
       cur.text += part.text;
     } else {
       cur.cites.push(part);
@@ -232,12 +273,124 @@ function TypingDots({ color }: { color: string }) {
   );
 }
 
+// ── Pipeline audit trail ──────────────────────────────────────────────────────────
+// Every stage the agent ran, with the reasoning it recorded at the time. This is the
+// deliverable, not decoration: it shows *why* a question was answered or escalated,
+// which is the thing an escalation decision has to be able to justify.
+
+const STAGE_LABEL: Record<string, string> = {
+  retrieve: "Searched the documentation",
+  score: "Scored the evidence",
+  answer: "Answered from sources",
+  escalate: "Escalated to a human",
+  ticket: "Filed a ticket",
+};
+
+function stageDetail(step: RunStep): string | null {
+  switch (step.stage) {
+    case "retrieve":
+      return step.n_hits === 0
+        ? "no matching passages"
+        : `${step.n_hits} passage${step.n_hits === 1 ? "" : "s"} · best match ${step.top_similarity?.toFixed(2)}`;
+    case "score":
+      return step.confidence !== undefined ? `confidence ${step.confidence.toFixed(2)}` : null;
+    case "answer":
+      return step.n_citations !== undefined ? `${step.n_citations} citations` : null;
+    case "ticket":
+      return step.ticket_id ?? null;
+    default:
+      return null;
+  }
+}
+
+function StepTrail({ steps, live }: { steps: RunStep[]; live: boolean }) {
+  const [open, setOpen] = useState(live);
+  if (steps.length === 0) return null;
+  const escalated = steps.some((s) => s.stage === "escalate");
+
+  return (
+    <div className="mb-2 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-gray-400 dark:text-white/40 hover:text-gray-600 dark:hover:text-white/70 transition-colors"
+        aria-expanded={open}
+      >
+        <svg
+          className={`w-3 h-3 transition-transform ${open ? "rotate-90" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+          aria-hidden="true"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span className="uppercase tracking-wide font-medium">
+          {steps.length} step{steps.length === 1 ? "" : "s"}
+        </span>
+        {escalated && (
+          <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 font-medium normal-case tracking-normal">
+            escalated
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <ol className="mt-2 border-l border-gray-200 dark:border-white/10 pl-3 space-y-2">
+          {steps.map((step) => {
+            const detail = stageDetail(step);
+            const failed = step.status !== "ok";
+            return (
+              <li key={step.seq} className="relative">
+                <span
+                  className={`absolute -left-[17px] top-1.5 w-1.5 h-1.5 rounded-full ${
+                    failed
+                      ? "bg-red-500"
+                      : step.stage === "escalate" || step.stage === "ticket"
+                        ? "bg-amber-500"
+                        : "bg-gray-300 dark:bg-white/25"
+                  }`}
+                  aria-hidden="true"
+                />
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-gray-600 dark:text-white/60 font-medium">
+                    {STAGE_LABEL[step.stage] ?? step.stage}
+                  </span>
+                  {detail && (
+                    <span className="text-gray-400 dark:text-white/35 tabular-nums">{detail}</span>
+                  )}
+                  {step.latency_ms !== undefined && (
+                    <span className="text-gray-300 dark:text-white/20 tabular-nums">
+                      {step.latency_ms}ms
+                    </span>
+                  )}
+                </div>
+                {step.reasoning && (
+                  <p className="mt-0.5 text-gray-400 dark:text-white/35 leading-relaxed">
+                    {step.reasoning}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 export default function ChatPanel({ branding }: { branding: BrandingData }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // Steps for the turn currently streaming. Kept separate from the message so the
+  // trail can be shown before the first answer token arrives; W2 also needs runId to
+  // offer "Resume" when a stream closes without `done`.
+  const [liveSteps, setLiveSteps] = useState<RunStep[]>([]);
+  const [runId, setRunId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -322,6 +475,17 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
     } else if (event === "tool") {
       if (data.status === "start") setToolStatus(toolLabel(data.name as string));
       else setToolStatus(null);
+    } else if (event === "run") {
+      setRunId(data.run_id as string);
+    } else if (event === "step") {
+      // Each stage of the pipeline as it completes. Shown live, then kept with the
+      // message so the trail is still there after the answer finishes.
+      const step = data as unknown as RunStep;
+      setLiveSteps((prev) => [...prev, step]);
+      setToolStatus(null);
+      updateLastAssistant((msg) => {
+        msg.steps = [...(msg.steps ?? []), step];
+      });
     } else if (event === "done") {
       const newConversationId = data.conversation_id as string;
       setConversationId(newConversationId);
@@ -331,8 +495,12 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
           cost_usd: data.cost_usd as number,
           latency_ms: data.latency_ms as number,
           cache_read_input_tokens: data.cache_read_input_tokens as number,
+          escalated: data.escalated as boolean | undefined,
+          confidence: data.confidence as number | undefined,
+          ticket_id: (data.ticket_id as string | null) ?? null,
         };
       });
+      setLiveSteps([]);
     } else if (event === "error") {
       updateLastAssistant((msg) => {
         msg.error = (data.message as string) || "Something went wrong.";
@@ -414,8 +582,9 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
               {branding.assistant_name.charAt(0)}
             </div>
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">{branding.assistant_name}</h2>
-            <p className="text-sm text-gray-500 dark:text-white/50 max-w-sm mb-8">
-              Ask me anything about {branding.name} — I answer from your documents with cited sources.
+            <p className="text-sm text-gray-500 dark:text-white/50 max-w-md mb-8 leading-relaxed">
+              {branding.tagline ??
+                `Ask me anything about ${branding.name} — I answer from your documents with cited sources.`}
             </p>
 
             {suggestions.length > 0 && (
@@ -456,6 +625,9 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
               </div>
 
               <div className="flex-1 min-w-0">
+                {msg.steps && msg.steps.length > 0 && (
+                  <StepTrail steps={msg.steps} live={msg.parts.length === 0 && !msg.error} />
+                )}
                 <div className="bg-gray-50 dark:bg-white/5 rounded-2xl rounded-tl-md px-4 py-3 border border-gray-200 dark:border-white/10 text-sm text-gray-700 dark:text-white/80 leading-relaxed">
                   {msg.parts.length === 0 && !msg.error ? (
                     <TypingDots color={branding.primary_color} />
@@ -529,8 +701,8 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
           )
         )}
 
-        {/* Tool status */}
-        {toolStatus && (
+        {/* Tool status (loop clients only — the pipeline reports progress as steps) */}
+        {toolStatus && liveSteps.length === 0 && (
           <div className="flex justify-start gap-3">
             <div
               className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm"

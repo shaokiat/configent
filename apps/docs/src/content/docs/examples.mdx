@@ -1,7 +1,7 @@
 ---
 title: Example Configs
 description: Live client configs from the repo, plus aspirational examples showing the planned config surface.
-order: 11
+order: 14
 group: Examples
 ---
 
@@ -19,12 +19,78 @@ These configs are in `config/` in the repo and run against real corpora and prom
 
 ---
 
+## Cloud Platform Support
+
+**Use case:** A deployment and infrastructure support agent, and the client the current build is
+organised around. **DeployBot** answers Cloud Run, GKE and IAM questions from public Google Cloud
+documentation with citations, and files a ticket when a question depends on the user's own
+project — quota, billing, IAM policy, cluster state. This is the assistant powering the
+[demo](/configent/demo).
+
+**Corpus:** A curated snapshot of public Google Cloud documentation (CC BY 4.0, attributed per
+file) in `corpora/gcp-platform-support/` — 10 files across Cloud Run, GKE, and IAM.
+
+**What's notable:**
+- The only client running `mode: pipeline`. The escalate/answer decision is a branch in Python,
+  not a tool the model may call. See [Pipeline Mode](/configent/docs/pipeline-mode).
+- Three thresholds instead of one: `retrieval_drop_floor` discards weak chunks,
+  `escalate_below` and `confidence_threshold` route to a human. See
+  [Escalation Guardrail](/configent/docs/escalation-guardrail).
+- The corpus contains nothing about any user's own project, which is what makes the escalation
+  branch load-bearing rather than decorative. "What does the platform do?" is answerable;
+  "what is *my* project doing?" structurally is not.
+- `create_escalation_ticket` makes a real HTTP POST to a
+  [separate service](/configent/docs/mock-ticket-service), which assigns the ticket id.
+
+```yaml
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
+
+branding:
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
+
+corpus:
+  source: corpora/gcp-platform-support/
+  chunking:
+    chunk_size: 512
+    overlap: 64
+
+agent:
+  mode: pipeline
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  effort: low
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+  tools:
+    - search_docs
+    - get_document
+    - create_escalation_ticket
+
+evals:
+  golden_set: evals/gcp-platform-support/golden.jsonl
+  judge_model: claude-sonnet-4-6
+
+limits:
+  rate_limit_per_minute: 60
+  daily_budget_usd: 2.00
+```
+
+> **`agent.tools` is documentation here.** In pipeline mode retrieval is deterministic and the
+> ticket call is made from Python, so no tool definition is ever sent to a model for this client.
+
+---
+
 ## Configent Support
 
 **Use case:** A customer-facing support bot — the most common assistant pattern. **ConfigentBot**
 answers questions about Configent itself, drawn from the platform's published documentation, and
-files a support ticket when a question falls outside the docs. This is the assistant powering the
-[live demo](/configent/demo), and it doubles as the worked example in the
+files a support ticket when a question falls outside the docs. It runs on the free-form
+[agent loop](/configent/docs/agent-loop), and doubles as the worked example in the
 [Adding a New Use Case](/configent/docs/adding-a-use-case) guide.
 
 **Corpus:** Plain-markdown exports of the Configent docs — overview, quickstart, configuration

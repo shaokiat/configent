@@ -1,0 +1,116 @@
+---
+title: Pipeline Mode
+description: The fixed-stage engine behind the support agent — retrieve, score, branch, answer or escalate — where the routing decision is Python, not a model choice.
+order: 5
+group: Request Path
+---
+
+import Mermaid from '@/components/Mermaid.astro';
+
+Configent ships two engines. `agent.mode: loop` hands the model a set of tools and lets it decide what to call. `agent.mode: pipeline` runs a fixed sequence of stages and makes the one branching decision in Python. The pipeline lives in `apps/api/app/agent/pipeline.py`; the loop is untouched and still serves every other client.
+
+The mode is one line of config, and `app/routers/clients.py` dispatches on it. Both engines emit the same SSE event contract, so the frontend renders either without knowing which ran.
+
+## Why a second engine
+
+The support agent's whole claim is that escalation is not the model's decision. A free-form loop cannot make that claim: if the ticket tool is in the model's tool list, the model chooses when to file, and "why did it escalate?" has no answer better than the prompt.
+
+Three properties fall out of the pipeline's structure rather than out of prompting:
+
+1. **Retrieval always happens.** It's a function call, not a tool the model may skip, so there is always something to score.
+2. **The answering model is never sent the ticket tool.** It cannot escalate, and it cannot decline to answer by escalating instead.
+3. **Every stage commits before the next starts,** so a crash leaves the finished stages durable.
+
+## The stages
+
+<Mermaid diagram={`
+flowchart TD
+    A[retrieve] --> B{hits?}
+    B -->|none| E[escalate]
+    B -->|some| C[score]
+    C --> D{guardrail}
+    D -->|pass| F[answer]
+    D -->|fail| E
+    E --> G[ticket]
+`} />
+
+| Stage | Model call | What it does |
+|---|---|---|
+| `retrieve` | none | Embeds the query, searches pgvector, drops hits below `retrieval_drop_floor` |
+| `score` | structured output | Rates how well the surviving passages support an answer |
+| *branch* | none | `should_escalate()` compares both numbers to the configured thresholds |
+| `answer` | citations | Answers from the passages, cited |
+| `escalate` | structured output | Drafts the ticket fields |
+| `ticket` | none | POSTs the draft to the ticket service |
+
+`STAGES` in `pipeline.py` is the single vocabulary for stage names, the SSE `step` events, and the `CRASH_AFTER` fault injector.
+
+> **Empty retrieval short-circuits.** Zero hits skips `score` entirely and goes straight to `escalate`. There is nothing to score, and asking a model to rate zero passages invents a number.
+
+---
+
+## Two API constraints that shaped the boundaries
+
+Both were verified against the Messages API before the build, and both would have been expensive to discover mid-implementation.
+
+**`search_result` blocks are valid as top-level user content.** They don't have to arrive inside a `tool_result`. That is what lets retrieval be an ordinary function call while citations keep working exactly as they do in the loop:
+
+```python
+content = _search_result_blocks(hits) + [{"type": "text", "text": question}]
+messages = history + [{"role": "user", "content": content}]
+```
+
+**Citations and `output_config.format` cannot be combined.** The API returns 400. That splits cleanly along stage lines — `score` and `escalate` take structured output, `answer` takes citations — but it has one consequence worth stating: the final response object cannot be a model output. Python assembles and validates it from the stage results.
+
+That is the stronger claim anyway. The response contract is constructed, not generated and hoped for.
+
+---
+
+## The answering call
+
+`answer_request_kwargs()` builds the request. Note what is absent:
+
+```python
+{
+    "model": cfg.agent.model,
+    "max_tokens": cfg.agent.max_tokens,
+    "system": [{"type": "text", "text": ..., "cache_control": {"type": "ephemeral"}}],
+    "messages": history + [{"role": "user", "content": content}],
+}
+```
+
+There is no `tools` key at all. Not an empty list — the key never appears, and the string "escalat" appears nowhere in the request. A test asserts both rather than leaving it to inspection.
+
+> **The pipeline client's `agent.tools` is documentation.** Retrieval is deterministic and the ticket call is made from Python, so no tool definition is ever sent for this client. The list stays in the YAML because it describes the client's capabilities; the engine resolves it at config load and then never uses it.
+
+---
+
+## Follow-up questions
+
+Deterministic retrieval has one weakness the loop doesn't share: a pronoun-free follow-up ("and what about GKE?") embeds to nothing useful, because no model is rewriting the query.
+
+The fix is one line — prepend the previous user turn to the embedding query:
+
+```python
+def _retrieval_query(user_message, history):
+    previous = [m for m in history if m.get("role") == "user"]
+    if not previous:
+        return user_message
+    return f"{previous[-1]['content']}\n{user_message}"
+```
+
+Imperfect, and query rewriting is out of scope. The alternative is a demo where the second question fails.
+
+---
+
+## Errors
+
+`stream_pipeline` wraps the stage sequence and owns error handling. On failure it emits an `error` event instead of `done`, and marks the run `failed`.
+
+The HTTP status went out long before anything could fail, so the SSE channel is the only way to tell the client something went wrong. A generator that simply stops looks identical to a completed turn from the browser's side — the worst possible failure mode for a workflow whose whole claim is that it is auditable.
+
+One exception is deliberately not caught: `PipelineCrash`, raised by the `CRASH_AFTER` injector. A swallowed crash proves nothing about durability.
+
+---
+
+**Next:** [Escalation Guardrail](/configent/docs/escalation-guardrail) covers the branch itself — the two signals, the thresholds, and why one signal isn't enough.

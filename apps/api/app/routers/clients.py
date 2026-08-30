@@ -14,10 +14,11 @@ from app.agent.limits import (
 )
 from app.agent.loop import ConversationNotFoundError, stream_turn
 from app.agent.loop import run as agent_run
+from app.agent.pipeline import run_pipeline, stream_pipeline
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
-from app.models import Conversation, Message
+from app.models import Conversation, Message, Run
 
 router = APIRouter(prefix="/api")
 
@@ -86,11 +87,15 @@ async def list_clients():
         {
             "id": cfg.client_id,
             "name": cfg.name,
+            # The engine this client runs on. The landing page groups clients by it,
+            # so a pipeline client is never presented as a free-form assistant.
+            "mode": cfg.agent.mode,
             "branding": {
                 "logo": cfg.branding.logo,
                 "primary_color": cfg.branding.primary_color,
                 "assistant_name": cfg.branding.assistant_name,
                 "suggested_questions": cfg.branding.suggested_questions,
+                "tagline": cfg.branding.tagline,
             },
         }
         for cfg in registry.all()
@@ -111,6 +116,24 @@ async def chat(
 
     _enforce_rate_limit(client_id, cfg)
     await _enforce_daily_budget(db, cfg)
+
+    if cfg.agent.mode == "pipeline":
+        try:
+            pipeline_result = await run_pipeline(
+                req.message,
+                cfg=cfg,
+                client_id=client_id,
+                conversation_id=req.conversation_id,
+                db=db,
+            )
+        except ConversationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return ChatResponse(
+            conversation_id=pipeline_result.conversation_id,
+            reply=pipeline_result.answer,
+            citations=pipeline_result.citations,
+            segments=pipeline_result.segments,
+        )
 
     try:
         conv_id, result = await agent_run(
@@ -137,7 +160,7 @@ async def chat(
 
 @router.post("/c/{client_id}/chat/stream")
 async def chat_stream(client_id: str, req: ChatRequest):
-    """SSE chat endpoint. Event contract: POC_FACTORY_TEST_ANCHORS.md UC-10."""
+    """SSE chat endpoint. Event contract: docs/test-anchors.md UC-10."""
     registry = get_registry()
     try:
         cfg = registry.get(client_id)
@@ -153,11 +176,15 @@ async def chat_stream(client_id: str, req: ChatRequest):
         await _check_conversation_ownership(preflight_db, client_id, req.conversation_id)
         await _enforce_daily_budget(preflight_db, cfg)
 
+    # One entry point, two engines (D5). `loop` is the free-form manual tool-use loop;
+    # `pipeline` is the fixed-stage support workflow whose escalation branch is Python.
+    engine = stream_pipeline if cfg.agent.mode == "pipeline" else stream_turn
+
     async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session
         # can be torn down before a StreamingResponse body starts executing.
         async with AsyncSessionLocal() as db:
-            async for name, data in stream_turn(
+            async for name, data in engine(
                 req.message,
                 cfg=cfg,
                 client_id=client_id,
@@ -183,10 +210,14 @@ async def get_client_branding(client_id: str):
     return {
         "id": cfg.client_id,
         "name": cfg.name,
+        # Drives the header badge: a pipeline client advertises its guardrail, not
+        # the free-form loop's citation behaviour.
+        "mode": cfg.agent.mode,
         "primary_color": cfg.branding.primary_color,
         "logo": cfg.branding.logo,
         "assistant_name": cfg.branding.assistant_name,
         "suggested_questions": cfg.branding.suggested_questions,
+        "tagline": cfg.branding.tagline,
     }
 
 
@@ -209,8 +240,19 @@ async def get_conversation_history(
         .where(Message.conversation_id == conversation_id)
         .order_by(Message.id)
     )
+    rows = list(result.scalars().all())
+
+    # Pipeline turns carry a run whose `steps` are the audit trail. Loaded in one query
+    # and attached by id rather than copied onto the message at write time, so `runs`
+    # stays the single source of truth for what the agent actually did.
+    run_ids = {m.run_id for m in rows if m.run_id}
+    steps_by_run: dict[str, list] = {}
+    if run_ids:
+        runs = await db.execute(select(Run).where(Run.id.in_(run_ids)))
+        steps_by_run = {r.id: (r.steps or []) for r in runs.scalars().all()}
+
     messages: list[dict] = []
-    for m in result.scalars().all():
+    for m in rows:
         if m.role == "user":
             if isinstance(m.content, str):
                 messages.append({"role": "user", "text": m.content})
@@ -218,7 +260,10 @@ async def get_conversation_history(
         elif m.role == "assistant":
             segments = (m.citations or {}).get("segments")
             if segments:
-                messages.append({"role": "assistant", "segments": segments})
+                entry: dict = {"role": "assistant", "segments": segments}
+                if steps := steps_by_run.get(m.run_id or ""):
+                    entry["steps"] = steps
+                messages.append(entry)
             # else: a tool_use-only assistant message — skip.
 
     return {"conversation_id": conversation_id, "messages": messages}

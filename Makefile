@@ -17,7 +17,7 @@ up-api: ## Rebuild and restart api only
 
 # ── Development (hot reload) ───────────────────────────────────────────────
 dev: ## Start DB in Docker + API and web with hot reload (single terminal)
-	$(COMPOSE) up db -d
+	$(COMPOSE) up db mockticket -d
 	@echo "Waiting for DB..."
 	@$(COMPOSE) exec -T db sh -c 'until pg_isready -U postgres -d configent; do sleep 1; done'
 	npx --yes concurrently \

@@ -1,0 +1,47 @@
+# GCP Platform Support — the primary client for the support-agent build.
+# See docs/support-agent-plan.md. W3-6 splits agent.model into
+# agent.models.{router, answer} for the cheap-router cost comparison.
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
+branding:
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
+  tagline: >-
+    I answer Cloud Run, GKE and IAM questions from public Google Cloud documentation,
+    with citations. When a question depends on your own project — quota, billing, IAM
+    policy, cluster state — I can't answer it, so I open a ticket instead. Expand the
+    step trail above any reply to see how that call was made.
+  suggested_questions:
+    # One per branch, in the order a demo should show them: answered from a single
+    # document, answered by synthesising a list, then forced escalation.
+    - "My Cloud Run container fails to start — what does the PORT error mean?"
+    - "Why won't my GKE node pool scale down after I deleted the workload?"
+    - "Can you raise my Cloud Run instance quota for europe-west1?"
+corpus:
+  source: corpora/gcp-platform-support/
+  chunking:
+    chunk_size: 512
+    overlap: 64
+agent:
+  mode: pipeline
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  effort: low
+  # Retrieval below this similarity is discarded before the model sees it.
+  retrieval_drop_floor: 0.3
+  # The best surviving hit being weaker than this forces escalation (D2).
+  escalate_below: 0.45
+  # The cheap scorer's own groundedness confidence, below which we escalate.
+  confidence_threshold: 0.6
+  tools:
+    - search_docs
+    - get_document
+    - create_escalation_ticket
+evals:
+  golden_set: evals/gcp-platform-support/golden.jsonl
+  judge_model: claude-sonnet-4-6
+limits:
+  rate_limit_per_minute: 60
+  daily_budget_usd: 2.00

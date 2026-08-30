@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BrandingConfig(BaseModel):
@@ -8,6 +8,9 @@ class BrandingConfig(BaseModel):
     primary_color: str
     assistant_name: str
     suggested_questions: list[str] = Field(default_factory=list, max_length=5)
+    # Empty-state copy. Left unset the UI falls back to a generic line; a client whose
+    # demo has a point to make should say what it is here rather than in the frontend.
+    tagline: str | None = None
 
 
 class ChunkingConfig(BaseModel):
@@ -27,6 +30,22 @@ class AgentConfig(BaseModel):
     effort: str = Field(default="medium")
     tools: list[str] = Field(default_factory=list)
 
+    # "loop" is the free-form manual tool-use loop; "pipeline" is the fixed-stage
+    # support workflow whose escalation branch is Python control flow (D5).
+    mode: str = Field(default="loop")
+
+    # --- pipeline-only knobs (D2) -------------------------------------------------
+    # Two *different* floors, and the difference matters:
+    #   retrieval_drop_floor  discards weak chunks inside search() — they never reach
+    #                         the model at all.
+    #   escalate_below        escalates when the best *surviving* hit is still weak.
+    # Set escalate_below at or under retrieval_drop_floor and it can never fire:
+    # hits[0] is >= the drop floor by construction, or hits is empty (which is its own
+    # branch). The validator below refuses that configuration at load time.
+    retrieval_drop_floor: float = Field(default=0.3, ge=0.0, le=1.0)
+    escalate_below: float = Field(default=0.45, ge=0.0, le=1.0)
+    confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+
     @field_validator("effort")
     @classmethod
     def effort_must_be_valid(cls, v: str) -> str:
@@ -34,6 +53,25 @@ class AgentConfig(BaseModel):
         if v not in valid:
             raise ValueError(f"effort must be one of {valid}, got {v!r}")
         return v
+
+    @field_validator("mode")
+    @classmethod
+    def mode_must_be_valid(cls, v: str) -> str:
+        valid = {"loop", "pipeline"}
+        if v not in valid:
+            raise ValueError(f"agent.mode must be one of {valid}, got {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def escalation_floor_must_be_reachable(self) -> "AgentConfig":
+        if self.mode == "pipeline" and self.escalate_below <= self.retrieval_drop_floor:
+            raise ValueError(
+                f"agent.escalate_below ({self.escalate_below}) must be greater than "
+                f"agent.retrieval_drop_floor ({self.retrieval_drop_floor}) — otherwise the "
+                f"retrieval guardrail can never fire, because search() has already "
+                f"discarded every hit below the drop floor."
+            )
+        return self
 
 
 class EvalsConfig(BaseModel):

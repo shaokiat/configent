@@ -1,0 +1,86 @@
+---
+title: Mock Ticket Service
+description: The separate FastAPI service the escalation path POSTs to — its schema, its idempotency contract, and the two switches that make failure reproducible.
+order: 19
+group: Backend
+---
+
+`apps/mockticket/` is a ~150-line FastAPI service that stands in for a real ticketing system. It runs as its own container; `make dev` starts it alongside the database.
+
+**It is a mock.** Nothing here is an integration with a real support desk, and it is described as a mock wherever this project is presented. What is *not* mocked is the integration shape: a schema someone else owns, a network hop that can fail, and an idempotency contract.
+
+## Why a separate process
+
+An in-process function returning a made-up ticket id proves nothing. It cannot time out, cannot return 503, cannot be slow, and cannot be asked afterwards how many tickets it holds.
+
+Making it a service over HTTP means the escalation path exercises the failure modes that actually matter — and the "exactly one ticket" claim becomes a question you can ask a running system, not an assertion about your own call stack.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/tickets` | Create a ticket, honouring `Idempotency-Key` |
+| `GET` | `/tickets/{id}` | Fetch one ticket |
+| `GET` | `/tickets` | Every ticket filed — what the "exactly one" assertion reads |
+| `DELETE` | `/tickets` | Clear the store between demo runs and tests |
+| `GET` | `/healthz` | Status, ticket count, current fail rate |
+
+The server assigns the id (`PLATFORM-1042`, `PLATFORM-1043`, …). The client never derives one from content: two people phrasing the same request identically must not collide into one ticket, and no real ticketing system behaves that way.
+
+Routing and response targets come from the request, so a ticket lands somewhere plausible:
+
+```python
+_QUEUE = {"cloud_run": "platform-serverless", "gke": "platform-kubernetes",
+          "iam": "platform-security", "other": "platform-triage"}
+
+_ETA_HOURS = {"incident": 2, "quota_or_billing": 8, "access_request": 8,
+              "account_config": 24, "docs_gap": 72, "other": 48}
+```
+
+## The idempotency contract
+
+The caller passes `Idempotency-Key: {run_id}:{stage_seq}` — stable across a crash and retry of the *same* run, distinct across every other.
+
+```python
+if idempotency_key and (existing_id := _by_idempotency_key.get(idempotency_key)):
+    response.status_code = 200
+    return {**_tickets[existing_id], "replayed": True}
+```
+
+A replay answers **200**, not 201, and sets `replayed: true`, so the caller can tell a fresh create from a replay.
+
+> **Order matters here.** The idempotency check runs *before* the chaos switch. Otherwise a retry storm could duplicate an already-created ticket simply because the service happened to be flapping.
+
+Without a `run_id` no key is sent, and the service creates a duplicate. That is correct: the free-form loop has no run, so there is nothing to deduplicate against.
+
+## The chaos switches
+
+Two environment variables make failure reproducible on demand:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `FAIL_RATE` | `0.0` | Probability a POST returns 503 with `retryable: true` |
+| `LATENCY_MS` | `0` | Artificial delay before responding |
+
+These are what make the retry and resume demos runnable on command instead of hoping something breaks during a walkthrough.
+
+## How the caller handles failure
+
+`tools/gcp_platform/create_escalation_ticket.py` POSTs with a 10-second timeout and **returns** errors rather than raising them:
+
+| Response | Returned to the pipeline |
+|---|---|
+| Transport error | `{"error": ..., "retryable": true}` |
+| `5xx` | `{"error": ..., "retryable": true, "status_code": ...}` |
+| `4xx` | `{"error": ..., "retryable": false, ...}` |
+| `2xx` | The service's JSON |
+
+A 4xx is our bug, not theirs — retrying a 422 is not resilience.
+
+Errors are returned rather than raised for two reasons: the pipeline decides what is retryable, and the model must never be shown a raw exception.
+
+> **One attempt, deliberately.** There is no retry loop in the tool. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool that doesn't know what a run is.
+
+## Configuration
+
+`TICKET_API_URL` points the tool at the service (default `http://localhost:9000`). It's in `.env.example`, and `make dev` starts the service as part of the stack.

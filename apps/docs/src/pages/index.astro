@@ -1,63 +1,239 @@
 ---
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import Hero from '@/components/Hero.astro';
+import ArchDiagram from '@/components/ArchDiagram.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+// Decision IDs are the real ones from docs/decisions.md, so a reader who opens the
+// log finds the same identifiers rather than invented ADR numbers.
+const decisions = [
+  {
+    id: 'D2',
+    title: 'The guardrail is two signals, in code',
+    body: `Retrieval similarity and a model-scored groundedness value are both compared
+      against configured thresholds. Either one failing forces escalation. The model is
+      never asked whether it should escalate, so the answer to "what if it decides
+      wrong?" is that it does not decide.`,
+  },
+  {
+    id: 'D3',
+    title: 'Durability writes commit independently',
+    body: `Each stage records itself through a short-lived session that commits
+      immediately, separate from the request transaction. A process death leaves the
+      completed stages on disk instead of rolling them back with everything else.`,
+  },
+  {
+    id: 'D4',
+    title: 'A ticket is filed exactly once',
+    body: `Escalation POSTs to a separate service with an idempotency key derived from
+      the run. The service assigns the id. A retry after a timeout cannot put a second
+      ticket in someone's queue.`,
+  },
+  {
+    id: 'D5',
+    title: 'Pipeline and loop coexist',
+    body: `One line of config selects the engine. Clients that suit a free-form agent
+      loop keep it; the support agent gets fixed stages. Both run from the same entry
+      point, so neither is a fork of the other.`,
+  },
+  {
+    id: 'P2',
+    title: 'pgvector, not a dedicated vector DB',
+    body: `Vector search runs in the same Postgres instance as everything else. No
+      second datastore to operate, and client corpora are isolated by a client_id
+      column rather than by hoping two systems agree.`,
+  },
+  {
+    id: 'P3',
+    title: 'No agent framework',
+    body: `The loop and the pipeline are both written out. That is what makes the stage
+      boundaries real places to commit state, inject a crash, and count tokens — the
+      things this project is actually about.`,
+  },
+];
 ---
 
-<BaseLayout title="Home" description="Config-driven agentic workflow engine for enterprise AI.">
+<BaseLayout title="Home" description="A support agent that answers from documentation with citations and escalates to a filed ticket when it can't — the decision made in code, every stage on the record.">
 
   <Hero />
 
-  <!-- ── How it works teaser ─────────────────────────────────────── -->
+  <!-- ── What makes it different ─────────────────────────────────── -->
   <section class="features container">
     <div class="section-label">What makes it different</div>
-    <h2>The config <em>is</em> the integration</h2>
+    <h2>The decision is <em>not</em> the model's to make</h2>
     <p class="section-sub">
-      Most enterprise AI projects require weeks of Python glue code per use case.
-      Configent inverts that model — the entire pipeline is expressed in a single YAML file
-      that a solutions engineer can write in an afternoon.
+      A support agent that guesses when it doesn't know is worse than no agent. This one
+      measures whether the retrieved documentation actually supports an answer, and routes
+      to a human when it doesn't — in Python, on numbers you can read afterwards.
     </p>
 
     <div class="feature-grid">
       <div class="feature-card">
+        <div class="feature-icon">⑂</div>
+        <h3>A branch, not a judgement call</h3>
+        <p>
+          Two signals — retrieval similarity and scored groundedness — are compared
+          against thresholds from the config. The answering model never sees a ticket
+          tool, so it cannot escalate and cannot decline to.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">▤</div>
+        <h3>Every stage on the record</h3>
+        <p>
+          Each stage emits an event as it finishes and commits to the run before the next
+          one starts. The trail shows the confidence value and the threshold it failed,
+          and it survives a reload.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">⇄</div>
+        <h3>Escalation is a real integration</h3>
+        <p>
+          Filing a ticket is an HTTP POST to a separate service with an idempotency key.
+          The service assigns the id. Nothing about the hand-off to a human is faked
+          in-process.
+        </p>
+      </div>
+
+      <div class="feature-card">
         <div class="feature-icon">⬡</div>
-        <h3>No code per client</h3>
+        <h3>Config, not code, per client</h3>
         <p>
-          Each tenant gets their own config. Tools, knowledge base, prompt, and model
-          behaviour are all declared in YAML. Onboarding a new enterprise client
-          is a config diff, not a sprint.
+          Corpus, prompts, model, thresholds and engine are declared in one YAML file.
+          A second support domain is a new file and a folder of documents.
         </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Architecture ────────────────────────────────────────────── -->
+  <section class="arch container" id="architecture">
+    <div class="section-label">Architecture</div>
+    <h2>From config to answer</h2>
+    <p class="section-sub">
+      One YAML file and a folder of documents become a running pipeline. Here is what
+      happens between the question and the reply.
+    </p>
+
+    <ArchDiagram />
+
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">01</div>
+        <div class="step-body">
+          <h3>Author a config</h3>
+          <p>
+            A solutions engineer writes one YAML file declaring the client, its corpus,
+            the model, the prompts, and the thresholds the guardrail reads. No Python.
+            This file is the whole integration spec.
+          </p>
+          <div class="code-block">
+            <div class="cb-header">
+              <span class="cb-dot r"></span>
+              <span class="cb-dot a"></span>
+              <span class="cb-dot g"></span>
+              <span class="cb-filename">config/gcp-platform-support.yaml</span>
+            </div>
+            <pre class="cb-pre"><code><span class="y-key">client_id</span>: <span class="y-str">gcp-platform-support</span>
+<span class="y-key">name</span>: <span class="y-str">"Cloud Platform Support"</span>
+
+<span class="y-key">branding</span>:
+  <span class="y-key">assistant_name</span>: <span class="y-str">"DeployBot"</span>
+  <span class="y-key">primary_color</span>: <span class="y-str">"#1a73e8"</span>
+
+<span class="y-key">corpus</span>:
+  <span class="y-key">source</span>: <span class="y-str">corpora/gcp-platform-support/</span>
+  <span class="y-key">chunking</span>:
+    <span class="y-key">chunk_size</span>: <span class="y-num">512</span>
+    <span class="y-key">overlap</span>: <span class="y-num">64</span>
+
+<span class="y-key">agent</span>:
+  <span class="y-key">mode</span>: <span class="y-str">pipeline</span>
+  <span class="y-key">model</span>: <span class="y-str">claude-haiku-4-5-20251001</span>
+  <span class="y-key">system_prompt_file</span>: <span class="y-str">prompts/gcp-platform-support/answer.md</span>
+  <span class="y-cmt"># Retrieval below this similarity is discarded before the model sees it.</span>
+  <span class="y-key">retrieval_drop_floor</span>: <span class="y-num">0.3</span>
+  <span class="y-cmt"># The best surviving hit being weaker than this forces escalation.</span>
+  <span class="y-key">escalate_below</span>: <span class="y-num">0.45</span>
+  <span class="y-cmt"># The scorer's own groundedness confidence, below which we escalate.</span>
+  <span class="y-key">confidence_threshold</span>: <span class="y-num">0.6</span></code></pre>
+          </div>
+        </div>
       </div>
 
-      <div class="feature-card">
-        <div class="feature-icon">⚡</div>
-        <h3>RAG out of the box</h3>
-        <p>
-          Point at PDFs, URLs, or raw text. Configent embeds, chunks, and indexes
-          your documents into pgvector at startup. No pipeline scaffolding required.
-        </p>
+      <div class="step">
+        <div class="step-num">02</div>
+        <div class="step-body">
+          <h3>The engine builds the client at startup</h3>
+          <p>On boot the registry reads every config in <code>config/</code> and:</p>
+          <ul>
+            <li>Parses, chunks, and embeds the corpus with Voyage AI <code>voyage-3</code> into pgvector, scoped by a <code>client_id</code> column</li>
+            <li>Validates the threshold relationship — <code>escalate_below</code> must exceed <code>retrieval_drop_floor</code>, or the escalation signal could never fire</li>
+            <li>Resolves tool names against the registry and rejects unknown ones immediately</li>
+            <li>Loads one prompt per stage, so the scoring step stays auditable instead of hiding inside a mega-prompt</li>
+          </ul>
+          <p>
+            A malformed config fails at startup, not on someone's first question.
+          </p>
+        </div>
       </div>
 
-      <div class="feature-card">
-        <div class="feature-icon">🔁</div>
-        <h3>Agentic by default</h3>
-        <p>
-          The agent loop handles multi-turn tool calling, citation injection, and
-          prompt caching. You declare which tools are active in config —
-          the engine wires them up automatically.
-        </p>
+      <div class="step">
+        <div class="step-num">03</div>
+        <div class="step-body">
+          <h3>A question runs the stages in order</h3>
+          <ol>
+            <li><strong>retrieve</strong> — the question is embedded and matched against that client's chunks. Anything below the drop floor is discarded. Zero surviving hits short-circuits straight to escalation, because there is nothing to score.</li>
+            <li><strong>score</strong> — a cheap model rates how well the surviving passages actually support an answer, and returns a structured groundedness value.</li>
+            <li><strong>the branch</strong> — Python compares both numbers to the configured thresholds and picks a path.</li>
+            <li><strong>answer</strong> — passages go to the model as <code>search_result</code> blocks in top-level user content, so the API attaches citations at generation time. No tool definitions are sent on this call.</li>
+            <li><strong>escalate → ticket</strong> — the other path drafts a structured ticket and POSTs it to the ticket service, which assigns the id.</li>
+          </ol>
+        </div>
       </div>
 
-      <div class="feature-card">
-        <div class="feature-icon">📡</div>
-        <h3>Streaming first</h3>
-        <p>
-          Responses stream over SSE with live citations appearing inline.
-          The FastAPI backend and Next.js frontend share a typed event contract —
-          no polling, no timeouts.
-        </p>
+      <div class="step">
+        <div class="step-num">04</div>
+        <div class="step-body">
+          <h3>The trail outlives the request</h3>
+          <p>
+            Every stage emits a <code>step</code> event over SSE as it completes, and commits
+            itself to the run through a session of its own. The UI renders the trail above
+            the reply — the stage, its reasoning, the confidence, the latency.
+          </p>
+          <p>
+            Because those writes don't share the request's transaction, killing the process
+            mid-run leaves the finished stages intact rather than rolling them back. That is
+            the foundation resume is built on.
+          </p>
+        </div>
       </div>
+
+    </div>
+  </section>
+
+  <!-- ── Key design decisions ────────────────────────────────────── -->
+  <section class="decisions container">
+    <div class="section-label">Decisions</div>
+    <h2>Why it's shaped this way</h2>
+    <p class="section-sub">
+      The full log, including the decisions that were reversed and the gaps still open,
+      lives in <code>docs/decisions.md</code>.
+    </p>
+
+    <div class="decision-grid">
+      {decisions.map(d => (
+        <div class="decision-card">
+          <div class="dc-label">{d.id}</div>
+          <h4>{d.title}</h4>
+          <p>{d.body}</p>
+        </div>
+      ))}
     </div>
   </section>
 
@@ -65,17 +241,17 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   <section class="cta-strip container">
     <div class="cta-strip-inner">
       <div>
-        <h2>See it running in 10 minutes</h2>
-        <p>Clone the repo, drop in a config, point at your docs.</p>
+        <h2>See it decide</h2>
+        <p>Three questions, two branches, and the trail each one leaves behind.</p>
       </div>
       <div class="cta-strip-actions">
-        <a href={`${base}/docs/getting-started`} class="btn-primary-lg">
-          Read the quickstart
+        <a href={`${base}/demo`} class="btn-primary-lg">
+          Walk through the demo
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M5 12h14M12 5l7 7-7 7"/>
           </svg>
         </a>
-        <a href={`${base}/demo`} class="btn-ghost-lg">View live demo</a>
+        <a href={`${base}/docs/getting-started`} class="btn-ghost-lg">Read the quickstart</a>
       </div>
     </div>
   </section>
@@ -83,11 +259,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 </BaseLayout>
 
 <style>
-  /* ── Features ────────────────────────────────────────────────── */
-  .features {
-    padding: 5rem 0;
-  }
-
+  /* ── Shared section furniture ────────────────────────────────── */
   .section-label {
     font-size: 0.75rem;
     font-weight: 600;
@@ -97,7 +269,17 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     margin-bottom: 0.75rem;
   }
 
-  .features h2 {
+  .section-sub {
+    font-size: 1.0625rem;
+    color: var(--text-muted);
+    max-width: 62ch;
+    line-height: 1.7;
+    margin-bottom: 3rem;
+  }
+
+  .features h2,
+  .arch h2,
+  .decisions h2 {
     margin-bottom: 0.75rem;
     color: var(--text);
   }
@@ -106,13 +288,8 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     color: var(--accent);
   }
 
-  .section-sub {
-    font-size: 1.0625rem;
-    color: var(--text-muted);
-    max-width: 60ch;
-    line-height: 1.7;
-    margin-bottom: 3rem;
-  }
+  /* ── Features ────────────────────────────────────────────────── */
+  .features { padding: 5rem 0 4rem; }
 
   .feature-grid {
     display: grid;
@@ -131,6 +308,8 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
   .feature-icon {
     font-size: 1.5rem;
+    line-height: 1;
+    color: var(--accent);
     margin-bottom: 1rem;
   }
 
@@ -146,10 +325,143 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     margin: 0;
   }
 
-  /* ── CTA strip ────────────────────────────────────────────────── */
-  .cta-strip {
-    padding-bottom: 0;
+  /* ── Architecture ────────────────────────────────────────────── */
+  .arch {
+    padding: 4rem 0;
+    scroll-margin-top: calc(var(--nav-height) + 1rem);
   }
+
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+    margin-top: 3.5rem;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  .step-num {
+    font-size: 2.5rem;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--border-accent);
+    opacity: 0.45;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .step-body h3 {
+    color: var(--text);
+    margin-bottom: 0.75rem;
+  }
+
+  .step-body p {
+    color: var(--text-muted);
+    line-height: 1.75;
+    margin-bottom: 1rem;
+  }
+  .step-body p:last-child { margin-bottom: 0; }
+
+  .step-body ul,
+  .step-body ol {
+    color: var(--text-muted);
+    line-height: 1.75;
+    margin: 0 0 1rem;
+    padding-left: 1.25rem;
+  }
+  .step-body li { margin-bottom: 0.5rem; }
+  .step-body li strong { color: var(--text); font-weight: 600; }
+
+  /* ── Code block ──────────────────────────────────────────────── */
+  .code-block {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+    overflow: hidden;
+    margin-top: 1.25rem;
+  }
+
+  .cb-header {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.625rem 1rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cb-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .cb-dot.r { background: #ff5f57; }
+  .cb-dot.a { background: #ffbd2e; }
+  .cb-dot.g { background: #28ca41; }
+
+  .cb-filename {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: 0.5rem;
+  }
+
+  .cb-pre {
+    margin: 0;
+    padding: 1.25rem 1.5rem;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: var(--text-muted);
+  }
+
+  /* YAML token colours */
+  .y-key { color: var(--y-key); }
+  .y-str { color: var(--y-str); }
+  .y-num { color: var(--y-num); }
+  .y-cmt { color: var(--text-faint); font-style: italic; }
+
+  /* ── Decisions ───────────────────────────────────────────────── */
+  .decisions { padding: 4rem 0 5rem; }
+
+  .decision-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+
+  .decision-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+  }
+
+  .dc-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--accent);
+    background: var(--accent-subtle);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 100px;
+    padding: 0.15rem 0.5rem;
+    display: inline-block;
+    margin-bottom: 0.75rem;
+  }
+
+  .decision-card h4 { color: var(--text); margin-bottom: 0.5rem; }
+  .decision-card p {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    line-height: 1.65;
+    margin: 0;
+  }
+
+  /* ── CTA strip ───────────────────────────────────────────────── */
+  .cta-strip { padding-bottom: 0; }
 
   .cta-strip-inner {
     display: flex;
@@ -197,7 +509,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   .btn-ghost-lg:hover { color: var(--text); }
 
   @media (max-width: 900px) {
-    .feature-grid { grid-template-columns: 1fr; }
+    .feature-grid  { grid-template-columns: 1fr; }
+    .decision-grid { grid-template-columns: 1fr; }
+    .step          { grid-template-columns: 1fr; gap: 0.5rem; }
+    .step-num      { font-size: 1.75rem; }
     .cta-strip-inner { flex-direction: column; align-items: flex-start; }
   }
 </style>

@@ -5,7 +5,12 @@ order: 2
 group: Setup
 ---
 
-The core premise of Configent: drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fully branded, isolated assistant goes live. No code changes, no redeployment.
+Drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fully branded, isolated assistant goes live. No code changes, no redeployment.
+
+> **This is the platform layer, not the current focus.** The build is organised around a single
+> support agent running [Pipeline Mode](/configent/docs/pipeline-mode). Multi-tenancy is what the
+> engine underneath it happens to support; the other clients stay in the repo on the free-form
+> loop.
 
 ---
 

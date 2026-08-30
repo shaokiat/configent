@@ -5,7 +5,7 @@ and persistence:
 
 - `run`: non-streaming, returns the finished turn (T3.2).
 - `stream_turn`: async generator yielding SSE-shaped `(event, data)` tuples per
-  the UC-10 contract in POC_FACTORY_TEST_ANCHORS.md (T3.5). Persistence is
+  the UC-10 contract in docs/test-anchors.md (T3.5). Persistence is
   identical to `run` — the final message comes from `get_final_message()`.
 """
 import asyncio
@@ -430,11 +430,17 @@ async def _prepare_conversation(
     Raises `ConversationNotFoundError` if `conversation_id` doesn't exist or
     belongs to a different client (A1) — history (including retrieved chunks)
     must never leak across the client_id boundary.
+
+    A newly created conversation is **committed immediately**, not just flushed. The
+    pipeline writes run state through an independent session (D3), and `runs.conversation_id`
+    is a foreign key — an uncommitted parent is invisible to that session and the insert
+    fails. The cost of committing early is that a turn which then fails leaves an empty
+    conversation row behind; that is a row with no messages, not corrupted history.
     """
     if conversation_id is None:
         conv = Conversation(client_id=client_id)
         db.add(conv)
-        await db.flush()
+        await db.commit()
         return conv.id, []
 
     conv = await db.get(Conversation, conversation_id)

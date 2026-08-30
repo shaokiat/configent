@@ -1,0 +1,114 @@
+# Sentinel facts — the single source of truth referenced by CONTEXT.md.
+#
+# Generated corpora are nondeterministic, so a small set of facts is planted verbatim
+# in each client's corpus. Retrieval, citation, and eval tests assert against these,
+# which gives them stable ground truth.
+#
+# Rules:
+#   1. The sentence must appear in the named document character-for-character.
+#   2. A sentinel must never appear in another client's corpus — the cross-client
+#      isolation tests depend on it.
+#   3. Mock tool data must agree with the corpus. A tool that contradicts a cited
+#      clause is the worst possible demo failure.
+
+acme-fab:
+  AF-1:
+    fact: "The PX-900 plasma etcher requires chamber seal replacement every 1,200 RF hours."
+    document: px900-maintenance-manual.md
+  AF-2:
+    fact: "Error code E-417 indicates a helium backside cooling leak and requires immediate chamber vent."
+    document: px900-troubleshooting-guide.md
+  AF-3:
+    fact: "The recommended idle standby temperature for the LT-200 load lock is 45 degrees Celsius."
+    document: lt200-operations-manual.md
+  AF-4:
+    fact: "Field service response time for Tier 1 contracts is 4 business hours."
+    document: service-contracts-faq.md
+  AF-5:
+    fact: 'Part `PX900-SEAL-A2` exists in the spare parts catalog with description "chamber seal kit, fluoroelastomer".'
+    document: spare-parts-catalog.md
+
+  # Canned data for the pricing_lookup mock. Must agree with the catalog above.
+  tool_fixtures:
+    pricing_lookup:
+      PX900-SEAL-A2:
+        unit_price_usd: 1840.00
+        volume_discount: { min_qty: 10, pct: 8 }
+        lead_time_days: 21
+      LT200-VALVE-B1:
+        unit_price_usd: 412.50
+        volume_discount: { min_qty: 25, pct: 5 }
+        lead_time_days: 10
+
+meridian-insurance:
+  MI-1:
+    fact: "Clause 4.2.1: Water damage arising from gradual seepage over a period exceeding 14 days is excluded from coverage."
+    document: home-policy-wording.md
+  MI-2:
+    fact: "The standard excess for accidental damage claims under the HomeShield Plus plan is $500."
+    document: home-policy-wording.md
+  MI-3:
+    fact: "Claims must be lodged within 30 days of the insured event unless exceptional circumstances apply."
+    document: claims-process-faq.md
+  MI-4:
+    fact: "Properties located within 100 metres of a coastline require a flood risk assessment before underwriting."
+    document: underwriting-guidelines.md
+  MI-5:
+    fact: "Jewellery items valued above $5,000 must be individually listed on the policy schedule."
+    document: coverage-exclusions-list.md
+
+  # Canned data for the coverage_check mock. Verdicts must agree with the policy wording.
+  tool_fixtures:
+    coverage_check:
+      burst_pipe_sudden: { covered: true, excess_usd: 500, clause: "3.1.4" }
+      gradual_seepage: { covered: false, clause: "4.2.1" }
+      unlisted_jewellery_over_5000: { covered: false, clause: "7.3.2" }
+
+configent-support:
+  # The dogfood tenant: its corpus is Configent's own published documentation, so these
+  # sentinels are real sentences from the docs rather than invented facts. All five were
+  # verified verbatim against corpora/configent-support/ on 2026-08-30.
+  CS-1:
+    fact: "Shared tools are available to every client: `search_docs` and `get_document`."
+    document: tools-and-agents.md
+  CS-2:
+    fact: "Unknown tool names fail startup, not at request time."
+    document: tools-and-agents.md
+  CS-3:
+    fact: "Documents and queries are embedded with Voyage AI's `voyage-3` model."
+    document: quickstart-guide.md
+  CS-4:
+    fact: "A client is defined entirely by one YAML file in `config/` plus a corpus directory."
+    document: configuration-reference.md
+  CS-5:
+    fact: "Every answer cites its sources through a `search_result_location` block so the cited text appears verbatim in the source document."
+    document: citations-and-grounding.md
+
+gcp-platform-support:
+  # Knowledge base is public Google Cloud documentation (CC BY 4.0), curated into
+  # corpora/gcp-platform-support/. Sentinels are sentences reproduced verbatim from those
+  # pages, so ground truth is checkable against the upstream source as well as the corpus.
+  # All five verified verbatim against the corpus on 2026-08-30.
+  GCP-1:
+    fact: "By default, each instance is limited to 1 vCPU."
+    document: cloud-run-cpu-and-memory.md
+    source: https://cloud.google.com/run/docs/configuring/services/cpu
+  GCP-2:
+    fact: "By default, metrics-based scaling sets a 60% threshold for CPU utilization and request concurrency targets."
+    document: cloud-run-autoscaling.md
+    source: https://cloud.google.com/run/docs/about-instance-autoscaling
+  GCP-3:
+    fact: "Container failed to start. Failed to start and then listen on the port defined by the PORT environment variable."
+    document: cloud-run-troubleshooting.md
+    source: https://cloud.google.com/run/docs/troubleshooting
+  GCP-4:
+    fact: "the cluster autoscaler never automatically scales down a cluster to zero nodes."
+    document: gke-cluster-autoscaler.md
+    source: https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler
+  GCP-5:
+    fact: "These roles can be useful for testing purposes, but shouldn't be used in production environments."
+    document: iam-overview.md
+    source: https://cloud.google.com/iam/docs/overview
+
+  # No tool_fixtures: create_escalation_ticket has no canned data to agree with — its
+  # correctness is the routing decision, not a looked-up value.

@@ -1,0 +1,437 @@
+<!--
+  Week 1 pipeline design for the support agent (docs/support-agent-plan.md).
+
+  Published as an Artifact: https://claude.ai/code/artifact/5a74d1d5-c62e-4d38-9c43-33076b25ea50
+  To update that page from this file, republish passing that URL — publishing this path
+  without it creates a second, unrelated artifact.
+
+  Authored as an artifact source fragment: no <!doctype>/<html>/<head>/<body> wrapper,
+  which the publisher supplies. Browsers add those implicitly, so opening this file
+  locally renders correctly.
+-->
+<title>DeployBot Escalation Pipeline</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+
+<style>
+  :root {
+    --paper:      #f4f6f9;
+    --surface:    #ffffff;
+    --ink:        #111823;
+    --ink-soft:   #414d5e;
+    --ink-faint:  #6b7889;
+    --rule:       #d6dce5;
+    --rule-soft:  #e6ebf1;
+    --accent:     #1a5fd0;
+    --accent-bg:  #e8effc;
+    --escalate:   #b4531a;
+    --escalate-bg:#fbeee3;
+    --code-bg:    #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0c1017;
+      --surface:    #141b25;
+      --ink:        #e4e9f0;
+      --ink-soft:   #a8b4c4;
+      --ink-faint:  #7c8899;
+      --rule:       #2a3441;
+      --rule-soft:  #1e2731;
+      --accent:     #74a8ff;
+      --accent-bg:  #16243a;
+      --escalate:   #e59a5f;
+      --escalate-bg:#2c1f14;
+      --code-bg:    #1b232e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:      #0c1017;
+    --surface:    #141b25;
+    --ink:        #e4e9f0;
+    --ink-soft:   #a8b4c4;
+    --ink-faint:  #7c8899;
+    --rule:       #2a3441;
+    --rule-soft:  #1e2731;
+    --accent:     #74a8ff;
+    --accent-bg:  #16243a;
+    --escalate:   #e59a5f;
+    --escalate-bg:#2c1f14;
+    --code-bg:    #1b232e;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 0;
+    padding: 0 20px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+  .col  { max-width: 68ch; }
+
+  h1, h2, h3, .label, .chip, nav { font-family: "IBM Plex Sans", system-ui, sans-serif; }
+  h1 {
+    font-size: clamp(30px, 4.4vw, 44px); font-weight: 600; line-height: 1.12;
+    letter-spacing: -0.022em; margin: 0; text-wrap: balance;
+  }
+  h2 {
+    font-size: 23px; font-weight: 600; letter-spacing: -0.012em;
+    margin: 0 0 14px; text-wrap: balance;
+  }
+  h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.005em; }
+  p { margin: 0 0 15px; }
+  p:last-child { margin-bottom: 0; }
+
+  .label {
+    font-size: 11.5px; font-weight: 500; letter-spacing: 0.11em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+
+  header { padding-top: 68px; display: flex; flex-direction: column; gap: 18px; }
+  .standfirst {
+    font-size: 19.5px; line-height: 1.55; color: var(--ink-soft);
+    max-width: 60ch; margin: 0; font-style: italic;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-size: 12.5px; font-family: "IBM Plex Mono", monospace;
+    border: 1px solid var(--rule); border-radius: 3px;
+    padding: 3px 9px; color: var(--ink-soft); background: var(--surface);
+  }
+  .rule { border: 0; border-top: 1px solid var(--rule); margin: 0; }
+
+  section { display: flex; flex-direction: column; gap: 18px; }
+
+  figure {
+    margin: 0; background: var(--surface);
+    border: 1px solid var(--rule); border-radius: 5px;
+    padding: 26px 22px 18px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .figscroll { overflow-x: auto; }
+  figure svg { display: block; width: 100%; height: auto; min-width: 620px; color: var(--ink-soft); }
+  figcaption {
+    font-size: 14px; line-height: 1.55; color: var(--ink-faint);
+    border-top: 1px solid var(--rule-soft); padding-top: 12px; font-style: italic;
+  }
+  figcaption b { font-style: normal; font-weight: 500; color: var(--ink-soft); }
+
+  code, .mono { font-family: "IBM Plex Mono", monospace; font-size: 0.88em; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; font-family: "IBM Plex Sans", sans-serif; }
+  th, td { text-align: left; padding: 10px 14px 10px 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th {
+    font-size: 11.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-faint); border-bottom: 1px solid var(--rule);
+  }
+  td.mono, th.mono { font-family: "IBM Plex Mono", monospace; }
+  .yes { color: var(--accent); font-weight: 500; }
+  .no  { color: var(--ink-faint); }
+  .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; padding: 6px 20px 10px; }
+
+  .callout {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent); border-radius: 4px;
+    padding: 18px 22px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .callout.warn { border-left-color: var(--escalate); }
+
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 2px; }
+  ol.steps li {
+    counter-increment: s; display: grid; grid-template-columns: 30px 1fr;
+    gap: 12px; align-items: baseline; padding: 7px 0;
+    border-bottom: 1px solid var(--rule-soft); font-size: 15.5px;
+  }
+  ol.steps li:last-child { border-bottom: 0; }
+  ol.steps li::before {
+    content: counter(s, decimal-leading-zero);
+    font-family: "IBM Plex Mono", monospace; font-size: 12px;
+    color: var(--ink-faint); font-variant-numeric: tabular-nums;
+  }
+  ol.steps b { font-family: "IBM Plex Mono", monospace; font-size: 13.5px; font-weight: 500; color: var(--accent); }
+
+  ul.plain { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; }
+
+  footer { font-size: 14px; color: var(--ink-faint); font-style: italic; }
+  a { color: var(--accent); }
+  a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="label">Week 1 · design review before implementation</span>
+    <h1>DeployBot escalation pipeline</h1>
+    <p class="standfirst">The support agent answers Cloud Run, GKE and IAM questions from public documentation — and when it can’t answer confidently, the code decides to escalate. Not the model.</p>
+    <div class="chips">
+      <span class="chip">client: gcp-platform-support</span>
+      <span class="chip">2 model calls / run</span>
+      <span class="chip">0 model-driven tool calls</span>
+    </div>
+  </header>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col">
+      <h2>The stage machine</h2>
+      <p>Four stages, executed in order, with exactly one branch. The branch is an <code>if</code> statement — the answering model is never shown the ticket tool, so it can neither escalate nor decline to.</p>
+    </div>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 900 800" role="img" aria-label="Flow diagram: a request enters, retrieval runs with no model call, a cheap model scores groundedness, a Python branch either routes to a cited answer or forces escalation into a ticket, and both paths converge on a response object assembled in Python.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="ar-esc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--escalate)"/>
+            </marker>
+            <marker id="ar-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+            </marker>
+          </defs>
+
+          <!-- entry -->
+          <rect x="330" y="18" width="240" height="42" rx="21" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <text x="450" y="44" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="currentColor">POST /chat/stream</text>
+          <line x1="450" y1="60" x2="450" y2="104" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+
+          <!-- 1 retrieve -->
+          <rect x="240" y="106" width="420" height="78" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <text x="262" y="132" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="500" fill="currentColor">1 · retrieve</text>
+          <text x="638" y="132" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.65">no model call</text>
+          <text x="262" y="153" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.8">search(db, client_id, query, k=5)</text>
+          <text x="262" y="171" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--accent)">→ retrieval_confidence = hits[0].similarity</text>
+
+          <line x1="450" y1="184" x2="450" y2="222" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+
+          <!-- 2 score -->
+          <rect x="240" y="224" width="420" height="90" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <text x="262" y="250" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="500" fill="currentColor">2 · score</text>
+          <text x="638" y="250" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.65">Haiku · structured output</text>
+          <text x="262" y="271" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.8">GroundednessScore{supported, confidence,</text>
+          <text x="262" y="288" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.8">                  missing_info, reasoning}</text>
+          <text x="262" y="306" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--accent)">→ no citations on this call</text>
+
+          <line x1="450" y1="314" x2="450" y2="350" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+
+          <!-- 3 branch -->
+          <rect x="252" y="352" width="396" height="68" rx="4" fill="var(--accent-bg)" stroke="var(--accent)" stroke-width="2"/>
+          <text x="274" y="378" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="500" fill="var(--accent)">3 · branch</text>
+          <text x="626" y="378" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="var(--accent)">plain Python — the guardrail</text>
+          <text x="274" y="401" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--ink)">retrieval &lt; floor OR score.confidence &lt; threshold</text>
+
+          <!-- split edges -->
+          <polyline points="330,420 330,452 220,452 220,492" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ar-acc)"/>
+          <text x="238" y="444" font-family="IBM Plex Sans, sans-serif" font-size="11.5" fill="var(--accent)">false</text>
+          <polyline points="570,420 570,452 690,452 690,492" fill="none" stroke="var(--escalate)" stroke-width="1.6" marker-end="url(#ar-esc)"/>
+          <text x="600" y="444" font-family="IBM Plex Sans, sans-serif" font-size="11.5" fill="var(--escalate)">true — forced</text>
+
+          <!-- 4a answer -->
+          <rect x="40" y="494" width="360" height="104" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="62" y="520" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="500" fill="var(--accent)">4a · answer</text>
+          <text x="378" y="520" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.65">Sonnet · citations on</text>
+          <text x="62" y="542" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.85">user message =</text>
+          <text x="62" y="559" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.85">  [search_result × k, question]</text>
+          <text x="62" y="583" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--accent)">→ streams text + citation deltas</text>
+
+          <!-- 4b escalate -->
+          <rect x="500" y="494" width="360" height="104" rx="4" fill="none" stroke="var(--escalate)" stroke-width="1.5"/>
+          <text x="522" y="520" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="500" fill="var(--escalate)">4b · escalate</text>
+          <text x="838" y="520" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.65">Haiku · structured output</text>
+          <text x="522" y="542" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.85">TicketDraft{subject, category,</text>
+          <text x="522" y="559" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.85">            priority, product_area}</text>
+          <text x="522" y="583" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--escalate)">→ no ticket tool in 4a’s payload</text>
+
+          <line x1="680" y1="598" x2="680" y2="632" stroke="var(--escalate)" stroke-width="1.6" marker-end="url(#ar-esc)"/>
+
+          <!-- 5 ticket -->
+          <rect x="500" y="634" width="360" height="72" rx="4" fill="var(--escalate-bg)" stroke="var(--escalate)" stroke-width="1.5"/>
+          <text x="522" y="660" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="500" fill="var(--escalate)">5 · ticket</text>
+          <text x="838" y="660" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.7">Python calls it, not the model</text>
+          <text x="522" y="683" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--ink)">POST /tickets · Idempotency-Key: run:seq</text>
+
+          <!-- empty-retrieval short circuit -->
+          <polyline points="660,145 878,145 878,545 862,545" fill="none" stroke="var(--escalate)" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar-esc)"/>
+          <text x="871" y="345" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="11.5" fill="var(--escalate)" transform="rotate(-90 871 345)">0 hits — skip the score call</text>
+
+          <!-- converge -->
+          <polyline points="220,598 220,742 400,742" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#ar-acc)"/>
+          <polyline points="680,706 680,742 500,742" fill="none" stroke="var(--escalate)" stroke-width="1.5" marker-end="url(#ar-esc)"/>
+          <rect x="300" y="718" width="300" height="48" rx="4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text x="450" y="740" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">SupportAnswer</text>
+          <text x="450" y="757" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.7">assembled in Python, never generated</text>
+        </svg>
+      </div>
+      <figcaption><b>Every stage writes twice:</b> it appends an entry to <code>Run.steps</code> on its own committed transaction, and emits an SSE <code>step</code> event carrying the same reasoning. The audit trail and the thing the user watches are the same surface.</figcaption>
+    </figure>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th class="mono">stage</th><th>model</th><th>structured output</th><th>citations</th><th>writes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">retrieve</td><td class="no">none</td><td class="no">—</td><td class="no">—</td><td>hits, top similarity</td></tr>
+          <tr><td class="mono">score</td><td>Haiku 4.5</td><td class="yes">GroundednessScore</td><td class="no">—</td><td>confidence, reasoning</td></tr>
+          <tr><td class="mono">answer</td><td>Sonnet 4.6</td><td class="no">—</td><td class="yes">search_result_location</td><td>text, citations</td></tr>
+          <tr><td class="mono">escalate</td><td>Haiku 4.5</td><td class="yes">TicketDraft</td><td class="no">—</td><td>draft fields</td></tr>
+          <tr><td class="mono">ticket</td><td class="no">none</td><td class="no">—</td><td class="no">—</td><td>ticket_id, status</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col">
+      <h2>Why retrieval left the tool loop</h2>
+      <p>Today the model decides to call <code>search_docs</code>, and citations ride back inside a <code>tool_result</code>. That makes retrieval a model decision — which is fine for exploratory work and fatal for a guardrail, because a run that never retrieves has nothing to score.</p>
+      <p>The Messages API accepts <code>search_result</code> blocks as <em>top-level user content</em>, not only inside a tool result. So retrieval becomes a plain function call and the blocks go straight into the answer request. Citations behave identically.</p>
+    </div>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 900 300" role="img" aria-label="Comparison: the current loop takes two model calls with retrieval chosen by the model, while the pipeline retrieves in Python and passes search_result blocks directly into a single answer call.">
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="ar2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+            </marker>
+          </defs>
+
+          <text x="30" y="28" font-family="IBM Plex Sans, sans-serif" font-size="12" font-weight="500" fill="currentColor" opacity="0.7">TODAY — loop.py</text>
+          <text x="490" y="28" font-family="IBM Plex Sans, sans-serif" font-size="12" font-weight="500" fill="var(--accent)">PIPELINE — pipeline.py</text>
+          <line x1="450" y1="10" x2="450" y2="290" stroke="currentColor" stroke-width="1" opacity="0.25"/>
+
+          <!-- left: loop -->
+          <rect x="30" y="48" width="150" height="40" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="105" y="73" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">model call 1</text>
+          <line x1="180" y1="68" x2="240" y2="68" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+          <text x="210" y="60" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity="0.7">tool_use</text>
+          <rect x="242" y="48" width="150" height="40" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="317" y="73" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">search_docs</text>
+          <polyline points="317,88 317,120 105,120 105,148" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+          <text x="211" y="113" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity="0.7">tool_result [search_result …]</text>
+          <rect x="30" y="150" width="150" height="40" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="105" y="175" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">model call 2</text>
+          <line x1="180" y1="170" x2="240" y2="170" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+          <rect x="242" y="150" width="150" height="40" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="317" y="175" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">cited answer</text>
+          <text x="30" y="228" font-family="IBM Plex Sans, sans-serif" font-size="12" fill="currentColor" opacity="0.75">Retrieval is the model’s choice.</text>
+          <text x="30" y="248" font-family="IBM Plex Sans, sans-serif" font-size="12" fill="currentColor" opacity="0.75">Nothing to score if it skips the call.</text>
+
+          <!-- right: pipeline -->
+          <rect x="490" y="48" width="160" height="40" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+          <text x="570" y="73" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--accent)">search() in Python</text>
+          <polyline points="650,68 700,68 700,148" fill="none" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ar2a)"/>
+          <text x="712" y="112" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="var(--accent)">hits → blocks</text>
+          <rect x="490" y="150" width="330" height="52" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+          <text x="506" y="171" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--accent)">user message = [search_result × k,</text>
+          <text x="506" y="188" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--accent)">                question]</text>
+          <text x="490" y="228" font-family="IBM Plex Sans, sans-serif" font-size="12" fill="currentColor" opacity="0.75">Retrieval always happens, and its score</text>
+          <text x="490" y="248" font-family="IBM Plex Sans, sans-serif" font-size="12" fill="currentColor" opacity="0.75">exists before any answer is generated.</text>
+        </svg>
+      </div>
+      <figcaption><b>The hop that disappears</b> is the tool round trip. One fewer model call on the answer path, and retrieval stops being something the model can decline to do.</figcaption>
+    </figure>
+
+    <div class="callout">
+      <h3>Citations and structured outputs are mutually exclusive</h3>
+      <p>Setting <code>output_config.format</code> alongside citations returns a 400. That splits cleanly along stage lines — score and ticket-draft take structured output, answer takes citations — but it means <code>SupportAnswer</code>, the final contract with <code>answer</code>, <code>citations[]</code>, <code>confidence</code>, <code>escalated</code> and <code>ticket_id</code>, <strong>cannot be a model output</strong>. Python assembles it from the stage results and validates it there. That’s the stronger version of the claim anyway: the response contract is constructed, not generated and hoped for.</p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col">
+      <h2>The trap worth avoiding on day one</h2>
+      <p>Run state commits on its own session so a crash can’t erase it. But the conversation row it points at is still sitting uncommitted in the request session — so the foreign key has no parent yet.</p>
+    </div>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 900 260" role="img" aria-label="Diagram: the request session holds an uncommitted conversation row while the checkpoint session commits a run row whose foreign key points at it, causing the insert to fail; committing the conversation first fixes it.">
+          <defs>
+            <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--escalate)"/>
+            </marker>
+          </defs>
+
+          <rect x="40" y="30" width="330" height="120" rx="5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="6 4"/>
+          <text x="60" y="56" font-family="IBM Plex Sans, sans-serif" font-size="12" font-weight="500" fill="currentColor">request session</text>
+          <text x="350" y="56" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.7">flush(), no commit</text>
+          <rect x="66" y="76" width="278" height="50" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="205" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">conversations row</text>
+          <text x="205" y="116" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.7">not visible to other sessions</text>
+
+          <rect x="530" y="30" width="330" height="120" rx="5" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="550" y="56" font-family="IBM Plex Sans, sans-serif" font-size="12" font-weight="500" fill="currentColor">checkpoint_session()</text>
+          <text x="840" y="56" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.7">commits immediately</text>
+          <rect x="556" y="76" width="278" height="50" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="695" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">runs row</text>
+          <text x="695" y="116" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity="0.7">FK → conversations.id</text>
+
+          <line x1="556" y1="101" x2="380" y2="101" stroke="var(--escalate)" stroke-width="1.6" marker-end="url(#ar3)"/>
+          <line x1="459" y1="88" x2="481" y2="114" stroke="var(--escalate)" stroke-width="2.2"/>
+          <line x1="481" y1="88" x2="459" y2="114" stroke="var(--escalate)" stroke-width="2.2"/>
+          <text x="470" y="146" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="11.5" fill="var(--escalate)">insert fails</text>
+
+          <line x1="40" y1="186" x2="860" y2="186" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+          <text x="40" y="215" font-family="IBM Plex Sans, sans-serif" font-size="13" font-weight="500" fill="var(--accent)">Fix</text>
+          <text x="80" y="215" font-family="IBM Plex Sans, sans-serif" font-size="13" fill="currentColor">Commit the conversation row before the pipeline starts, so run state has a durable parent.</text>
+          <text x="80" y="238" font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="currentColor" opacity="0.7">Cheap now. Painful to unpick in week 2, when resume depends on it.</text>
+        </svg>
+      </div>
+      <figcaption><b>One extra commit</b> is the whole fix — but it has to be deliberate, because <code>_prepare_conversation</code> currently flushes without committing and nothing today notices.</figcaption>
+    </figure>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col">
+      <h2>Three things to settle before writing <code>pipeline.py</code></h2>
+      <ul class="plain">
+        <li><b>Two floors, not one.</b> <code>search()</code> already drops hits below <code>0.3</code>. The new escalation floor is a different question asked of the surviving hits. If the escalation floor sits below the drop floor it can never fire — <code>hits[0]</code> is ≥ 0.3 by construction, or <code>hits</code> is empty. Name them <code>retrieval_drop_floor</code> and <code>escalate_below</code> so nobody reasons this out twice.</li>
+        <li><b>Empty retrieval is its own branch.</b> Zero hits means there is nothing to score. Escalate straight away and skip the model call entirely — cheaper, and honest about what happened.</li>
+        <li><b>Multi-turn breaks deterministic retrieval.</b> “And what about GKE?” embeds to nothing useful. Query rewriting is on the cut list, so the cheap fix is to embed the previous user message alongside the current one when history exists. One line, no extra call.</li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col">
+      <h2>Build order</h2>
+      <p>Reordered from the plan: the mock ticket service moves earlier, because the escalate branch can’t be tested end to end without it and it’s eighty lines you can write while the pipeline design is still settling.</p>
+    </div>
+    <div class="tablewrap">
+      <ol class="steps">
+        <li><span><b>W1-3</b> &nbsp;<code>checkpoint_session()</code> — everything downstream depends on it</span></li>
+        <li><span><b>W1-2</b> &nbsp;<code>Run</code> model, migration, and the conversation-commit fix</span></li>
+        <li><span><b>W1-1</b> &nbsp;config: <code>mode</code>, the two floors, the confidence threshold</span></li>
+        <li><span><b>W1-6</b> &nbsp;mock ticket service with <code>FAIL_RATE</code> and <code>LATENCY_MS</code></span></li>
+        <li><span><b>W1-4</b> &nbsp;<code>pipeline.py</code> — the four stages and the branch</span></li>
+        <li><span><b>W1-8</b> &nbsp;ticket tool over real HTTP with an idempotency key</span></li>
+        <li><span><b>W1-10</b> &nbsp;<code>step</code> SSE events</span></li>
+        <li><span><b>W1-12</b> &nbsp;router dispatch on <code>agent.mode</code></span></li>
+        <li><span><b>W1-11</b> &nbsp;step timeline in <code>ChatPanel.tsx</code></span></li>
+        <li><span><b>W1-13</b> &nbsp;pipeline tests, including the empty-tool-payload assertion</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>Exit gate: an answerable question renders four step events and a cited answer; an unanswerable one shows the confidence that failed, and a ticket exists in the mock service — created over HTTP, exactly once.</footer>
+
+</div>
