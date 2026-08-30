@@ -190,8 +190,9 @@ eval_runs      client_id, git_sha, scores jsonb, ran_at (schema exists; not yet 
 
 Multi-tenancy is a `client_id` column on every table, enforced at the retrieval and
 query layer — every search and every conversation load is filtered by `client_id`.
-Row-level security is not implemented at the database layer today; see
-`docs/supabase-rls-implementation-plan.md` for the hardening proposal.
+Row-level security is not implemented at the database layer today; `client_id` is a
+trusted path parameter, filtered by the application rather than enforced by the
+database.
 
 ## 8. Repo structure
 
@@ -210,7 +211,7 @@ configent/
 ├── corpora/                  # source docs per client (small; committed)
 ├── prompts/                  # per-client system prompts
 ├── evals/                    # golden sets (currently: 6 rows, configent-support only)
-├── docs/                     # this file, config reference, RLS plan, docs site source
+├── docs/                     # this file, config reference, docs site source
 ├── infra/                    # Dockerfiles, docker-compose (local pg), CI
 └── README.md
 ```
@@ -248,6 +249,5 @@ configent/
 - Admin console / API for cost and conversation observability
 - Live deployment (no hosted URL yet)
 - PDF ingestion (corpora are markdown-only today)
-- Auth and Supabase Row-Level Security (see
-  `docs/supabase-rls-implementation-plan.md` for the proposal; `client_id` is
-  currently a trusted path parameter, not yet backed by RLS)
+- Auth and database-enforced tenant isolation (`client_id` is currently a trusted
+  path parameter, app-filtered but not backed by row-level security)

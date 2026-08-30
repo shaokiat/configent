@@ -122,8 +122,6 @@ ownership checks; streaming chat UI; CI (ruff + unit tests).
 - Admin console for cost/latency/conversation observability
 - Live deployment (no hosted URL yet)
 - PDF ingestion (corpora are markdown-only today)
-- Supabase Row-Level Security — proposal at
-  [`docs/supabase-rls-implementation-plan.md`](docs/supabase-rls-implementation-plan.md)
 
 ## Docs
 
