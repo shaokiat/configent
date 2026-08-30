@@ -19,7 +19,7 @@ A Client whose Corpus is Configent's own published documentation, used as the pr
 The set of source documents belonging to one Client, ingested into pgvector scoped by `client_id`.
 
 **Sentinel fact**:
-A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5; see the private build plan for the full list — not tracked in the public repo).
+A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5, CS-1..5). `evals/sentinels.yaml` is the single source of truth; scenario assertions built on them live in `docs/test-anchors.md`.
 
 **Shared tool**:
 A tool available to every Client (`search_docs`, `get_document`).
@@ -40,4 +40,4 @@ A mock business-system tool enabled per Client via its YAML (`pricing_lookup` fo
 
 ## Flagged ambiguities
 
-- "poc-factory" vs "configent" — resolved 2026-06-12: **Configent** is canonical everywhere executable (CLI command is `configent`, DB is `configent`). Planning docs were originally consolidated into `CONFIGENT.md` and `CONFIGENT_BUILD.md`; as of 2026-07-08 those moved to a gitignored `private/` directory and the public architecture summary lives at `docs/architecture.md`.
+- "poc-factory" vs "configent" — resolved 2026-06-12: **Configent** is canonical everywhere executable (CLI command is `configent`, DB is `configent`). Planning docs were consolidated, then split by audience on 2026-08-30: engineering documentation is tracked in `docs/` (`architecture.md`, `decisions.md`, `support-agent-plan.md`, `test-anchors.md`) and only interview-prep framing stays in the gitignored `private/`.

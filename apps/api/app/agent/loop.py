@@ -5,7 +5,7 @@ and persistence:
 
 - `run`: non-streaming, returns the finished turn (T3.2).
 - `stream_turn`: async generator yielding SSE-shaped `(event, data)` tuples per
-  the UC-10 contract in POC_FACTORY_TEST_ANCHORS.md (T3.5). Persistence is
+  the UC-10 contract in docs/test-anchors.md (T3.5). Persistence is
   identical to `run` — the final message comes from `get_final_message()`.
 """
 import asyncio

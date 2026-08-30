@@ -137,7 +137,7 @@ async def chat(
 
 @router.post("/c/{client_id}/chat/stream")
 async def chat_stream(client_id: str, req: ChatRequest):
-    """SSE chat endpoint. Event contract: POC_FACTORY_TEST_ANCHORS.md UC-10."""
+    """SSE chat endpoint. Event contract: docs/test-anchors.md UC-10."""
     registry = get_registry()
     try:
         cfg = registry.get(client_id)

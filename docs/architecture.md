@@ -207,10 +207,10 @@ configent/
 │           ├── tools/        # registry, shared/, acme_fab/, meridian/, configent_support/
 │           ├── tracing/      # trace persistence
 │           └── config/       # Pydantic schema, registry
-├── config/                   # acme-fab.yaml, meridian-insurance.yaml, configent-support.yaml
+├── config/                   # acme-fab.yaml, meridian-insurance.yaml, configent-support.yaml, gcp-platform-support.yaml
 ├── corpora/                  # source docs per client (small; committed)
 ├── prompts/                  # per-client system prompts
-├── evals/                    # golden sets (currently: 6 rows, configent-support only)
+├── evals/                    # sentinels.yaml + golden sets (configent-support, gcp-platform-support)
 ├── docs/                     # this file, config reference, docs site source
 ├── infra/                    # Dockerfiles, docker-compose (local pg), CI
 └── README.md
