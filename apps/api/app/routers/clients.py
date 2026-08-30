@@ -14,6 +14,7 @@ from app.agent.limits import (
 )
 from app.agent.loop import ConversationNotFoundError, stream_turn
 from app.agent.loop import run as agent_run
+from app.agent.pipeline import run_pipeline, stream_pipeline
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
@@ -112,6 +113,24 @@ async def chat(
     _enforce_rate_limit(client_id, cfg)
     await _enforce_daily_budget(db, cfg)
 
+    if cfg.agent.mode == "pipeline":
+        try:
+            pipeline_result = await run_pipeline(
+                req.message,
+                cfg=cfg,
+                client_id=client_id,
+                conversation_id=req.conversation_id,
+                db=db,
+            )
+        except ConversationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return ChatResponse(
+            conversation_id=pipeline_result.conversation_id,
+            reply=pipeline_result.answer,
+            citations=pipeline_result.citations,
+            segments=pipeline_result.segments,
+        )
+
     try:
         conv_id, result = await agent_run(
             req.message,
@@ -153,11 +172,15 @@ async def chat_stream(client_id: str, req: ChatRequest):
         await _check_conversation_ownership(preflight_db, client_id, req.conversation_id)
         await _enforce_daily_budget(preflight_db, cfg)
 
+    # One entry point, two engines (D5). `loop` is the free-form manual tool-use loop;
+    # `pipeline` is the fixed-stage support workflow whose escalation branch is Python.
+    engine = stream_pipeline if cfg.agent.mode == "pipeline" else stream_turn
+
     async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session
         # can be torn down before a StreamingResponse body starts executing.
         async with AsyncSessionLocal() as db:
-            async for name, data in stream_turn(
+            async for name, data in engine(
                 req.message,
                 cfg=cfg,
                 client_id=client_id,

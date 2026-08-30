@@ -31,8 +31,11 @@ services:
       # Override the localhost URL from .env so the API can reach the db service
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/configent
       DEV_CONFIG_RELOAD: "0"
+      TICKET_API_URL: http://mockticket:9000
     depends_on:
       db:
+        condition: service_healthy
+      mockticket:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
@@ -40,6 +43,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ── Mock ticket service ────────────────────────────────────────────────────
+  # Stands in for a real ticketing system so the escalation path makes an actual
+  # HTTP call. FAIL_RATE / LATENCY_MS make its failure modes reproducible on demand,
+  # which is what the retry and dead-letter demos need (W3-2, W3-5).
+  mockticket:
+    build:
+      context: ../apps/mockticket
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    environment:
+      FAIL_RATE: "0"
+      LATENCY_MS: "0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ── Web ────────────────────────────────────────────────────────────────────
   web:

@@ -129,6 +129,39 @@ class Trace(Base):
     )
 
 
+class Run(Base):
+    """One execution of the support pipeline, checkpointed stage by stage.
+
+    Written only through `checkpoint_session()` (D3), so a crash mid-run leaves the
+    completed stages durable. `steps` is a JSON list rather than a second table: nothing
+    at this scale queries steps across runs, and resume reads exactly one row.
+
+    A step entry looks like:
+        {seq, stage, status, reasoning, confidence, tokens_in, tokens_out,
+         cost_usd, latency_ms, started_at, finished_at, error}
+    """
+
+    __tablename__ = "runs"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalised from the conversation so run lookups can be scoped without a join.
+    client_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    current_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    steps: Mapped[list] = mapped_column(JSON, default=list)
+    # Stage outputs resume needs to skip work already done (e.g. the filed ticket_id).
+    state: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 class EvalRun(Base):
     __tablename__ = "eval_runs"
 

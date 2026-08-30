@@ -115,61 +115,84 @@ async def test_create_support_ticket_empty_subject_errors():
     assert "error" in result
 
 
-@pytest.mark.asyncio
-async def test_create_escalation_ticket_is_deterministic_and_routes():
-    from app.tools.gcp_platform.create_escalation_ticket import execute
+# ── create_escalation_ticket: real HTTP against the mock service ────────────────────
 
-    args = {
-        "subject": "Cloud Run instance quota increase needed in europe-west1",
-        "category": "quota_or_billing",
-        "product_area": "cloud_run",
-    }
-    first = await execute(args)
-    second = await execute(dict(args))
 
-    assert first["ticket_id"] == second["ticket_id"]
-    assert first["ticket_id"].startswith("PLATFORM-")
-    assert first["status"] == "open"
-    assert first["priority"] == "normal"  # default applied
-    assert first["queue"] == "platform-serverless"
-    assert first["eta_hours"] == 8
+@pytest.fixture
+def ticket_service(monkeypatch):
+    from app.tools.gcp_platform import create_escalation_ticket as tool
+
+    from .conftest_mockticket import bind
+
+    bind(monkeypatch, tool)
+    monkeypatch.delenv("FAIL_RATE", raising=False)
+    monkeypatch.delenv("LATENCY_MS", raising=False)
+    yield tool
 
 
 @pytest.mark.asyncio
-async def test_create_escalation_ticket_queue_follows_product_area():
-    from app.tools.gcp_platform.create_escalation_ticket import execute
-
-    args = {"subject": "Binding looks correct but access is denied", "category": "account_config"}
-    gke = await execute({**args, "product_area": "gke"})
-    iam = await execute({**args, "product_area": "iam"})
-
-    assert gke["queue"] == "platform-kubernetes"
-    assert iam["queue"] == "platform-security"
-    # Same subject and category: routing must not change the ticket identity.
-    assert gke["ticket_id"] == iam["ticket_id"]
-
-
-@pytest.mark.asyncio
-async def test_create_escalation_ticket_incident_jumps_the_queue():
-    from app.tools.gcp_platform.create_escalation_ticket import execute
-
-    result = await execute(
+async def test_escalation_ticket_posts_and_routes(ticket_service):
+    result = await ticket_service.execute(
         {
-            "subject": "Autoscaler ignoring max instances in production",
-            "category": "incident",
+            "subject": "Cloud Run instance quota increase needed in europe-west1",
+            "category": "quota_or_billing",
             "product_area": "cloud_run",
-            "priority": "high",
-        }
+        },
+        run_id="run-a",
+        stage_seq=4,
     )
-    assert result["eta_hours"] == 2
-    assert result["priority"] == "high"
+    assert result["ticket_id"].startswith("PLATFORM-")
+    assert result["status"] == "open"
+    assert result["queue"] == "platform-serverless"
+    assert result["eta_hours"] == 8
+    assert result["priority"] == "normal"  # server default applied
 
 
 @pytest.mark.asyncio
-async def test_create_escalation_ticket_empty_subject_errors():
-    from app.tools.gcp_platform.create_escalation_ticket import execute
+async def test_escalation_ticket_is_idempotent_per_run_and_stage(ticket_service):
+    """The claim the crash/resume demo rests on (D4): a replayed call files no second ticket."""
+    args = {"subject": "Binding present but access denied", "category": "account_config",
+            "product_area": "iam"}
+    first = await ticket_service.execute(dict(args), run_id="run-b", stage_seq=4)
+    replay = await ticket_service.execute(dict(args), run_id="run-b", stage_seq=4)
+    assert first["ticket_id"] == replay["ticket_id"]
+    assert replay["replayed"] is True
 
-    result = await execute(
+    # A different run with identical content is a different ticket — content-derived ids
+    # would have collided here, which is why the key is positional.
+    other = await ticket_service.execute(dict(args), run_id="run-c", stage_seq=4)
+    assert other["ticket_id"] != first["ticket_id"]
+
+
+@pytest.mark.asyncio
+async def test_escalation_ticket_reports_5xx_as_retryable(ticket_service, monkeypatch):
+    monkeypatch.setenv("FAIL_RATE", "1.0")
+    result = await ticket_service.execute(
+        {"subject": "Autoscaler ignoring max instances", "category": "incident",
+         "product_area": "cloud_run"},
+        run_id="run-d",
+        stage_seq=4,
+    )
+    assert result["retryable"] is True
+    assert result["status_code"] == 503
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_escalation_ticket_rejects_bad_category_without_retrying(ticket_service):
+    """A 4xx is our bug. Retrying a validation failure is not resilience."""
+    result = await ticket_service.execute(
+        {"subject": "x", "category": "not_a_category", "product_area": "gke"},
+        run_id="run-e",
+        stage_seq=4,
+    )
+    assert result["retryable"] is False
+    assert result["status_code"] == 422
+
+
+@pytest.mark.asyncio
+async def test_escalation_ticket_empty_subject_errors(ticket_service):
+    result = await ticket_service.execute(
         {"subject": "   ", "category": "other", "product_area": "other"}
     )
     assert "error" in result

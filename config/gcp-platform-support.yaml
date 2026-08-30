@@ -1,6 +1,6 @@
 # GCP Platform Support — the primary client for the support-agent build.
-# See docs/support-agent-plan.md. W1-1 adds agent.mode / confidence_threshold /
-# retrieval_floor_hard; W3-7 splits agent.model into agent.models.{router,answer}.
+# See docs/support-agent-plan.md. W3-6 splits agent.model into
+# agent.models.{router, answer} for the cheap-router cost comparison.
 client_id: gcp-platform-support
 name: "Cloud Platform Support"
 branding:
@@ -17,10 +17,17 @@ corpus:
     chunk_size: 512
     overlap: 64
 agent:
+  mode: pipeline
   model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/gcp-platform-support.md
+  system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   effort: low
+  # Retrieval below this similarity is discarded before the model sees it.
+  retrieval_drop_floor: 0.3
+  # The best surviving hit being weaker than this forces escalation (D2).
+  escalate_below: 0.45
+  # The cheap scorer's own groundedness confidence, below which we escalate.
+  confidence_threshold: 0.6
   tools:
     - search_docs
     - get_document

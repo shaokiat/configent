@@ -20,10 +20,13 @@ class _FakeDB:
 
     Real SQLAlchemy assigns the Conversation.id Python-side default during
     flush; this fake mimics that (real flush is a no-op here) so callers see
-    the same id-after-flush behavior."""
+    the same id-after-flush behavior. `commit` is tracked rather than ignored:
+    a new conversation must be committed, not just flushed, or the pipeline's
+    independent session cannot see it as an FK parent (D3)."""
 
     def __init__(self):
         self.conversations: dict[str, Conversation] = {}
+        self.commits = 0
 
     def add(self, obj):
         if isinstance(obj, Conversation):
@@ -33,6 +36,9 @@ class _FakeDB:
 
     async def flush(self):
         pass
+
+    async def commit(self):
+        self.commits += 1
 
     async def get(self, model, ident):
         if model is Conversation:
@@ -52,6 +58,9 @@ async def test_prepare_conversation_creates_new_for_client_a():
 
     assert history == []
     assert db.conversations[conv_id].client_id == "acme-fab"
+    # Committed, not just flushed: runs.conversation_id is an FK written from a
+    # separate session, which cannot see an uncommitted parent.
+    assert db.commits == 1
 
 
 @pytest.mark.asyncio
