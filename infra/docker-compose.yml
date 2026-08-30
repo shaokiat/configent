@@ -55,8 +55,10 @@ services:
     ports:
       - "9000:9000"
     environment:
-      FAIL_RATE: "0"
-      LATENCY_MS: "0"
+      # Overridable from the shell so the failure demos need no file edit:
+      #   FAIL_RATE=1.0 docker compose -f infra/docker-compose.yml up -d mockticket
+      FAIL_RATE: "${FAIL_RATE:-0}"
+      LATENCY_MS: "${LATENCY_MS:-0}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz')"]
       interval: 10s

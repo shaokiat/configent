@@ -8,6 +8,9 @@ class BrandingConfig(BaseModel):
     primary_color: str
     assistant_name: str
     suggested_questions: list[str] = Field(default_factory=list, max_length=5)
+    # Empty-state copy. Left unset the UI falls back to a generic line; a client whose
+    # demo has a point to make should say what it is here rather than in the frontend.
+    tagline: str | None = None
 
 
 class ChunkingConfig(BaseModel):

@@ -137,13 +137,27 @@ function stripMd(text: string): string {
 type CitePart = Extract<Part, { kind: "cite" }>;
 
 // Group consecutive text parts with the citations that immediately follow them
-// so citations render inline after their source paragraph, not as orphaned blocks
+// so citations render inline after their source paragraph, not as orphaned blocks.
+//
+// A group may only end at a markdown *block* boundary. The API returns one text block
+// per cited span, so a cited numbered list arrives as "1. " / cite / "item text. 2. " /
+// cite / ... — splitting on every citation would render each fragment as its own
+// markdown document and the list collapses into broken single-item lists. Citations
+// that land mid-block are held and rendered after the block completes.
+function endsBlock(text: string): boolean {
+  return /\n[ \t]*\n[ \t]*$/.test(text);
+}
+
 function groupParts(parts: Part[]): { text: string; cites: CitePart[] }[] {
   const groups: { text: string; cites: CitePart[] }[] = [];
   let cur = { text: "", cites: [] as CitePart[] };
   for (const part of parts) {
     if (part.kind === "text") {
-      if (cur.cites.length > 0) { groups.push(cur); cur = { text: "", cites: [] }; }
+      const boundary = endsBlock(cur.text) || /^[ \t]*\n[ \t]*\n/.test(part.text);
+      if (cur.cites.length > 0 && boundary) {
+        groups.push(cur);
+        cur = { text: "", cites: [] };
+      }
       cur.text += part.text;
     } else {
       cur.cites.push(part);
@@ -561,8 +575,9 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
               {branding.assistant_name.charAt(0)}
             </div>
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">{branding.assistant_name}</h2>
-            <p className="text-sm text-gray-500 dark:text-white/50 max-w-sm mb-8">
-              Ask me anything about {branding.name} — I answer from your documents with cited sources.
+            <p className="text-sm text-gray-500 dark:text-white/50 max-w-md mb-8 leading-relaxed">
+              {branding.tagline ??
+                `Ask me anything about ${branding.name} — I answer from your documents with cited sources.`}
             </p>
 
             {suggestions.length > 0 && (

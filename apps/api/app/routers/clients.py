@@ -92,6 +92,7 @@ async def list_clients():
                 "primary_color": cfg.branding.primary_color,
                 "assistant_name": cfg.branding.assistant_name,
                 "suggested_questions": cfg.branding.suggested_questions,
+                "tagline": cfg.branding.tagline,
             },
         }
         for cfg in registry.all()
@@ -210,6 +211,7 @@ async def get_client_branding(client_id: str):
         "logo": cfg.branding.logo,
         "assistant_name": cfg.branding.assistant_name,
         "suggested_questions": cfg.branding.suggested_questions,
+        "tagline": cfg.branding.tagline,
     }
 
 

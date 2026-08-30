@@ -520,9 +520,9 @@ async def _stream_pipeline_inner(
             "retrieve",
             started=t,
             reasoning=(
-                f"{len(hits)} passage(s) above the drop floor "
-                f"({cfg.agent.retrieval_drop_floor}); best similarity "
-                f"{retrieval_confidence:.2f}"
+                f"Best match: {hits[0].document_title}"
+                if hits
+                else f"Nothing above the drop floor ({cfg.agent.retrieval_drop_floor})"
             ),
             n_hits=len(hits),
             top_similarity=round(retrieval_confidence, 4),

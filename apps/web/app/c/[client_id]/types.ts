@@ -5,4 +5,5 @@ export interface BrandingData {
   logo: string;
   assistant_name: string;
   suggested_questions: string[];
+  tagline?: string | null;
 }
