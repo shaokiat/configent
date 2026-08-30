@@ -447,13 +447,63 @@ async def stream_pipeline(
     while the answer streams, then exactly one `done`. The `step` events are the audit
     trail and the thing the user watches — the same surface, which is why SSE was worth
     reusing rather than adding a polling endpoint.
+
+    On failure the stream emits `error` instead of `done`. The HTTP status was sent long
+    ago, so the SSE channel is the only way to tell the client anything went wrong — a
+    generator that simply stops looks identical to a completed turn from the browser's
+    side, which is the worst possible failure mode for a workflow whose whole claim is
+    that it is auditable.
+
+    `PipelineCrash` is deliberately not caught: the CRASH_AFTER injector exists to kill
+    the process, and a swallowed crash proves nothing about resume.
     """
+    recorders: list[RunRecorder] = []
+    try:
+        async for event in _stream_pipeline_inner(
+            user_message,
+            cfg=cfg,
+            client_id=client_id,
+            conversation_id=conversation_id,
+            db=db,
+            on_recorder=lambda r: recorders.append(r),
+        ):
+            yield event
+    except PipelineCrash:
+        raise
+    except anthropic.APIError as exc:
+        logger.exception("Anthropic API error during pipeline turn (client=%s)", client_id)
+        await db.rollback()
+        if recorders:
+            await recorders[-1].finish("failed")
+        yield ("error", {"message": f"Upstream API error: {exc.__class__.__name__}"})
+    except Exception:
+        # Detail stays in the logs; the client only ever sees a generic message.
+        logger.exception("Pipeline turn failed (client=%s)", client_id)
+        await db.rollback()
+        if recorders:
+            await recorders[-1].finish("failed")
+        yield ("error", {"message": "An internal error occurred. Please try again."})
+
+
+async def _stream_pipeline_inner(
+    user_message: str,
+    *,
+    cfg: ClientConfig,
+    client_id: str,
+    conversation_id: str | None,
+    db: AsyncSession,
+    on_recorder,
+) -> AsyncIterator[tuple[str, dict]]:
+    """The stage sequence itself. Wrapped by `stream_pipeline`, which owns error handling."""
     started = time.monotonic()
     conversation_id, history = await _prepare_conversation(db, client_id, conversation_id)
     db.add(Message(conversation_id=conversation_id, role="user", content=user_message))
     await db.flush()
 
     recorder = await RunRecorder.start(conversation_id, client_id)
+    # Handed to the wrapper so a failure can mark the run failed rather than leaving it
+    # stuck in "running" forever.
+    on_recorder(recorder)
     result = PipelineResult(conversation_id=conversation_id, run_id=recorder.run_id)
     aclient = anthropic.AsyncAnthropic()
     yield ("run", {"run_id": recorder.run_id, "conversation_id": conversation_id})
@@ -613,6 +663,10 @@ async def stream_pipeline(
         _maybe_crash("ticket")
         result.answer = _escalation_reply(ticket, ok)
         result.segments = [{"text": result.answer, "citations": []}]
+        # Emitted as a text event so a streaming client renders an escalation the same way
+        # it renders an answer. Without this the UI shows the step trail above an empty
+        # message bubble, which reads as a crash rather than a decision.
+        yield ("text", {"delta": result.answer})
 
     # ── persist + done ─────────────────────────────────────────────────────────
     db.add(

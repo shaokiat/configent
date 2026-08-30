@@ -177,3 +177,53 @@ def test_step_entries_carry_cost_and_latency():
     assert entry["tokens_in"] == 1000
     assert entry["cost_usd"] > 0
     assert recorder.steps == []
+
+
+# ── streaming contract ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_error_instead_of_done_when_a_stage_throws(cfg, monkeypatch):
+    """A generator that simply stops looks identical to a finished turn from the browser's
+    side. For a workflow whose claim is auditability, that is the worst failure mode."""
+
+    class _DB:
+        async def rollback(self):
+            self.rolled_back = True
+
+    async def _boom(*a, **k):
+        raise RuntimeError("retrieval exploded")
+
+    monkeypatch.setattr(pipeline, "_prepare_conversation", _boom)
+
+    events = [
+        e
+        async for e in pipeline.stream_pipeline(
+            "anything", cfg=cfg, client_id="gcp-platform-support",
+            conversation_id=None, db=_DB(),
+        )
+    ]
+    names = [name for name, _ in events]
+    assert names == ["error"]
+    assert "internal error" in events[0][1]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_deliberate_crash_is_not_swallowed_by_the_error_handler(cfg, monkeypatch):
+    """CRASH_AFTER exists to kill the process. A caught crash proves nothing about resume."""
+
+    class _DB:
+        async def rollback(self):
+            pass
+
+    async def _crash(*a, **k):
+        raise pipeline.PipelineCrash("CRASH_AFTER=retrieve")
+
+    monkeypatch.setattr(pipeline, "_prepare_conversation", _crash)
+
+    with pytest.raises(pipeline.PipelineCrash):
+        async for _ in pipeline.stream_pipeline(
+            "anything", cfg=cfg, client_id="gcp-platform-support",
+            conversation_id=None, db=_DB(),
+        ):
+            pass
