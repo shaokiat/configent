@@ -113,3 +113,63 @@ async def test_create_support_ticket_empty_subject_errors():
 
     result = await execute({"subject": "   ", "category": "other"})
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_create_escalation_ticket_is_deterministic_and_routes():
+    from app.tools.gcp_platform.create_escalation_ticket import execute
+
+    args = {
+        "subject": "Cloud Run instance quota increase needed in europe-west1",
+        "category": "quota_or_billing",
+        "product_area": "cloud_run",
+    }
+    first = await execute(args)
+    second = await execute(dict(args))
+
+    assert first["ticket_id"] == second["ticket_id"]
+    assert first["ticket_id"].startswith("PLATFORM-")
+    assert first["status"] == "open"
+    assert first["priority"] == "normal"  # default applied
+    assert first["queue"] == "platform-serverless"
+    assert first["eta_hours"] == 8
+
+
+@pytest.mark.asyncio
+async def test_create_escalation_ticket_queue_follows_product_area():
+    from app.tools.gcp_platform.create_escalation_ticket import execute
+
+    args = {"subject": "Binding looks correct but access is denied", "category": "account_config"}
+    gke = await execute({**args, "product_area": "gke"})
+    iam = await execute({**args, "product_area": "iam"})
+
+    assert gke["queue"] == "platform-kubernetes"
+    assert iam["queue"] == "platform-security"
+    # Same subject and category: routing must not change the ticket identity.
+    assert gke["ticket_id"] == iam["ticket_id"]
+
+
+@pytest.mark.asyncio
+async def test_create_escalation_ticket_incident_jumps_the_queue():
+    from app.tools.gcp_platform.create_escalation_ticket import execute
+
+    result = await execute(
+        {
+            "subject": "Autoscaler ignoring max instances in production",
+            "category": "incident",
+            "product_area": "cloud_run",
+            "priority": "high",
+        }
+    )
+    assert result["eta_hours"] == 2
+    assert result["priority"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_create_escalation_ticket_empty_subject_errors():
+    from app.tools.gcp_platform.create_escalation_ticket import execute
+
+    result = await execute(
+        {"subject": "   ", "category": "other", "product_area": "other"}
+    )
+    assert "error" in result

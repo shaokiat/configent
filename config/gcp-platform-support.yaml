@@ -1,0 +1,33 @@
+# GCP Platform Support — the primary client for the support-agent build.
+# See docs/support-agent-plan.md. W1-1 adds agent.mode / confidence_threshold /
+# retrieval_floor_hard; W3-7 splits agent.model into agent.models.{router,answer}.
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
+branding:
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
+  suggested_questions:
+    - "My Cloud Run container fails to start — what does the PORT error mean?"
+    - "Why won't my GKE node pool scale down after I deleted the workload?"
+    - "Can you raise my Cloud Run instance quota for europe-west1?"
+corpus:
+  source: corpora/gcp-platform-support/
+  chunking:
+    chunk_size: 512
+    overlap: 64
+agent:
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/gcp-platform-support.md
+  max_tokens: 2048
+  effort: low
+  tools:
+    - search_docs
+    - get_document
+    - create_escalation_ticket
+evals:
+  golden_set: evals/gcp-platform-support/golden.jsonl
+  judge_model: claude-sonnet-4-6
+limits:
+  rate_limit_per_minute: 60
+  daily_budget_usd: 2.00

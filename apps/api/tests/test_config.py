@@ -120,3 +120,13 @@ def test_config_unknown_tool_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="Unknown tool"):
         ConfigRegistry(config_dir=tmp_path)
+
+
+def test_gcp_platform_support_config_loads():
+    """The support-agent build's primary client (docs/support-agent-plan.md)."""
+    from app.config.registry import get_registry
+
+    cfg = get_registry().get("gcp-platform-support")
+    assert cfg.branding.assistant_name == "DeployBot"
+    assert "create_escalation_ticket" in cfg.agent.tools
+    assert cfg.corpus.source == "corpora/gcp-platform-support/"
