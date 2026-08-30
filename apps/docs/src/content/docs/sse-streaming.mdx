@@ -1,7 +1,7 @@
 ---
 title: SSE Streaming
 description: How agent responses stream from FastAPI to the Next.js frontend over Server-Sent Events.
-order: 9
+order: 12
 group: Request Path
 ---
 
@@ -15,15 +15,42 @@ SSE works over plain HTTP with no upgrade handshake and passes through any proxy
 
 Every frame is `event: <name>\ndata: <json>\n\n`.
 
-| Event | Payload | When |
-|---|---|---|
-| `tool` | `{name, status: "start"\|"end"}` | Before and after each tool call |
-| `text` | `{delta: str}` | Each text chunk from the model |
-| `citation` | `{index, source, title, cited_text}` | Each inline citation |
-| `done` | `{conversation_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit |
-| `error` | `{message: str}` | On any exception — replaces `done` |
+Both engines emit the same contract. `tool` frames come only from the loop; `run` and
+`step` frames come only from the pipeline. Everything else is shared.
 
-Example sequence for a single `search_docs` call:
+| Event | Payload | When | Engine |
+|---|---|---|---|
+| `run` | `{run_id, conversation_id}` | Once, before the first stage | pipeline |
+| `step` | `{seq, stage, status, reasoning, latency_ms, ts, …}` | As each stage finishes | pipeline |
+| `tool` | `{name, status: "start"\|"end"}` | Before and after each tool call | loop |
+| `text` | `{delta: str}` | Each text chunk from the model | both |
+| `citation` | `{index, source, title, cited_text}` | Each inline citation | both |
+| `done` | `{conversation_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit | both |
+| `error` | `{message: str}` | On any exception — replaces `done` | both |
+
+A pipeline `done` frame carries three extra fields the loop has no use for: `run_id`,
+`escalated`, and `ticket_id`.
+
+### The `step` event
+
+Stage-specific fields ride along in the same payload — `n_hits` and `top_similarity` on
+`retrieve`, `confidence` and `supported` on `score`, `n_citations` on `answer`,
+`category` and `priority` on `escalate`, `ticket_id` and `queue` on `ticket`. Model
+stages also carry `tokens_in`, `tokens_out`, and `cost_usd`.
+
+The payload is the same dict written to `Run.steps`, returned by the same call that
+persists it, so the stream and the durable record cannot disagree. See
+[Runs & Durability](/configent/docs/runs-and-durability).
+
+```
+event: step
+data: {"seq": 2, "stage": "score", "status": "ok", "reasoning": "The passage describes quota limits in general, not this project's.", "confidence": 0.05, "latency_ms": 812, "ts": "2026-08-30T14:22:07.145128+00:00", "cost_usd": 0.0011}
+```
+
+**Unknown events are dropped silently** by the frontend's `handleEvent`. That is why
+backend work on a new event type stays invisible until the client learns to render it.
+
+Example sequence for a single `search_docs` call in the loop:
 
 ```
 event: tool
@@ -44,6 +71,35 @@ data: {"delta": "should be replaced every 500 operating hours."}
 event: done
 data: {"conversation_id": "...", "cost_usd": 0.000312, "latency_ms": 1840, ...}
 ```
+
+A pipeline turn that escalates instead:
+
+```
+event: run
+data: {"run_id": "3f2b...", "conversation_id": "..."}
+
+event: step
+data: {"seq": 1, "stage": "retrieve", "status": "ok", "n_hits": 5, "top_similarity": 0.5031, ...}
+
+event: step
+data: {"seq": 2, "stage": "score", "status": "ok", "confidence": 0.05, "supported": false, ...}
+
+event: step
+data: {"seq": 3, "stage": "escalate", "status": "ok", "category": "quota_or_billing", "priority": "high", ...}
+
+event: step
+data: {"seq": 4, "stage": "ticket", "status": "ok", "ticket_id": "PLATFORM-1043", "queue": "platform-serverless", ...}
+
+event: text
+data: {"delta": "I can't answer that from the documentation — I've opened PLATFORM-1043."}
+
+event: done
+data: {"conversation_id": "...", "run_id": "3f2b...", "escalated": true, "ticket_id": "PLATFORM-1043", ...}
+```
+
+> **The escalation reply is a `text` event too.** A streaming client renders it exactly
+> like an answer. Without it the UI shows a step trail above an empty bubble, which reads
+> as a crash rather than a decision.
 
 ---
 

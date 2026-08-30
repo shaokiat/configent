@@ -1,7 +1,7 @@
 ---
 title: UI Architecture
 description: How the Next.js frontend is structured — the RSC/client boundary, how SSE streaming is consumed, and where conversation state lives.
-order: 13
+order: 16
 group: Frontend
 ---
 
@@ -70,6 +70,8 @@ for (;;) {
 
 | Event | Effect |
 |---|---|
+| `run` | Stores the `run_id` for the turn |
+| `step` | Appends a stage to the live step trail and to the message |
 | `tool start` | Shows a "Searching…" indicator below the last message |
 | `tool end` | Removes the indicator |
 | `text` | Appends the `delta` to the current assistant message |
@@ -77,7 +79,50 @@ for (;;) {
 | `done` | Stores `conversation_id`; attaches the cost and latency badge |
 | `error` | Renders the error string inside the assistant bubble |
 
+**Unknown events are dropped silently.** Backend work on a new event type stays invisible
+until a case is added here — which is why the pipeline's `step` events needed a frontend
+change to become visible at all.
+
 For the full SSE event contract, see [SSE Streaming](/configent/docs/sse-streaming).
+
+---
+
+## The step trail
+
+Pipeline turns render an audit trail above the reply. It is the deliverable, not
+decoration: it shows *why* a question was answered or escalated, which is what an
+escalation decision has to be able to justify.
+
+```typescript
+interface RunStep {
+  seq: number;
+  stage: string;         // retrieve | score | answer | escalate | ticket
+  status: string;
+  reasoning?: string;
+  latency_ms?: number;
+  // stage-specific: n_hits, top_similarity, confidence, n_citations, ticket_id
+}
+```
+
+`ChatPanel` keeps two copies of the same data, deliberately:
+
+- **`liveSteps`** — the turn currently streaming. Separate from the message so the trail
+  can render before the assistant has produced any text.
+- **`msg.steps`** — attached to the assistant message as each `step` arrives, so the trail
+  stays after the stream ends.
+
+`StepTrail` renders a collapsible timeline, open while live and collapsed afterwards.
+`STAGE_LABEL` maps stage names to human phrasing ("Scored the evidence"), and
+`stageDetail` renders the number that mattered for that stage — the confidence, the hit
+count, the ticket id. Escalated runs colour their trail differently from answered ones.
+
+The loop's "Searching…" tool indicator is suppressed whenever steps are present, so a
+pipeline turn reports progress one way rather than two.
+
+> **The trail survives a reload.** Steps live in the `runs` table, not on the message row,
+> and the assistant `Message` carries a `run_id` to join back through. Replaying a
+> conversation rehydrates `msg.steps` from that join. See
+> [Runs & Durability](/configent/docs/runs-and-durability).
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: Tools System
 description: How tools are defined, registered, and executed, plus how to add a new one.
-order: 6
+order: 9
 group: Request Path
 ---
 
@@ -99,6 +99,35 @@ The escalation tool for the Configent Support bot. When a question falls outside
 ```
 
 The system prompt instructs the model to file a ticket only when retrieval comes up empty — never as a substitute for searching. See [Adding a New Use Case](/configent/docs/adding-a-use-case) for the full build.
+
+### `create_escalation_ticket` (gcp-platform-support)
+
+The escalation tool for the support agent. Unlike the mock above, it makes a real HTTP
+POST to a separate service — see [Mock Ticket Service](/configent/docs/mock-ticket-service)
+for the service, its idempotency contract, and the chaos switches.
+
+```python
+# Input (drafted by the escalate stage, not by the answering model)
+{"subject": "Cloud Run instance quota increase needed in europe-west1, blocking a deploy",
+ "category": "quota_or_billing", "product_area": "cloud_run", "priority": "high"}
+
+# Output (the service assigns the id)
+{"ticket_id": "PLATFORM-1043", "status": "open", "queue": "platform-serverless",
+ "eta_hours": 8, "url": "https://platform.internal.example/tickets/PLATFORM-1043", ...}
+```
+
+Two things make it unlike every other tool on this page:
+
+**Its `DEFINITION` is never sent to a model.** This client runs
+[Pipeline Mode](/configent/docs/pipeline-mode), where Python calls the executor directly at
+one call site. The answering model's request has no `tools` key at all — asserted in a
+test, not left to inspection. The definition stays in the file because the tool is
+registered like any other and the schema documents the contract.
+
+**It takes `run_id` and `stage_seq`.** They form the `Idempotency-Key`. Both are
+keyword-only with defaults, so the free-form loop — which has no run — can still call the
+tool; without a `run_id` no key is sent, which is correct, because without a run there is
+nothing to deduplicate against.
 
 ### `pricing_lookup` (acme-fab)
 

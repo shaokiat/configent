@@ -54,8 +54,13 @@ Create `apps/api/.env`:
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
 VOYAGE_API_KEY=pa-...
-DATABASE_URL=postgresql://configent:configent@localhost:5432/configent
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/configent
+TICKET_API_URL=http://localhost:9000
 ```
+
+`.env.example` at the repo root is the source of truth for this list. `DATABASE_URL` needs
+the `+asyncpg` driver — the API's engine is async. `TICKET_API_URL` points at the mock
+ticket service that pipeline clients POST escalations to; `make dev` starts it.
 
 ## 4. Write your first config
 
@@ -144,7 +149,8 @@ cd apps/web
 npm run dev
 ```
 
-Open `http://localhost:3000`. Select `my-assistant` from the client dropdown and start chatting.
+Open `http://localhost:3000`. The landing page lists every client the registry loaded, so
+`my-assistant` appears as a card once the API is running. Click it to start chatting.
 
 ---
 
@@ -165,11 +171,15 @@ When you sent your first message, the agent loop:
 The loop ran in **one iteration** (one tool call, one final response). For complex questions
 it may run multiple iterations up to the hardcoded limit of 8.
 
+> **That's `mode: loop`, the default.** A client can instead set `agent.mode: pipeline`, which
+> replaces the free-form loop with fixed stages and moves the escalation decision out of the
+> model and into Python. See [Config Reference](/configent/docs/config-reference) for the keys.
+
 ---
 
 ## Next steps
 
 - [Core Concepts](/configent/docs/concepts) — plain-English primer on RAG, embeddings, chunking, the agent loop, and citations
 - [Config Reference](/configent/docs/config-reference) — every key explained with types and defaults
-- [Examples](/configent/docs/examples) — the two live client configs from the repo
-- [How It Works](/configent/how-it-works) — architecture walkthrough and design decisions
+- [Examples](/configent/docs/examples) — the live client configs from the repo
+- [Architecture](/configent/#architecture) — the pipeline diagram, the stage walkthrough, and the design decisions

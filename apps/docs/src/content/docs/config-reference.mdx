@@ -77,27 +77,44 @@ This requires a `VOYAGE_API_KEY` environment variable. The model is not configur
 
 ## `agent`
 
-Controls the LLM, system prompt, and tool list for this client's agent loop.
+Controls the engine, LLM, system prompt, and tool list for this client's agent.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `agent.mode` | `string` | `"loop"` | Which engine serves this client. `"loop"` is the free-form tool-use loop; `"pipeline"` is the fixed-stage engine with the escalation branch in Python. See [Pipeline Mode](/configent/docs/pipeline-mode). |
 | `agent.model` | `string` | — | Claude model ID (e.g. `claude-haiku-4-5-20251001`, what all shipped clients use). |
 | `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/configent-support.md`). Loaded at runtime, not inlined. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens per API call. |
 | `agent.effort` | `string` | `"medium"` | Claude extended-thinking effort level. One of `"low"`, `"medium"`, `"high"`, `"max"`. **Only applied on Sonnet 4+ and Opus 4+** — it is silently skipped for Haiku models (which all shipped clients use), so it is effectively inert today. See note below. |
 | `agent.tools` | `list[string]` | `[]` | Ordered list of tool names to register for this client. Only tools listed here are available to the agent. Unknown names fail at startup. |
+| `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. |
+| `agent.escalate_below` | `float` | `0.45` | Similarity below which the best surviving chunk **forces escalation**. Pipeline mode only. |
+| `agent.confidence_threshold` | `float` | `0.6` | Groundedness score below which the scoring stage **forces escalation**. Pipeline mode only. |
 
 ```yaml
 agent:
+  mode: pipeline
   model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/configent-support.md
+  system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   effort: low
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
   tools:
     - search_docs
     - get_document
-    - create_support_ticket
+    - create_escalation_ticket
 ```
+
+> **`escalate_below` must exceed `retrieval_drop_floor`.** They act on the same number at
+> different points: the drop floor discards, the escalate floor routes. If the escalate
+> floor were the lower of the two, it could never fire — every surviving hit is at or above
+> the drop floor by construction. The config validator rejects that relationship at
+> startup. See [Escalation Guardrail](/configent/docs/escalation-guardrail).
+
+> **Pipeline mode expects three prompt files.** `agent.system_prompt_file` points at
+> `answer.md`; `score.md` and `ticket_draft.md` must sit beside it in the same directory.
 
 > **`effort` and Haiku:** extended thinking is only supported on Sonnet 4+ and Opus 4+. The loop
 > (`loop.py`) checks the model name and only sends `effort`/`thinking` when the model is *not* Haiku.
@@ -107,7 +124,8 @@ agent:
 > Anthropic's ephemeral cache. This is unconditional — no config needed. The loop sorts tool definitions alphabetically before each request to ensure a stable cache prefix.
 
 > **Max iterations:** The agent loop runs for a maximum of **8 iterations** regardless of config.
-> If the loop hasn't completed in 8 tool-call cycles it raises an error.
+> If the loop hasn't completed in 8 tool-call cycles it raises an error. Pipeline mode has no
+> iteration cap — its stage sequence is fixed.
 
 ### Available tools
 
@@ -116,6 +134,7 @@ agent:
 | `search_docs` | Shared | Semantic search over the client's pgvector namespace. Returns `search_result` blocks with citations enabled. Accepts `query` (required) and `k` (default 5, max 8). |
 | `get_document` | Shared | Retrieves full document text by `document_id` (as returned by `search_docs`). Use when a chunk doesn't contain enough context. |
 | `create_support_ticket` | `configent-support` | Files a deterministic mock support ticket (stable `ticket_id`, status, target response time) when the docs can't answer a question. The escalation path for the Configent Support bot. |
+| `create_escalation_ticket` | `gcp-platform-support` | POSTs a ticket to the [mock ticket service](/configent/docs/mock-ticket-service) over HTTP with an idempotency key; the service assigns the id. In pipeline mode its definition is never sent to a model — Python calls the executor directly. |
 | `pricing_lookup` | `acme-fab` | Returns unit price, volume discount, and lead time for an Acme part number and quantity. |
 | `coverage_check` | `meridian-insurance` | Returns a structured coverage verdict for a named claim scenario against the HomeShield Plus policy. |
 

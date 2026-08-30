@@ -1,0 +1,99 @@
+---
+title: Runs & Durability
+description: The Run row, the step trail it holds, and why those writes commit on a session of their own.
+order: 7
+group: Request Path
+---
+
+A pipeline turn creates one `runs` row and appends one step to it per completed stage. That row is the audit trail the UI renders and the record a resumed run will replay from.
+
+```python
+class Run(Base):
+    id: str
+    conversation_id: str      # FK → conversations, CASCADE
+    client_id: str            # denormalised, so lookups scope without a join
+    status: str               # running | completed | failed
+    current_stage: str | None
+    steps: list               # JSON — the stage-level audit trail
+    state: dict               # JSON — outputs a resume needs (e.g. ticket_id)
+```
+
+`steps` is a JSON column rather than a second table. Nothing at this scale queries steps across runs, and a resume reads exactly one row.
+
+## Why the writes need their own session
+
+The request-scoped session from `get_db` commits once at the end of a turn and rolls back on any failure. Run state written through it would be erased by exactly the crash it exists to survive.
+
+So durability writes go through `checkpoint_session()` instead:
+
+```python
+@asynccontextmanager
+async def checkpoint_session() -> AsyncIterator[AsyncSession]:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+```
+
+Each call opens its own connection, commits immediately, and closes. The cost is one connection per checkpoint. At the rate a pipeline checkpoints — once per stage — that is cheaper than the alternative, which is losing the audit trail.
+
+> **The foreign-key trap.** `Run.conversation_id` references `conversations`. An independent session cannot see a row the request session has only *flushed*, so the conversation must be **committed** before the pipeline starts, or the first `Run` insert fails on a parent that isn't visible yet.
+
+## A step entry
+
+`RunRecorder.step()` builds the entry, appends it, persists the whole list, and returns the same dict as the SSE payload — one shape, one write, no chance of the stream and the record disagreeing.
+
+```json
+{
+  "seq": 2,
+  "stage": "score",
+  "status": "ok",
+  "reasoning": "The passage describes quota limits in general, not this project's.",
+  "confidence": 0.05,
+  "latency_ms": 812,
+  "ts": "2026-08-30T14:22:07.145128+00:00",
+  "tokens_in": 1203,
+  "tokens_out": 88,
+  "cost_usd": 0.0011
+}
+```
+
+Stage-specific fields ride along in the same entry: `n_hits` and `top_similarity` on `retrieve`, `n_citations` on `answer`, `category` and `priority` on `escalate`, `ticket_id` and `queue` on `ticket`.
+
+## Runs vs. traces
+
+Both record what happened. They answer different questions.
+
+| | `Trace` | `Run.steps` |
+|---|---|---|
+| Granularity | One row per API or tool call | One entry per pipeline stage |
+| Answers | "What did this call cost?" | "Why did this turn escalate?" |
+| Written by | The request session | `checkpoint_session()` |
+| Survives a crash | No | Yes |
+
+The pipeline writes both. Traces stay span-level and roll up into conversation cost totals; steps stay stage-level and drive the UI.
+
+## Reloading a conversation
+
+The assistant `Message` row carries a `run_id`. Steps live in `runs`, not on the message, so replaying a conversation joins back through that column to show the trail again.
+
+That join is why the step trail survives a page reload rather than existing only for the life of one SSE stream.
+
+## What crashing proves today
+
+`CRASH_AFTER=<stage>` kills the process immediately after a named stage:
+
+```python
+def _maybe_crash(stage: str) -> None:
+    if os.getenv("CRASH_AFTER") == stage:
+        raise PipelineCrash(f"CRASH_AFTER={stage}")
+```
+
+A named injection point rather than `kill -9`: the process still dies with uncommitted work and an open SSE connection, so the failure mode is identical — only the timing is chosen, which makes it assertable in a test.
+
+Running `CRASH_AFTER=score` leaves `retrieve(ok) → score(ok)` durable, with the reasoning and confidence intact. The run sits at status `running` with no way to continue it.
+
+> **Resume isn't built yet.** Week 1 proves the state survives; week 2 adds the endpoint that picks it up, skips the completed stages, and finishes the run. Today a crashed run is a durable record and a dead end.
