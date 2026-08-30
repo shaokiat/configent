@@ -111,13 +111,20 @@ interface HistoryMessage {
   role: "user" | "assistant";
   text?: string;
   segments?: HistorySegment[];
+  // Present for pipeline turns: the stage trail, replayed from the run that produced
+  // this message so a reload does not lose the audit trail.
+  steps?: RunStep[];
 }
 
 function historyToMessages(history: HistoryMessage[]): ChatMessage[] {
   return history.map((m) =>
     m.role === "user"
       ? { role: "user", text: m.text ?? "" }
-      : { role: "assistant", parts: segmentsToParts(m.segments ?? []) }
+      : {
+          role: "assistant",
+          parts: segmentsToParts(m.segments ?? []),
+          ...(m.steps?.length ? { steps: m.steps } : {}),
+        }
   );
 }
 

@@ -98,6 +98,11 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(32))
     content: Mapped[dict] = mapped_column(JSON)
     citations: Mapped[dict] = mapped_column(JSON, default=dict)
+    # The pipeline run that produced this message, when there was one. Nullable because
+    # loop-mode clients have no run. The steps themselves are NOT copied here — `Run` stays
+    # the single source of truth, so a crashed run keeps its trail even though no message
+    # was ever written. This is only the join.
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     conversation: Mapped["Conversation"] = relationship(

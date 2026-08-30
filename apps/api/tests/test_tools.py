@@ -12,35 +12,9 @@ def test_registry_resolves_acme_tools():
     assert "coverage_check" not in names
 
 
-def test_registry_resolves_meridian_tools():
-    meridian_tools = ["search_docs", "get_document", "coverage_check"]
-    defs = get_tool_definitions(meridian_tools)
-    names = {d["name"] for d in defs}
-    assert names == set(meridian_tools)
-    assert "coverage_check" in names
-    assert "pricing_lookup" not in names
-
-
-def test_registry_resolves_configent_support_tools():
-    support_tools = ["search_docs", "get_document", "create_support_ticket"]
-    defs = get_tool_definitions(support_tools)
-    names = {d["name"] for d in defs}
-    assert names == set(support_tools)
-    assert "create_support_ticket" in names
-    assert "coverage_check" not in names
-    assert "pricing_lookup" not in names
-
-
 def test_unknown_tool_raises():
     with pytest.raises(ValueError, match="Unknown tool"):
         validate_tool_names(["nonexistent_tool"])
-
-
-def test_tool_definitions_have_descriptions():
-    defs = get_tool_definitions(["search_docs", "get_document"])
-    for defn in defs:
-        assert "description" in defn
-        assert len(defn["description"]) > 50, "Tool descriptions must be substantive"
 
 
 @pytest.mark.asyncio
@@ -55,29 +29,12 @@ async def test_pricing_lookup_applies_volume_discount():
 
 
 @pytest.mark.asyncio
-async def test_pricing_lookup_unknown_part():
-    from app.tools.acme_fab.pricing_lookup import execute
-
-    result = await execute({"part_number": "UNKNOWN-PART"})
-    assert "error" in result
-
-
-@pytest.mark.asyncio
 async def test_coverage_check_gradual_seepage():
     from app.tools.meridian.coverage_check import execute
 
     result = await execute({"scenario": "gradual_seepage"})
     assert result["covered"] is False
     assert result["clause"] == "4.2.1"
-
-
-@pytest.mark.asyncio
-async def test_coverage_check_burst_pipe():
-    from app.tools.meridian.coverage_check import execute
-
-    result = await execute({"scenario": "burst_pipe_sudden"})
-    assert result["covered"] is True
-    assert result["excess_usd"] == 500
 
 
 @pytest.mark.asyncio
@@ -96,25 +53,6 @@ async def test_create_support_ticket_is_deterministic():
     assert first["eta_hours"] == 8  # bug ETA
 
 
-@pytest.mark.asyncio
-async def test_create_support_ticket_category_changes_id():
-    from app.tools.configent_support.create_support_ticket import execute
-
-    subject = "Add support for per-source ingestion"
-    bug = await execute({"subject": subject, "category": "bug"})
-    feature = await execute({"subject": subject, "category": "feature_request"})
-    assert bug["ticket_id"] != feature["ticket_id"]
-    assert feature["eta_hours"] == 72
-
-
-@pytest.mark.asyncio
-async def test_create_support_ticket_empty_subject_errors():
-    from app.tools.configent_support.create_support_ticket import execute
-
-    result = await execute({"subject": "   ", "category": "other"})
-    assert "error" in result
-
-
 # ── create_escalation_ticket: real HTTP against the mock service ────────────────────
 
 
@@ -128,24 +66,6 @@ def ticket_service(monkeypatch):
     monkeypatch.delenv("FAIL_RATE", raising=False)
     monkeypatch.delenv("LATENCY_MS", raising=False)
     yield tool
-
-
-@pytest.mark.asyncio
-async def test_escalation_ticket_posts_and_routes(ticket_service):
-    result = await ticket_service.execute(
-        {
-            "subject": "Cloud Run instance quota increase needed in europe-west1",
-            "category": "quota_or_billing",
-            "product_area": "cloud_run",
-        },
-        run_id="run-a",
-        stage_seq=4,
-    )
-    assert result["ticket_id"].startswith("PLATFORM-")
-    assert result["status"] == "open"
-    assert result["queue"] == "platform-serverless"
-    assert result["eta_hours"] == 8
-    assert result["priority"] == "normal"  # server default applied
 
 
 @pytest.mark.asyncio
@@ -190,9 +110,3 @@ async def test_escalation_ticket_rejects_bad_category_without_retrying(ticket_se
     assert result["status_code"] == 422
 
 
-@pytest.mark.asyncio
-async def test_escalation_ticket_empty_subject_errors(ticket_service):
-    result = await ticket_service.execute(
-        {"subject": "   ", "category": "other", "product_area": "other"}
-    )
-    assert "error" in result

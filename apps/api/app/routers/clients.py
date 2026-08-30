@@ -18,7 +18,7 @@ from app.agent.pipeline import run_pipeline, stream_pipeline
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
-from app.models import Conversation, Message
+from app.models import Conversation, Message, Run
 
 router = APIRouter(prefix="/api")
 
@@ -234,8 +234,19 @@ async def get_conversation_history(
         .where(Message.conversation_id == conversation_id)
         .order_by(Message.id)
     )
+    rows = list(result.scalars().all())
+
+    # Pipeline turns carry a run whose `steps` are the audit trail. Loaded in one query
+    # and attached by id rather than copied onto the message at write time, so `runs`
+    # stays the single source of truth for what the agent actually did.
+    run_ids = {m.run_id for m in rows if m.run_id}
+    steps_by_run: dict[str, list] = {}
+    if run_ids:
+        runs = await db.execute(select(Run).where(Run.id.in_(run_ids)))
+        steps_by_run = {r.id: (r.steps or []) for r in runs.scalars().all()}
+
     messages: list[dict] = []
-    for m in result.scalars().all():
+    for m in rows:
         if m.role == "user":
             if isinstance(m.content, str):
                 messages.append({"role": "user", "text": m.content})
@@ -243,7 +254,10 @@ async def get_conversation_history(
         elif m.role == "assistant":
             segments = (m.citations or {}).get("segments")
             if segments:
-                messages.append({"role": "assistant", "segments": segments})
+                entry: dict = {"role": "assistant", "segments": segments}
+                if steps := steps_by_run.get(m.run_id or ""):
+                    entry["steps"] = steps
+                messages.append(entry)
             # else: a tool_use-only assistant message — skip.
 
     return {"conversation_id": conversation_id, "messages": messages}

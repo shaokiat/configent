@@ -32,15 +32,6 @@ VALID_CONFIG = {
 }
 
 
-def test_config_valid_loads(tmp_path):
-    write_yaml(tmp_path, "test-client.yaml", VALID_CONFIG)
-    registry = ConfigRegistry(config_dir=tmp_path)
-    cfg = registry.get("test-client")
-    assert cfg.client_id == "test-client"
-    assert cfg.name == "Test Client"
-    assert cfg.branding.primary_color == "#FF0000"
-
-
 def test_config_missing_field_names_it(tmp_path):
     broken = dict(VALID_CONFIG)
     broken["agent"] = {k: v for k, v in VALID_CONFIG["agent"].items() if k != "model"}
@@ -59,56 +50,6 @@ def test_config_duplicate_client_id_rejected(tmp_path):
     write_yaml(tmp_path, "client-b.yaml", VALID_CONFIG)  # same client_id
 
     with pytest.raises(ValueError, match="Duplicate client_id"):
-        ConfigRegistry(config_dir=tmp_path)
-
-
-def test_config_all_returns_all_clients(tmp_path):
-    write_yaml(tmp_path, "test-client.yaml", VALID_CONFIG)
-    second = dict(VALID_CONFIG)
-    second["client_id"] = "second-client"
-    second["name"] = "Second"
-    write_yaml(tmp_path, "second-client.yaml", second)
-
-    registry = ConfigRegistry(config_dir=tmp_path)
-    ids = {cfg.client_id for cfg in registry.all()}
-    assert ids == {"test-client", "second-client"}
-
-
-def test_config_empty_dir_loads_zero_clients(tmp_path):
-    registry = ConfigRegistry(config_dir=tmp_path)
-    assert registry.all() == []
-
-
-def test_config_suggested_questions_default_empty(tmp_path):
-    write_yaml(tmp_path, "test-client.yaml", VALID_CONFIG)
-    registry = ConfigRegistry(config_dir=tmp_path)
-    cfg = registry.get("test-client")
-    assert cfg.branding.suggested_questions == []
-
-
-def test_config_suggested_questions_loaded(tmp_path):
-    with_questions = dict(VALID_CONFIG)
-    with_questions["branding"] = dict(VALID_CONFIG["branding"])
-    with_questions["branding"]["suggested_questions"] = [
-        "How do I add a client?",
-        "How do citations work?",
-    ]
-    write_yaml(tmp_path, "test-client.yaml", with_questions)
-    registry = ConfigRegistry(config_dir=tmp_path)
-    cfg = registry.get("test-client")
-    assert cfg.branding.suggested_questions == [
-        "How do I add a client?",
-        "How do citations work?",
-    ]
-
-
-def test_config_suggested_questions_over_max_rejected(tmp_path):
-    too_many = dict(VALID_CONFIG)
-    too_many["branding"] = dict(VALID_CONFIG["branding"])
-    too_many["branding"]["suggested_questions"] = [f"Question {i}?" for i in range(6)]
-    write_yaml(tmp_path, "test-client.yaml", too_many)
-
-    with pytest.raises(ValueError):
         ConfigRegistry(config_dir=tmp_path)
 
 

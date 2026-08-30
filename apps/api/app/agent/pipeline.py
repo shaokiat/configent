@@ -675,6 +675,9 @@ async def _stream_pipeline_inner(
             role="assistant",
             content=result.answer,
             citations={"segments": result.segments},
+            # The join back to this turn's audit trail, so reloading a conversation can
+            # show the steps again (the steps live in `runs`, not here).
+            run_id=recorder.run_id,
         )
     )
     await _accrue_totals(db, conversation_id, result.usage)

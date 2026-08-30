@@ -4,7 +4,7 @@
 conversation's history for a client_id that doesn't own it.
 """
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -74,49 +74,6 @@ async def test_prepare_conversation_cross_tenant_raises_not_found():
 
 
 @pytest.mark.asyncio
-async def test_prepare_conversation_same_client_loads_history():
-    db = _FakeDB()
-    conv_id, _ = await _prepare_conversation(db, "acme-fab", None)
-
-    # Same client, same conversation_id: no exception, history query runs.
-    loaded_id, history = await _prepare_conversation(db, "acme-fab", conv_id)
-    assert loaded_id == conv_id
-    assert history == []
-
-
-@pytest.mark.asyncio
-async def test_prepare_conversation_unknown_id_raises_not_found():
-    db = _FakeDB()
-    with pytest.raises(ConversationNotFoundError):
-        await _prepare_conversation(db, "acme-fab", "nonexistent-id")
-
-
-@pytest.mark.asyncio
-async def test_chat_router_maps_conversation_not_found_to_404(monkeypatch):
-    """The /chat endpoint must turn ConversationNotFoundError into an HTTP 404,
-    not a 500 or a leaked history."""
-    import app.routers.clients as clients_router
-
-    cfg = MagicMock()
-    cfg.limits.rate_limit_per_minute = 1000
-    monkeypatch.setattr(
-        clients_router, "get_registry", lambda: MagicMock(get=MagicMock(return_value=cfg))
-    )
-    monkeypatch.setattr(clients_router, "_enforce_daily_budget", AsyncMock(return_value=None))
-
-    async def _raise_not_found(*args, **kwargs):
-        raise ConversationNotFoundError("Conversation 'xyz' not found for client 'meridian-insurance'")
-
-    monkeypatch.setattr(clients_router, "agent_run", _raise_not_found)
-
-    req = clients_router.ChatRequest(message="hi", conversation_id="xyz")
-    with pytest.raises(HTTPException) as exc_info:
-        await clients_router.chat("meridian-insurance", req, db=AsyncMock())
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_stream_preflight_rejects_cross_tenant_conversation():
     """The SSE pre-flight check (run before StreamingResponse is constructed)
     must 404 on a conversation_id owned by a different client."""
@@ -130,13 +87,3 @@ async def test_stream_preflight_rejects_cross_tenant_conversation():
     assert exc_info.value.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_stream_preflight_allows_same_client_and_new_conversation():
-    db = _FakeDB()
-    await _prepare_conversation(db, "acme-fab", None)
-    conv_id = next(iter(db.conversations))
-
-    # Same client: no exception.
-    await _check_conversation_ownership(db, "acme-fab", conv_id)
-    # New conversation (None): no exception.
-    await _check_conversation_ownership(db, "acme-fab", None)

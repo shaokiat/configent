@@ -7,7 +7,6 @@ reason. These checks are cheap; run them on every push.
 """
 from pathlib import Path
 
-import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parents[3]
@@ -22,30 +21,26 @@ def _facts():
             yield client, sentinel_id, entry
 
 
-@pytest.mark.parametrize(
-    ("client", "sentinel_id", "entry"),
-    [pytest.param(c, s, e, id=s) for c, s, e in _facts()],
-)
-def test_sentinel_appears_verbatim_in_its_document(client, sentinel_id, entry):
-    doc = REPO_ROOT / "corpora" / client / entry["document"]
-    assert doc.exists(), f"{sentinel_id}: {doc} does not exist"
-    assert entry["fact"] in doc.read_text(), (
-        f"{sentinel_id} is not verbatim in {entry['document']}. Either the corpus was "
-        f"edited or the sentinel was paraphrased; fix whichever is wrong."
-    )
+def test_sentinels_appear_verbatim_in_their_documents():
+    """Ground truth for every retrieval and citation assertion. A sentinel that has
+    drifted out of its corpus turns those tests into ones that pass for the wrong
+    reason."""
+    missing = []
+    for client, sentinel_id, entry in _facts():
+        doc = REPO_ROOT / "corpora" / client / entry["document"]
+        if not doc.exists() or entry["fact"] not in doc.read_text():
+            missing.append(f"{sentinel_id} ({entry['document']})")
+    assert not missing, f"sentinels not verbatim in their document: {missing}"
 
 
-@pytest.mark.parametrize(
-    ("client", "sentinel_id", "entry"),
-    [pytest.param(c, s, e, id=s) for c, s, e in _facts()],
-)
-def test_sentinel_does_not_leak_into_another_corpus(client, sentinel_id, entry):
-    """Cross-client isolation depends on a sentinel being unique to one corpus."""
-    for other in (REPO_ROOT / "corpora").iterdir():
-        if not other.is_dir() or other.name == client:
-            continue
-        for doc in other.glob("*.md"):
-            assert entry["fact"] not in doc.read_text(), (
-                f"{sentinel_id} leaked into {other.name}/{doc.name} — the isolation tests "
-                f"built on it would pass vacuously."
-            )
+def test_sentinels_do_not_leak_across_corpora():
+    """Cross-client isolation depends on each sentinel being unique to one corpus."""
+    leaks = []
+    for client, sentinel_id, entry in _facts():
+        for other in (REPO_ROOT / "corpora").iterdir():
+            if not other.is_dir() or other.name == client:
+                continue
+            for doc in other.glob("*.md"):
+                if entry["fact"] in doc.read_text():
+                    leaks.append(f"{sentinel_id} -> {other.name}/{doc.name}")
+    assert not leaks, f"sentinels leaked across corpora: {leaks}"
