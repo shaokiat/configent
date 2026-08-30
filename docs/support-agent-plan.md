@@ -1,6 +1,6 @@
 # Support Agent: four-week implementation plan
 
-**Status:** approved, not started · **Drafted:** 2026-08-30
+**Status:** week 1 complete (gates G1.1–G1.4 verified 2026-08-30) · **Drafted:** 2026-08-30
 
 The primary reference during implementation. Decisions referenced as `D1`–`D8` and
 `P1`–`P11` live in [`docs/decisions.md`](decisions.md); scenario assertions live in
@@ -85,15 +85,25 @@ Structured outputs are supported on Haiku 4.5, so the cheap scoring model works 
 
 ### Exit gate — all four must pass
 
-- [ ] **G1.1** An answerable question produces four `step` SSE events (`retrieve`,
+- [x] **G1.1** An answerable question produces four `step` SSE events (`retrieve`,
       `score`, `answer`, `done`) followed by a cited answer.
-- [ ] **G1.2** An unanswerable question produces `retrieve`, `score`, `escalate`,
+      *Verified 2026-08-30: 3 steps + `done`, 3 citations, 7.0s.*
+- [x] **G1.2** An unanswerable question produces `retrieve`, `score`, `escalate`,
       `ticket` steps; the score step shows the confidence value and the threshold it
       failed; a ticket exists in the mock service, created by an HTTP POST.
-- [ ] **G1.3** The answering model's request payload contains no `create_escalation_ticket`
+      *Verified: PLATFORM-1043, `quota_or_billing`, priority `high`, $0.014, 5.0s.
+      Note which signal fired — retrieval was 0.50 (above `escalate_below`), and
+      groundedness 0.05 forced the branch. Exactly the "retrieved the right document,
+      which does not contain the answer" case the second signal exists for.*
+- [x] **G1.3** The answering model's request payload contains no `create_escalation_ticket`
       tool definition. Asserted in a test, not by inspection.
-- [ ] **G1.4** Killing the API mid-run leaves the completed steps in the `Run` row
+      *Verified: payload keys are `model`, `max_tokens`, `system`, `messages` — no
+      `tools` key at all, and the string "escalat" appears nowhere in the request.*
+- [x] **G1.4** Killing the API mid-run leaves the completed steps in the `Run` row
       (proves D3 — this is the week-2 foundation and is cheap to check now).
+      *Verified: `CRASH_AFTER=score` left `retrieve(ok) -> score(ok)` durable with
+      reasoning and confidence 0.95 intact. The run sits at status `running` with no
+      way to continue it — which is precisely what W2 builds.*
 
 ### Tasks
 
