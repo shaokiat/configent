@@ -35,10 +35,10 @@ agent:
   escalate_below: 0.45
   # The cheap scorer's own groundedness confidence, below which we escalate.
   confidence_threshold: 0.6
-  tools:
-    - search_docs
-    - get_document
-    - create_escalation_ticket
+  # No `tools:` key, deliberately. This client runs the pipeline engine, where
+  # retrieval is a function call and the ticket executor is invoked from Python.
+  # `agent.tools` is read only by loop.py, so anything listed here would be dead
+  # config that reads like a capability. See docs: The Answer Pipeline → Retrieval.
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
   judge_model: claude-sonnet-4-6

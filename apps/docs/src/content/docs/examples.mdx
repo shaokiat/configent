@@ -66,10 +66,7 @@ agent:
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
   confidence_threshold: 0.6
-  tools:
-    - search_docs
-    - get_document
-    - create_escalation_ticket
+  # No `tools:` key — see the note below.
 
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
@@ -80,8 +77,10 @@ limits:
   daily_budget_usd: 2.00
 ```
 
-> **`agent.tools` is documentation here.** In pipeline mode retrieval is deterministic and the
-> ticket call is made from Python, so no tool definition is ever sent to a model for this client.
+> **No `agent.tools` key, deliberately.** In pipeline mode retrieval is a function call and the
+> ticket executor is invoked from Python, so no tool definition is ever sent to a model for this
+> client. `agent.tools` is read only by `loop.py`, so listing tools here would be dead config that
+> reads like a capability. See [Retrieval → Why not a retrieval agent tool?](/configent/docs/retrieval#why-not-a-retrieval-agent-tool).
 
 ---
 

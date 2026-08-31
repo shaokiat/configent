@@ -86,8 +86,8 @@ Controls the engine, LLM, system prompt, and tool list for this client's agent.
 | `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/configent-support.md`). Loaded at runtime, not inlined. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens per API call. |
 | `agent.effort` | `string` | `"medium"` | Claude extended-thinking effort level. One of `"low"`, `"medium"`, `"high"`, `"max"`. **Only applied on Sonnet 4+ and Opus 4+** — it is silently skipped for Haiku models (which all shipped clients use), so it is effectively inert today. See note below. |
-| `agent.tools` | `list[string]` | `[]` | Ordered list of tool names to register for this client. Only tools listed here are available to the agent. Unknown names fail at startup. |
-| `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. |
+| `agent.tools` | `list[string]` | `[]` | Ordered list of tool names to register for this client. Only tools listed here are available to the agent. Unknown names fail at startup. **Read by `loop.py` only** — omit it in `pipeline` mode, where retrieval is a function call and the ticket executor is invoked from Python. |
+| `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. Applied by the pipeline's `retrieve` stage; the loop's `search_docs` tool currently uses `search()`'s own `0.3` default instead. |
 | `agent.escalate_below` | `float` | `0.45` | Similarity below which the best surviving chunk **forces escalation**. Pipeline mode only. |
 | `agent.confidence_threshold` | `float` | `0.6` | Groundedness score below which the scoring stage **forces escalation**. Pipeline mode only. |
 
@@ -101,10 +101,7 @@ agent:
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
   confidence_threshold: 0.6
-  tools:
-    - search_docs
-    - get_document
-    - create_escalation_ticket
+  # No `tools:` key — pipeline mode never sends tool definitions.
 ```
 
 > **`escalate_below` must exceed `retrieval_drop_floor`.** They act on the same number at

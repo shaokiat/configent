@@ -69,5 +69,21 @@ def test_gcp_platform_support_config_loads():
 
     cfg = get_registry().get("gcp-platform-support")
     assert cfg.branding.assistant_name == "DeployBot"
-    assert "create_escalation_ticket" in cfg.agent.tools
     assert cfg.corpus.source == "corpora/gcp-platform-support/"
+
+
+def test_pipeline_clients_declare_no_tools():
+    """A pipeline client must not list tools.
+
+    `agent.tools` is read only by loop.py, so anything listed on a pipeline client is
+    dead config that reads like a capability. Retrieval is a function call and the
+    ticket executor is invoked from Python.
+    """
+    from app.config.registry import get_registry
+
+    for cfg in get_registry().all():
+        if cfg.agent.mode == "pipeline":
+            assert cfg.agent.tools == [], (
+                f"{cfg.client_id} runs the pipeline engine but lists "
+                f"{cfg.agent.tools} — those definitions are never sent to a model"
+            )

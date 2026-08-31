@@ -11,7 +11,7 @@ Its second return value is **signal 1** of the [guardrail](/configent/docs/escal
 
 ---
 
-## Contract
+## The flow
 
 ```python
 async def stage_retrieve(
@@ -19,11 +19,7 @@ async def stage_retrieve(
 ) -> tuple[list[Hit], float]
 ```
 
-The hits that survived the floor, and `hits[0].similarity` — or `0.0` when nothing survived. Each `Hit` carries `document_title`, `source_uri`, `text`, `similarity`, and `chunk_index`, which is exactly what the [answering stage](/configent/docs/answering) needs to build `search_result` blocks.
-
----
-
-## The flow
+Returns the hits that survived the floor and `hits[0].similarity`, or `0.0` when nothing survived. Each `Hit` carries `document_title`, `source_uri`, `text`, `similarity`, and `chunk_index`, which is what the [answering stage](/configent/docs/answering) needs to build `search_result` blocks.
 
 ```
 stage_retrieve()
@@ -43,7 +39,27 @@ hits = [Hit(...) for row in rows if float(row.similarity) >= floor]
 return hits[:k]
 ```
 
-The loop engine reaches the same `search()` through `search_docs.execute()`, which wraps the hits as content blocks. One retrieval implementation, two callers. See [Tools System](/configent/docs/tools-system#search_docs-shared).
+The loop engine reaches the same `search()` through `search_docs.execute()`, which wraps the hits as content blocks. One retrieval implementation, two callers, configured differently — the tool takes `search()`'s default floor, while this stage passes the client's. See [Tools System](/configent/docs/tools-system#search_docs-shared).
+
+---
+
+## Why not a retrieval agent tool?
+
+Agentic retrieval is for decisions with more than one right answer. This one doesn't have that.
+
+- **The need is unconditional, not discovered.** A tool call is worth it when the model *might* need context. Here it always does, so delegating only adds a failure mode: the agent skipping or mistiming the call.
+- **It removes retrieval laziness.** Models sometimes decide they already know the answer and reply from parameters instead of searching. For an escalation flow that means a confident, invented resolution path. Grounding happens before the model gets a vote.
+- **One embedding beats a round trip.** A tool call costs reason, emit, wait, resume, sometimes twice if the model reformulates. Escalation paths are usually SLA-bound.
+- **The decision has to be defensible later.** Same question, same embedding, same top-k. A generative step produces different queries on different runs, leaving nothing fixed to replay when someone asks why a ticket was filed.
+- **It shrinks the injection surface.** The question is user-written. Turning that text into a search query with a model hands an attacker influence over what gets retrieved.
+
+### When it should be a tool call
+
+- **Multi-hop pays off.** "Nothing above the threshold, try broader." A second search earns its keep here. That is the [loop engine](/configent/docs/agent-loop) and its `search_docs` tool, which Configent's three other clients run. This one uses neither.
+- **The input is noisy.** Long logs, mixed languages, pasted boilerplate. The middle ground is one cheap call to extract a clean query, then a deterministic search. Still not agentic retrieval.
+- **Ticket types need genuinely different corpora.** A stack trace wants code and logs, a billing dispute wants another index. That needs routing before retrieval, which neither engine has: a client points at one `corpus.source`, so a tool call alone would not fix it.
+
+> **Why this client is the easy case.** It answers Cloud Run, GKE and IAM questions from one homogeneous set of public Google Cloud docs, and questions like "what does the Cloud Run PORT error mean?" embed well as written, so there is no index to choose and no query to rewrite. Its `category` and `product_area` enums do look like ticket types, but the escalate stage assigns them after retrieval to route the ticket to a queue, not to pick a corpus.
 
 ---
 
@@ -76,6 +92,8 @@ The loop engine reaches the same `search()` through `search_docs.execute()`, whi
 - **Nothing survives the floor.** `stage_retrieve` returns `([], 0.0)`. The pipeline short-circuits past [scoring](/configent/docs/scoring) straight to the branch, which escalates with `"retrieval returned no passages above the drop floor"`. Asking a model to rate zero passages invents a number.
 - **First turn of a conversation.** `_retrieval_query()` finds no previous user message and returns the question unchanged.
 - **Non-string history content.** A prior turn stored as blocks rather than a string is skipped rather than coerced.
+
+> **Reproducibility is scoped to one embedding model version.** "Same query → same top-k" holds while the embedding model is fixed. `voyage-3` is hardcoded in `embed.py` and no version is recorded on the chunk or the step, so bumping it silently changes what old runs would retrieve today. Replaying a historical decision would need the version pinned per record and a re-embed on change. Not built — the corpus has only ever seen one model.
 
 ---
 
