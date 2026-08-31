@@ -2,7 +2,7 @@
 title: Config Reference
 description: Complete reference for all config.yaml keys — types, defaults, and examples.
 order: 3
-group: Setup
+group: Getting Started
 ---
 
 <div class="lead">
@@ -81,7 +81,7 @@ Controls the engine, LLM, system prompt, and tool list for this client's agent.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `agent.mode` | `string` | `"loop"` | Which engine serves this client. `"loop"` is the free-form tool-use loop; `"pipeline"` is the fixed-stage engine with the escalation branch in Python. See [Pipeline Mode](/configent/docs/pipeline-mode). |
+| `agent.mode` | `string` | `"loop"` | Which engine serves this client. `"loop"` is the free-form tool-use loop; `"pipeline"` is the fixed-stage engine with the escalation branch in Python. See [The Answer Pipeline](/configent/docs/pipeline). |
 | `agent.model` | `string` | — | Claude model ID (e.g. `claude-haiku-4-5-20251001`, what all shipped clients use). |
 | `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/configent-support.md`). Loaded at runtime, not inlined. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens per API call. |
@@ -111,7 +111,7 @@ agent:
 > different points: the drop floor discards, the escalate floor routes. If the escalate
 > floor were the lower of the two, it could never fire — every surviving hit is at or above
 > the drop floor by construction. The config validator rejects that relationship at
-> startup. See [Escalation Guardrail](/configent/docs/escalation-guardrail).
+> startup. See [The Guardrail](/configent/docs/escalation-guardrail).
 
 > **Pipeline mode expects three prompt files.** `agent.system_prompt_file` points at
 > `answer.md`; `score.md` and `ticket_draft.md` must sit beside it in the same directory.

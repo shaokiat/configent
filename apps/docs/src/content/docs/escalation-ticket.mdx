@@ -1,0 +1,89 @@
+---
+title: Escalation & Ticket
+description: Two stages on the other branch — the model drafts the ticket fields, Python files them. Idempotency comes from the run, not from the content.
+order: 13
+group: The Answer Pipeline
+---
+
+import Mermaid from '@/components/Mermaid.astro';
+
+When the [guardrail](/configent/docs/escalation-guardrail) escalates, two stages run. `escalate` drafts the ticket fields with a structured-output call. `ticket` POSTs them to the ticket service. The model drafts; Python files.
+
+The decision was already made before either stage started. Neither of them can revisit it.
+
+---
+
+## Contract
+
+```python
+async def stage_escalate(
+    aclient, *, cfg: ClientConfig, question: str, why: str
+) -> tuple[dict, Any]
+
+async def stage_ticket(
+    draft: dict, *, db: AsyncSession, client_id: str, run_id: str, stage_seq: int
+) -> dict
+```
+
+`stage_escalate` is a structured-output call against a ticket schema — `subject`, `category`, `product_area`, `priority`, `body` — given the question and the guardrail's reason string. `stage_ticket` takes that draft and returns whatever the service said.
+
+---
+
+## The flow
+
+<Mermaid diagram={`
+flowchart LR
+    A[guardrail: escalate + why] --> B[escalate<br/>structured output]
+    B --> C[ticket<br/>get_tool_executor]
+    C --> D[POST /tickets<br/>Idempotency-Key: run_id:stage_seq]
+    D --> E[service assigns ticket_id]
+`} />
+
+```python
+executor = get_tool_executor("create_escalation_ticket")
+return await executor(draft, client_id=..., db=db, run_id=run_id, stage_seq=stage_seq)
+```
+
+The tool is registered like any other, and its `DEFINITION` is never sent to a model. Python invokes the executor directly.
+
+---
+
+## Design
+
+- **No tool-use round trip.** Python calls the executor, so there is exactly one call site to make idempotent. A tool-use loop would have as many call sites as the model has turns.
+- **`{run_id}:{stage_seq}` is the `Idempotency-Key`.** Stable across a crash and retry of the *same* run, distinct across every other. The client never derives a key from content: two people phrasing a request identically must not collide into one ticket.
+- **The server assigns the ticket id.** The schema is owned on the other side of a network hop that can fail. The service is a mock we wrote ([Mock Ticket Service](/configent/docs/mock-ticket-service)); the *integration shape* is not mocked.
+- **`run_id` and `stage_seq` are keyword-only with defaults.** The loop engine has no run, so it can still call the tool. Without a `run_id` no key is sent, which is correct — with no run there is nothing to deduplicate against.
+- **The escalation reply is emitted as a `text` event.** Without it the UI shows a step trail above an empty message bubble, which reads as a crash rather than as a decision.
+
+---
+
+## Edge cases
+
+- **HTTP failures are returned, not raised.** A 5xx comes back `{"error": ..., "retryable": True}`. A 4xx is our bug and is marked non-retryable. The model is never shown a raw exception, and the run finishes with a `ticket` step marked `failed` rather than dying.
+- **Retry is deliberately absent.** The executor makes one attempt and reports retryability. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool.
+- **A duplicate POST after a crash-and-retry.** Same `run_id`, same `stage_seq`, same key — the service returns the original ticket. That path is the reason the key is not content-derived.
+
+---
+
+## On the record
+
+```json
+{ "stage": "escalate", "category": "quota_or_billing", "product_area": "cloud_run",
+  "priority": "high", "reasoning": "groundedness 0.05 < confidence_threshold 0.6" }
+{ "stage": "ticket", "status": "ok", "ticket_id": "PLATFORM-1043",
+  "queue": "platform-serverless", "eta_hours": 8, "reasoning": "filed as PLATFORM-1043" }
+```
+
+What the user ends up seeing:
+
+```
+Searched the documentation    best match 0.50 — above the escalate floor
+Scored the evidence           groundedness 0.05 — below the 0.60 threshold
+Escalated to a human          quota_or_billing · priority high
+Filed a ticket                PLATFORM-1043
+```
+
+---
+
+**Next:** [Runs & Durability](/configent/docs/runs-and-durability) — the trail all six stages write to, and what a crash leaves behind.

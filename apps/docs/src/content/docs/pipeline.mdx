@@ -1,0 +1,105 @@
+---
+title: One Question, End to End
+description: The answer pipeline in a single pass — retrieve, score, branch, answer or escalate — and the claim each boundary exists to support.
+order: 8
+group: The Answer Pipeline
+---
+
+import ArchDiagram from '@/components/ArchDiagram.astro';
+
+This is the hub for the pipeline engine. It follows one question from HTTP to answer, names the six components on the way, and hands each one to the page that owns it.
+
+The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations, and when it cannot answer, it files a ticket. The build is in `apps/api/app/`; the engine for this client is `agent/pipeline.py`.
+
+<ArchDiagram />
+
+---
+
+## The claim the design has to support
+
+**Escalation is not the model's decision.**
+
+Every boundary below follows from that one sentence. A free-form tool-use loop cannot make the claim. Put the ticket tool in the model's tool list and the model chooses when to file, so "why did it escalate?" has no answer better than "the prompt said so."
+
+So this client runs a second engine. `agent.mode: pipeline` is a fixed sequence of stages with exactly one branch, and that branch is an `if` statement in Python:
+
+```python
+def should_escalate(*, retrieval_confidence, score, cfg) -> tuple[bool, str]:
+```
+
+Three properties fall out of the structure rather than out of prompting:
+
+- **Retrieval always happens.** It is a function call, not a tool the model may skip, so there is always something to score.
+- **The answering model is starved of tools.** It is sent no tool definitions at all, so it cannot escalate, and it cannot decline to answer by escalating instead.
+- **Every stage commits before the next starts,** so a crash leaves the finished stages durable.
+
+> **The loop still exists.** `agent.mode: loop` is the default and serves every other client, untouched. Both engines emit the same SSE event contract, so the frontend renders either without knowing which ran. See [Agent Loop](/configent/docs/agent-loop) for the other engine.
+
+---
+
+## The six components
+
+`STAGES` in `pipeline.py` is the single vocabulary for the stage names, the SSE `step` events, and the `CRASH_AFTER` fault injector. `app/routers/clients.py` dispatches on `agent.mode` to get here.
+
+| Component | Model call | Owns | Page |
+|---|---|---|---|
+| `retrieve` | none | Embed, search pgvector, drop weak hits. Emits **signal 1** | [Retrieval](/configent/docs/retrieval) |
+| `score` | structured output | Rate how well the passages support an answer. Emits **signal 2** | [Scoring](/configent/docs/scoring) |
+| *the branch* | none | `should_escalate()` compares both signals to three thresholds | [The Guardrail](/configent/docs/escalation-guardrail) |
+| `answer` | citations | Answer from the passages, cited, with no tools in the request | [Answering](/configent/docs/answering) |
+| `escalate` → `ticket` | structured output | Draft the ticket fields, then POST them from Python | [Escalation & Ticket](/configent/docs/escalation-ticket) |
+| the step trail | none | One durable entry per stage, committed before the next starts | [Runs & Durability](/configent/docs/runs-and-durability) |
+
+Read them in that order and you have read the engine. Each page states its contract, its design points, its edge cases, and the `step` event it leaves behind.
+
+---
+
+## The two API constraints that set the boundaries
+
+Both were verified against the Messages API before the build, and both would have been expensive to discover mid-implementation. Between them they explain why the stages are cut where they are.
+
+- **`search_result` blocks are valid as top-level user content.** They do not have to arrive inside a `tool_result`. That is what lets retrieval be an ordinary function call while citations keep working exactly as they do in the loop.
+- **Citations and `output_config.format` cannot be combined.** The API returns 400. The split falls along stage lines: `score` and `escalate` take structured output, `answer` takes citations.
+
+> **Consequence worth stating out loud.** The final response object cannot be a model output. Python assembles and validates it from the stage results. That is the stronger claim anyway — the response contract is constructed, not generated and hoped for.
+
+---
+
+## Errors
+
+On failure `stream_pipeline` emits an `error` event instead of `done` and marks the run `failed`. The HTTP status went out long before anything could fail, so the SSE channel is the only way to tell the client something went wrong. A generator that simply stops looks identical to a completed turn from the browser's side, which is the worst failure mode for a workflow whose whole claim is that it is auditable. Event contract: [SSE Streaming](/configent/docs/sse-streaming).
+
+`PipelineCrash` is the one exception the pipeline deliberately does not catch. `CRASH_AFTER=score` kills the process mid-run to prove the step trail survives, and a swallowed crash would prove nothing.
+
+---
+
+## What is config and what is code
+
+The whole client is one YAML file:
+
+```yaml
+client_id: gcp-platform-support
+agent:
+  mode: pipeline
+  model: claude-haiku-4-5-20251001
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+```
+
+Config decides *which* engine, *which* model, and *where* the thresholds sit. Code decides the stage sequence and who makes the branch. Adding a client is a YAML file, a corpus, and a prompt directory — no Python. See [Adding a New Use Case](/configent/docs/adding-a-use-case).
+
+> **`agent.tools` in a pipeline client is documentation.** Retrieval is deterministic and the ticket call comes from Python, so no tool definition is ever sent. The list stays in the YAML because it describes the client's capabilities. The engine resolves it at config load and then never uses it.
+
+---
+
+## Trade-offs I would raise myself
+
+- **The pipeline cannot do multi-hop.** A question needing two searches gets one. That is the price of determinism, and the loop engine exists for clients that need the other trade.
+- **The follow-up fix is a heuristic.** Prepending the previous user turn is not query rewriting. It fails on a three-turn reference chain.
+- **The scorer is a model judging a model's inputs.** It is cheap and narrow, which is why it works. It is a second model call, not a proof.
+- **One retry policy is missing.** The ticket executor makes one attempt and reports retryability. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool, so it is deliberately not inlined.
+
+---
+
+**Next:** [Retrieval](/configent/docs/retrieval) — the first stage, and the first of the two guardrail signals.

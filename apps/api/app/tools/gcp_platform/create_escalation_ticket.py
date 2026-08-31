@@ -90,7 +90,7 @@ DEFINITION = {
     },
 }
 
-# One attempt only, here. Retry with backoff is W3-2 — deliberately not inlined, because the
+# One attempt only, here. Retry with backoff is W3-1 — deliberately not inlined, because the
 # retry policy belongs next to the dead-letter decision, not buried inside a tool.
 _TIMEOUT_SECONDS = 10.0
 
@@ -138,7 +138,7 @@ async def execute(
                 f"{_base_url()}/tickets", json=payload, headers=headers
             )
     except httpx.HTTPError as exc:
-        # Returned, not raised: the pipeline decides whether this is retryable (W3-2), and
+        # Returned, not raised: the pipeline decides whether this is retryable (W3-1), and
         # the model must never be shown a raw exception.
         return {
             "error": f"Ticket service unreachable: {exc.__class__.__name__}",

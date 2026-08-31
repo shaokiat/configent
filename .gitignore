@@ -39,3 +39,5 @@ apps/docs/dist/
 
 # Interview-prep / meta docs (not for the public repo)
 private/
+apps/docs/src/content/docs/.astro/
+apps/docs/src/content/docs/src/

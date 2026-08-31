@@ -69,8 +69,13 @@ class PipelineCrash(SystemExit):
 
 @dataclass
 class PipelineResult:
-    """What the router needs to build a response. `SupportAnswer` in schema form arrives
-    in W2-1; this is the same data before it has a Pydantic wrapper."""
+    """What the router needs to build a response.
+
+    This dataclass *is* the response contract. A parallel Pydantic `SupportAnswer` was
+    planned and cut: citations rule out structured output on the answer call, so this is
+    assembled and type-checked in Python either way, and a second declaration of the same
+    shape only gives it somewhere to drift to.
+    """
 
     conversation_id: str
     run_id: str

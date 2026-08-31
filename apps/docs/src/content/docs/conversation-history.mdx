@@ -1,8 +1,8 @@
 ---
 title: Conversation History
 description: How conversations are created, how message history is loaded and sent to the model, and how turns are persisted.
-order: 11
-group: Request Path
+order: 19
+group: Cross-Cutting
 ---
 
 Every turn loads the full prior message history from Postgres, appends it to the API request, and persists new messages after the loop completes.

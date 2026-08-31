@@ -1,8 +1,8 @@
 ---
 title: Example Configs
 description: Live client configs from the repo, plus aspirational examples showing the planned config surface.
-order: 14
-group: Examples
+order: 7
+# group: Getting Started  # hidden from sidebar — reachable by link
 ---
 
 <div class="lead">
@@ -32,10 +32,10 @@ file) in `corpora/gcp-platform-support/` — 10 files across Cloud Run, GKE, and
 
 **What's notable:**
 - The only client running `mode: pipeline`. The escalate/answer decision is a branch in Python,
-  not a tool the model may call. See [Pipeline Mode](/configent/docs/pipeline-mode).
+  not a tool the model may call. See [The Answer Pipeline](/configent/docs/pipeline).
 - Three thresholds instead of one: `retrieval_drop_floor` discards weak chunks,
   `escalate_below` and `confidence_threshold` route to a human. See
-  [Escalation Guardrail](/configent/docs/escalation-guardrail).
+  [The Guardrail](/configent/docs/escalation-guardrail).
 - The corpus contains nothing about any user's own project, which is what makes the escalation
   branch load-bearing rather than decorative. "What does the platform do?" is answerable;
   "what is *my* project doing?" structurally is not.

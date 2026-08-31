@@ -1,8 +1,8 @@
 ---
 title: Tools System
 description: How tools are defined, registered, and executed, plus how to add a new one.
-order: 9
-group: Request Path
+order: 15
+group: The Loop Engine
 ---
 
 Tools are the extension points that let the agent do more than retrieve text. Each client YAML lists the tools available to its agent; the agent loop calls them as needed during a turn.
@@ -69,7 +69,7 @@ search_docs.execute()
   └─ wrap top-k hits as search_result blocks
 ```
 
-> **Same embed/pgvector path as ingest.** See [Ingestion Pipeline → Search](/configent/docs/ingestion-pipeline#search) for the full details: embedding asymmetry, the k×2 over-fetch, and why the floor exists.
+> **`search()` is shared with the pipeline engine.** [Retrieval](/configent/docs/retrieval) owns it: embedding asymmetry, the k×2 over-fetch, the floor, and the `Hit` shape.
 
 ### `get_document` (shared)
 
@@ -118,13 +118,12 @@ for the service, its idempotency contract, and the chaos switches.
 
 Two things make it unlike every other tool on this page:
 
-**Its `DEFINITION` is never sent to a model.** This client runs
-[Pipeline Mode](/configent/docs/pipeline-mode), where Python calls the executor directly at
-one call site. The answering model's request has no `tools` key at all — asserted in a
-test, not left to inspection. The definition stays in the file because the tool is
-registered like any other and the schema documents the contract.
+**Its `DEFINITION` is never sent to a model.** This client runs the pipeline engine, which
+calls the executor directly from Python — see [Escalation & Ticket](/configent/docs/escalation-ticket). The definition
+stays in the file because the tool is registered like any other and the schema documents
+the contract.
 
-**It takes `run_id` and `stage_seq`.** They form the `Idempotency-Key`. Both are
+**It takes `run_id` and `stage_seq`,** the two halves of the `Idempotency-Key`. Both are
 keyword-only with defaults, so the free-form loop — which has no run — can still call the
 tool; without a `run_id` no key is sent, which is correct, because without a run there is
 nothing to deduplicate against.

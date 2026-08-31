@@ -30,4 +30,12 @@ const { diagram } = Astro.props;
   .mermaid {
     background: transparent;
   }
+
+  /* Mermaid sizes the SVG from node count, which overflows the column on tall
+     flowcharts. Cap it and let the viewBox scale the contents down. */
+  .mermaid :global(svg) {
+    max-width: 100%;
+    max-height: 380px;
+    height: auto;
+  }
 </style>

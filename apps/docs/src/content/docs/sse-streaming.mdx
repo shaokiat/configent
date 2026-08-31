@@ -1,8 +1,8 @@
 ---
 title: SSE Streaming
 description: How agent responses stream from FastAPI to the Next.js frontend over Server-Sent Events.
-order: 12
-group: Request Path
+order: 18
+group: Cross-Cutting
 ---
 
 The chat endpoint returns a `StreamingResponse` immediately. As the agent loop runs, it yields SSE frames (text deltas, citation events, tool status) that the frontend consumes incrementally.
@@ -33,14 +33,10 @@ A pipeline `done` frame carries three extra fields the loop has no use for: `run
 
 ### The `step` event
 
-Stage-specific fields ride along in the same payload — `n_hits` and `top_similarity` on
-`retrieve`, `confidence` and `supported` on `score`, `n_citations` on `answer`,
-`category` and `priority` on `escalate`, `ticket_id` and `queue` on `ticket`. Model
-stages also carry `tokens_in`, `tokens_out`, and `cost_usd`.
-
 The payload is the same dict written to `Run.steps`, returned by the same call that
-persists it, so the stream and the durable record cannot disagree. See
-[Runs & Durability](/configent/docs/runs-and-durability).
+persists it, so the stream and the durable record cannot disagree.
+[Runs & Durability](/configent/docs/runs-and-durability#a-step-entry) lists the
+stage-specific fields that ride along in it.
 
 ```
 event: step

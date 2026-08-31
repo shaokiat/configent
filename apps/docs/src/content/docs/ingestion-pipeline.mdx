@@ -2,7 +2,7 @@
 title: Ingestion Pipeline
 description: How documents go from files on disk to searchable pgvector embeddings — parse, chunk, embed, upsert.
 order: 4
-group: Setup
+group: Getting Started
 ---
 
 Documents in `corpora/<client_id>/` are parsed, chunked, embedded, and stored in pgvector. At query time, the user's question is embedded and matched against those chunks via cosine similarity — this is the full RAG loop.
@@ -151,30 +151,12 @@ Ingesting corpus for acme-fab...
 
 ## Search
 
-`retrieval/search.py` handles the retrieval side. Cosine similarity is geometry over vectors. The stored chunks are already vectors from ingest, so the query has to become one too before anything can be compared. That is what the embed step is for. When `search_docs` is called:
+Retrieval is the mirror of this pipeline: `embed_query()` puts the question in the same
+vector space these chunks live in, with `input_type="query"` instead of `"document"`.
+pgvector then scans by cosine similarity, scoped to `client_id`.
 
-1. `embed_query()` embeds the query with `input_type="query"`, placing it in the same vector space as the stored chunks. The `"query"` type differs from the `"document"` type used at ingest: questions and answers have different linguistic patterns, so Voyage uses this asymmetry to improve recall.
-2. pgvector runs a cosine similarity scan scoped to `client_id`, returning `k×2` candidates ordered by similarity.
-3. The search function drops hits below a similarity floor of `0.3` before returning.
-4. The function returns the top `k` hits.
-
-```python
-async def search(db, client_id, query, k=5, floor=0.3) -> list[Hit]:
-    query_vec = await embed_query(query)
-    rows = SELECT ... (1 - embedding <=> query_vec) AS similarity
-           FROM chunks JOIN documents
-           WHERE client_id = ?
-           ORDER BY similarity DESC
-           LIMIT k * 2                        # over-fetch before floor filter
-
-    return [hit for hit in rows if hit.similarity >= floor][:k]
-```
-
-**Why `k×2`?** The floor filter runs in Python after the SQL query returns — pgvector can't apply it directly. If several of the top results fall below `0.3`, fetching exactly `k` rows would under-return. Fetching `k×2` gives a buffer so the final slice still has `k` good results. The default `k=5` means 10 rows are fetched from the DB and up to 5 are returned.
-
-**Why a floor at all?** Without it, the model always receives `k` chunks regardless of relevance. When the corpus doesn't contain the answer, those chunks are noise — and the model may hallucinate rather than say it doesn't know. The floor makes "no good results" an explicit, handled case.
-
-Each `Hit` carries `document_title`, `source_uri`, `text`, `similarity`, and `chunk_index` — enough for `search_docs` to build the `search_result` content blocks the citation API needs.
+The rest — the `k×2` over-fetch, the similarity floor, the `Hit` shape — belongs to the
+stage that uses it. See [Retrieval](/configent/docs/retrieval).
 
 ---
 

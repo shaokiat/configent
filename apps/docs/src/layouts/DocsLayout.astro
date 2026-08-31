@@ -2,12 +2,19 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
 
+import type { MarkdownHeading } from 'astro';
+
 interface Props {
   title: string;
   description?: string;
+  headings?: MarkdownHeading[];
 }
 
-const { title, description } = Astro.props;
+const { title, description, headings = [] } = Astro.props;
+
+// h2/h3 only — h4 and below are too fine-grained for a rail this narrow. One lone
+// heading is not a table of contents, so the rail is dropped entirely below two.
+const toc = headings.filter(h => h.depth === 2 || h.depth === 3);
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const currentPath = Astro.url.pathname;
@@ -56,17 +63,38 @@ function isActive(href: string) {
     <article class="docs-content">
       <slot />
     </article>
+
+    {toc.length > 1 && (
+      <aside class="toc" aria-label="On this page">
+        <div class="toc-label">On this page</div>
+        <nav>
+          {toc.map(h => (
+            <a href={`#${h.slug}`} class:list={['toc-link', { sub: h.depth === 3 }]}>
+              {h.text}
+            </a>
+          ))}
+        </nav>
+      </aside>
+    )}
   </div>
 </BaseLayout>
 
 <style>
   .docs-layout {
     display: grid;
-    grid-template-columns: var(--sidebar-width) 1fr;
-    gap: 3rem;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--toc-width);
+    gap: 2.5rem;
     padding-top: 3rem;
     padding-bottom: 3rem;
     align-items: start;
+    /* Wider than the default .container: three columns don't fit in 1200px. */
+    max-width: 1400px;
+  }
+
+  /* Pages with no table of contents keep the two-column layout. */
+  .docs-layout:not(:has(.toc)) {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    max-width: 1200px;
   }
 
   .sidebar {
@@ -109,6 +137,44 @@ function isActive(href: string) {
     background: var(--accent-subtle);
   }
 
+  /* ── Right rail: table of contents ────────────────────────────── */
+  .toc {
+    position: sticky;
+    top: calc(var(--nav-height) + 1.5rem);
+    max-height: calc(100vh - var(--nav-height) - 3rem);
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+    padding-left: 1rem;
+  }
+
+  .toc-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-faint);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .toc-link {
+    display: block;
+    padding: 0.2rem 0;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .toc-link.sub {
+    padding-left: 0.75rem;
+    font-size: 0.78125rem;
+    color: var(--text-faint);
+  }
+  .toc-link:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
   /* ── Docs content typography ──────────────────────────────────── */
   .docs-content {
     max-width: var(--content-max);
@@ -132,6 +198,12 @@ function isActive(href: string) {
   .docs-content :global(h3) {
     margin-top: 2rem;
     color: var(--text);
+  }
+
+  /* Jumping to a TOC anchor otherwise lands the heading under the fixed nav. */
+  .docs-content :global(h2),
+  .docs-content :global(h3) {
+    scroll-margin-top: calc(var(--nav-height) + 1rem);
   }
 
   .docs-content :global(p) {
@@ -194,8 +266,18 @@ function isActive(href: string) {
     line-height: 1.7;
   }
 
+  /* Not enough width for three columns — the left nav is the one that matters. */
+  @media (max-width: 1180px) {
+    .toc { display: none; }
+    .docs-layout,
+    .docs-layout:not(:has(.toc)) {
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    }
+  }
+
   @media (max-width: 768px) {
-    .docs-layout {
+    .docs-layout,
+    .docs-layout:not(:has(.toc)) {
       grid-template-columns: 1fr;
     }
     .sidebar {

@@ -1,0 +1,80 @@
+---
+title: Scoring
+description: The score stage — one cheap structured-output call that rates whether the retrieved passages actually support an answer. The second guardrail signal.
+order: 10
+group: The Answer Pipeline
+---
+
+`score` is the second stage and the guardrail's only model call. It hands the question and the surviving passages to a cheap model and gets back a number: how well those passages support an answer. It lives in `agent/pipeline.py` as `stage_score()`.
+
+Similarity says *close*. Groundedness says *sufficient*. They fail differently, which is the whole reason this stage exists.
+
+---
+
+## Contract
+
+```python
+async def stage_score(
+    aclient, *, cfg: ClientConfig, question: str, hits: list
+) -> tuple[dict, Any]
+```
+
+The parsed judgement and the raw response, the latter only so usage and cost land on the step. The schema:
+
+```python
+{
+  "supported":    {"type": "boolean"},
+  "confidence":   {"type": "number"},
+  "missing_info": {"type": "string"},
+  "reasoning":    {"type": "string"},
+}
+```
+
+`confidence` is what the branch reads. The other three fields are for the record and the UI.
+
+---
+
+## Design
+
+- **`confidence`, not `supported`, is the signal.** The branch compares a number to a configured threshold. Reading the boolean would move the threshold decision back inside the model, which is the thing this design exists to avoid.
+- **Its own prompt file.** `prompts/<client_id>/score.md`, separate from the answer prompt. A single mega-prompt covering retrieval, scoring, and answering makes the scoring step unauditable, and scoring *is* the guardrail.
+- **Haiku, not Sonnet.** Structured output on a judgement this narrow costs a fraction of the answering call. One `score` step runs about `$0.0002`.
+- **Structured output, never citations.** The Messages API returns 400 when `output_config.format` and citations are combined. `_structured_call()` is the shared helper for the two stages that take the structured path, `score` and `escalate`.
+- **`missing_info` is captured, not acted on.** It is the sentence that tells a human reading the trail *why* the corpus fell short. Nothing branches on it.
+
+---
+
+## Configuration
+
+| Key | Default | What it does |
+|---|---|---|
+| `agent.model` | — | The same model answers and scores. Cheap enough that a second call is not a design problem |
+| `agent.confidence_threshold` | `0.6` | The bar this stage's `confidence` has to clear. Read by the branch, not here |
+
+The threshold belongs to [The Guardrail](/configent/docs/escalation-guardrail); this stage only produces the number.
+
+---
+
+## Edge cases
+
+- **Zero hits skips the stage entirely.** The pipeline never calls the scorer with an empty passage list, and `should_escalate()` receives `score=None`. A model asked to rate nothing will still return a number, and that number would be fiction.
+- **A missing `confidence` key reads as `0.0`.** `score.get("confidence", 0.0)` — a malformed judgement escalates rather than passes.
+
+> **The honest limitation.** This is a model judging a model's inputs. It is cheap and narrow, which is why it works, but it is a second model call, not a proof. The deterministic signal from [retrieval](/configent/docs/retrieval) is what keeps the guardrail from resting on it alone.
+
+---
+
+## On the record
+
+```json
+{ "stage": "score", "confidence": 0.05, "supported": false,
+  "missing_info": "the user's own project quota",
+  "reasoning": "The passages describe quota limits generally, not this project's.",
+  "cost_usd": 0.000181 }
+```
+
+That is the real trace for "can you raise my Cloud Run quota for europe-west1?" — retrieval was confident, groundedness was not.
+
+---
+
+**Next:** [The Guardrail](/configent/docs/escalation-guardrail) — where both signals meet one `if` statement.

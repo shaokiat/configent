@@ -1,8 +1,8 @@
 ---
 title: Citations
 description: How Configent uses Anthropic's native citations API — search_result content blocks, inline citation markers, and the frontend-friendly segments format.
-order: 10
-group: Request Path
+order: 17
+group: Cross-Cutting
 ---
 
 When the agent answers a question, it cites the exact document passages it drew from. The Anthropic API produces citations natively — the model marks the specific text it used, not the whole chunk.
@@ -11,10 +11,10 @@ When the agent answers a question, it cites the exact document passages it drew 
 
 ## How it works
 
-Citations flow through three layers:
+Citations flow through three layers, and both engines share all three:
 
 ```
-search_docs tool result
+retrieved chunks
   └─ search_result content blocks   → sent to Anthropic API
         └─ citations in response    → extracted from API response
               └─ segments           → stored in DB + sent to frontend
@@ -22,20 +22,14 @@ search_docs tool result
 
 ### 1. `search_result` blocks
 
-When `search_docs` returns results, it formats them as `search_result` content blocks — a special Anthropic content type that enables citation tracking:
+`search_result` is the Anthropic content type that enables citation tracking. Where the block is placed is the only thing that differs by engine:
 
-```python
-# tools/shared/search_docs.py
-{
-    "type": "search_result",
-    "source": "corpus://acme-fab/spare-parts-catalog",
-    "title": "Spare Parts Catalog",
-    "content": [{"type": "text", "text": "...chunk text..."}],
-    "citations": {"enabled": True}
-}
-```
+| Engine | Where the blocks go |
+|---|---|
+| `loop` | Inside `tool_result.content`, returned by [`search_docs`](/configent/docs/tools-system#search_docs-shared) |
+| `pipeline` | Directly in the user message, built by `_search_result_blocks()` — see [Answering](/configent/docs/answering) |
 
-The loop passes these verbatim as `tool_result.content` blocks, not serialized to JSON. The distinction matters: the Anthropic API only enables citation tracking when the content type is `search_result`, not when the same data is JSON-stringified.
+Either way the blocks are passed verbatim, never serialized to JSON. The distinction matters: the API only enables citation tracking on the `search_result` content type, not on the same data JSON-stringified into a text block.
 
 ### 2. Anthropic generates citations
 
@@ -47,7 +41,7 @@ The attribution is the API's, not ours. Each citation comes back with its source
 
 ### 3. Segments extraction
 
-The agent loop extracts citation data from the API response and builds a `segments` list — alternating text and cited passages, structured for the frontend:
+Both engines extract citation data from the API response into a `segments` list — `_collect_segments()` is shared — alternating text and cited passages, structured for the frontend:
 
 ```json
 [
@@ -87,13 +81,10 @@ The database stores both: the raw response for debugging replay, and the segment
 
 ## Empty retrieval
 
-If `search_docs` finds no chunks above the similarity floor, it returns a plain `text` block instead of `search_result` blocks:
+The two engines handle it differently, and the difference is the point of the pipeline.
 
-```python
-{"type": "text", "text": "No documents matched the query."}
-```
-
-The system prompt instructs the model to reply that it doesn't know rather than hallucinate. No citation markers are emitted.
+- **`loop`:** `search_docs` returns a plain `text` block (`"No documents matched the query."`) instead of `search_result` blocks. The system prompt instructs the model to say it doesn't know rather than hallucinate. No citation markers are emitted.
+- **`pipeline`:** the turn never reaches the answering call. Zero hits short-circuits straight to escalation, so there is no uncited reply to guard against.
 
 ---
 

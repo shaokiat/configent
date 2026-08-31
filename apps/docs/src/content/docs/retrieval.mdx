@@ -1,0 +1,94 @@
+---
+title: Retrieval
+description: The retrieve stage — embed the query, scan pgvector scoped to the client, drop weak hits. No model call, and the first of the two guardrail signals.
+order: 9
+group: The Answer Pipeline
+---
+
+`retrieve` is the first stage of the pipeline and the only one that makes no model call. It embeds the question, runs a cosine scan over the client's chunks, and discards anything below the drop floor. It lives in `agent/pipeline.py`; the search itself is `retrieval/search.py`, shared with the loop engine's `search_docs` tool.
+
+Its second return value is **signal 1** of the [guardrail](/configent/docs/escalation-guardrail).
+
+---
+
+## Contract
+
+```python
+async def stage_retrieve(
+    db: AsyncSession, *, cfg: ClientConfig, client_id: str, query: str
+) -> tuple[list[Hit], float]
+```
+
+The hits that survived the floor, and `hits[0].similarity` — or `0.0` when nothing survived. Each `Hit` carries `document_title`, `source_uri`, `text`, `similarity`, and `chunk_index`, which is exactly what the [answering stage](/configent/docs/answering) needs to build `search_result` blocks.
+
+---
+
+## The flow
+
+```
+stage_retrieve()
+  │
+  ├─ _retrieval_query()       previous user turn + this one
+  │
+  └─ search()                 retrieval/search.py
+       ├─ embed_query()       Voyage, input_type="query"
+       ├─ pgvector cosine     WHERE client_id = ? · ORDER BY similarity · LIMIT k*2
+       └─ floor filter        drop below retrieval_drop_floor, then [:k]
+```
+
+```python
+similarity = (1 - Chunk.embedding.cosine_distance(query_vec)).label("similarity")
+... .where(Chunk.client_id == client_id).order_by(similarity.desc()).limit(k * 2)
+hits = [Hit(...) for row in rows if float(row.similarity) >= floor]
+return hits[:k]
+```
+
+The loop engine reaches the same `search()` through `search_docs.execute()`, which wraps the hits as content blocks. One retrieval implementation, two callers. See [Tools System](/configent/docs/tools-system#search_docs-shared).
+
+---
+
+## Design
+
+- **Deterministic, not a tool.** The model cannot skip retrieval or search for something else. That is what makes the groundedness score mean anything — the scorer always rates the same passages the answerer will see.
+- **The query is embedded as a question, not a document.** `input_type="query"` differs from the `"document"` type used at ingest. Questions and answers have different linguistic patterns, and Voyage uses that asymmetry to improve recall. Free win, one argument. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline#why-voyage-ai).
+- **Over-fetch, then filter.** `limit(k * 2)`, drop below `retrieval_drop_floor` in Python, then truncate to `k`. pgvector cannot apply the floor inside the scan, so filtering in SQL would return fewer than `k` rows whenever the floor bites. With the default `k=5`, 10 rows come back and at most 5 go forward.
+- **The floor exists so "nothing matched" is a case.** Without it the model always receives `k` chunks regardless of relevance. When the corpus does not contain the answer, those chunks are noise the model may hallucinate around.
+- **`client_id` is in the `WHERE` clause.** Tenant isolation is a query predicate, not a convention. See [Multi-Tenancy](/configent/docs/multi-tenancy).
+
+> **Follow-ups get the previous turn prepended.** "And what about GKE?" embeds to nothing useful when no model is rewriting the query. `_retrieval_query()` prepends the last user message: one line, no extra call. It is a heuristic, not query rewriting, and it fails on a three-turn reference chain. The alternative was a demo where the second question fails.
+
+---
+
+## Configuration
+
+| Key | Default | What it does |
+|---|---|---|
+| `agent.retrieval_drop_floor` | `0.3` | Similarity below which a chunk is discarded before anyone sees it |
+
+`k` is fixed at 5 in the pipeline. Full key list: [Config Reference](/configent/docs/config-reference#agent).
+
+> **The floor and `escalate_below` are not the same knob.** The floor discards; `escalate_below` escalates. They read the same number at different points, and their ordering is validated at startup. See [The Guardrail](/configent/docs/escalation-guardrail#three-thresholds).
+
+---
+
+## Edge cases
+
+- **Nothing survives the floor.** `stage_retrieve` returns `([], 0.0)`. The pipeline short-circuits past [scoring](/configent/docs/scoring) straight to the branch, which escalates with `"retrieval returned no passages above the drop floor"`. Asking a model to rate zero passages invents a number.
+- **First turn of a conversation.** `_retrieval_query()` finds no previous user message and returns the question unchanged.
+- **Non-string history content.** A prior turn stored as blocks rather than a string is skipped rather than coerced.
+
+---
+
+## On the record
+
+```json
+{ "stage": "retrieve", "n_hits": 4, "top_similarity": 0.5013,
+  "reasoning": "Best match: Cloud Run quotas and limits",
+  "sources": ["corpus://gcp-platform-support/cloud-run-quotas", "..."] }
+```
+
+`top_similarity` is signal 1, recorded before anything can act on it. Trail schema: [Runs & Durability](/configent/docs/runs-and-durability).
+
+---
+
+**Next:** [Scoring](/configent/docs/scoring) — the second signal, and the only model call the guardrail depends on.

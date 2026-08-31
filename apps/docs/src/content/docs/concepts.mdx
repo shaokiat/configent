@@ -1,202 +1,115 @@
 ---
-title: Core Concepts
-description: A plain-English primer on every idea behind Configent — RAG, embeddings, chunking, the agent loop, tools, citations, and multi-tenancy — defined once, in order.
-order: 2
-group: Getting Started
+title: Overview
+description: What Configent is, the stack it runs on, and where each design decision is written down.
+order: 1
+group: Overview
 ---
 
 <div class="lead">
-  This page explains the ideas the rest of the docs assume — in plain language, in the order they
-  show up when a question flows through the system. If a term elsewhere is unfamiliar, it's defined
-  here. The running example is <strong>Configent Support</strong>, the bot powering this site's
-  <a href="/configent/demo">demo</a>.
+  Configent is a multi-tenant RAG assistant platform where a client is a YAML file, not a codebase.
+  The reference client is a Google Cloud support agent that answers from documentation with
+  citations and files a ticket when it can't.
 </div>
 
 ---
 
-## The one-sentence version
+## What it has to do
 
-Configent is a **RAG assistant** you configure with a **YAML file** instead of code. Drop in some
-documents, write a short prompt, and you get a chat assistant that answers questions **grounded in
-those documents** and **cites its sources** — with one deployment serving many isolated clients.
+Four requirements, and every design decision below traces back to one of them.
 
-Everything below unpacks the bolded terms.
+1. **Answer only from the corpus, with citations.** An uncited claim is a failure, not a style choice.
+2. **Know when it cannot answer.** The interesting half of a support agent is the refusal, and that decision has to be explainable after the fact.
+3. **Serve many clients from one deployment.** Adding a tenant is a config file, a corpus, and a prompt — no Python.
+4. **Leave a record.** Every turn has to be auditable, and the record has to survive the process dying mid-turn.
 
 ---
 
-## RAG — Retrieval-Augmented Generation
-
-An LLM only knows what it was trained on. **RAG** fixes that by *retrieving* relevant text from
-*your* documents and handing it to the model alongside the question, so the answer is grounded in
-your content rather than the model's memory.
+## The shape
 
 ```
-question  ─►  find the most relevant document passages  ─►  give them to Claude  ─►  grounded answer
-              (retrieval)                                    (augmented generation)
+Next.js (chat UI)          apps/web
+      │  SSE
+FastAPI                    apps/api
+      ├─ config registry    one YAML per client, validated at startup
+      ├─ engine             loop  ─or─  pipeline   (agent.mode)
+      │     ├─ retrieval    Voyage embed → pgvector cosine, scoped by client_id
+      │     ├─ Anthropic    Messages API — citations, structured output
+      │     └─ tools        plain dict registry
+      └─ Postgres           conversations · messages · chunks+embeddings · runs · traces
+                                  │  HTTP
+                            mock ticket service   apps/mockticket
 ```
 
-Why it matters: the assistant can answer questions about documents Claude has never seen — a
-product manual, a policy wording, Configent's own docs — and it can refuse ("I don't know") when the
-documents don't contain the answer, instead of guessing.
+One Postgres holds the relational data *and* the vectors. One process serves every tenant. The only external calls are Anthropic, Voyage, and the ticket service.
 
 ---
 
-## Embeddings — turning text into numbers
+## Two engines, one contract
 
-To find "the most relevant passages," the system needs to compare meaning, not keywords. An
-**embedding** is a list of numbers (a *vector*) that captures the meaning of a piece of text. Texts
-with similar meaning get similar vectors — even if they share no words.
+`agent.mode` picks which engine serves a client. Both emit the same SSE events, so the frontend never knows which ran.
 
-Configent uses **Voyage AI** (`voyage-3`, 1024 numbers per vector) to embed text. The same model
-embeds documents at ingest time and questions at query time, so the two are directly comparable.
+| | `loop` | `pipeline` |
+|---|---|---|
+| Control flow | Model picks tools until it stops | Fixed stages, one branch |
+| Escalation decided by | The model | An `if` statement in Python |
+| Good for | Open-ended work | A decision you have to justify |
+| Walkthrough | [Agent Loop](/configent/docs/agent-loop) | [The Answer Pipeline](/configent/docs/pipeline) |
 
-> Why a separate provider? Anthropic has no embeddings API; any RAG stack needs a separate embedder. → [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed)
+The support agent runs `pipeline` because its whole claim is that escalation is not the model's decision — and a model holding the ticket tool cannot make that claim.
 
----
-
-## Chunking — splitting documents into searchable pieces
-
-You can't embed a whole 40-page PDF as one vector. The meaning blurs and citations become useless. **Chunking** splits a document into smaller passages (a few hundred tokens each) before
-embedding, so retrieval can return *the exact paragraph* that answers a question.
-
-- **`chunk_size`** — how big each piece is, in tokens. Smaller = more precise lookups; larger =
-  more context per hit.
-- **`overlap`** — how much text is repeated between neighbouring chunks, so a sentence split across a
-  boundary still appears whole in at least one chunk.
-
-Configent Support uses small chunks (`512` / `64`) because its docs are short, factual Q&A.
-→ [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-2--chunk)
+**[The Answer Pipeline](/configent/docs/pipeline) is the section to read next.** Its hub page follows one question end to end; the six pages under it own one component each.
 
 ---
 
-## Vector search & pgvector — finding the nearest passages
+## The stack, and why
 
-Once every chunk is a vector, finding relevant text is a math problem: which stored vectors are
-*closest* to the question's vector? "Closeness" is measured by **cosine similarity** (how aligned two
-vectors point). The closest chunks are the most relevant passages.
-
-**pgvector** is the Postgres extension that stores those vectors and runs the nearest-neighbour
-search — so the whole stack stays on one database, no separate vector service.
-
-```
-[question] ─► Voyage ─► [vector] ─► pgvector finds nearest chunk vectors ─► top 5 passages
-```
-
-A **similarity floor** (0.3) drops weak matches, so "no good results" is an explicit, handled case
-rather than noise the model might hallucinate over.
-→ [Ingestion Pipeline](/configent/docs/ingestion-pipeline#search)
+| Layer | Choice | Why this one |
+|---|---|---|
+| LLM | Anthropic Claude (Haiku 4.5) | Native citations and structured output are both first-class; Haiku is cheap enough to spend a second call on scoring |
+| Embeddings | Voyage `voyage-3` | Anthropic has no embeddings API, so a third party is required either way. Voyage exposes `input_type` query/document — [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
+| Vector store | pgvector | Already inside the Postgres we need. A dedicated vector DB would be a [second service for no gain at this scale](/configent/docs/ingestion-pipeline#voyage-ai-vs-pgvector) |
+| Backend | FastAPI + async SQLAlchemy | Native `async` all the way down, which is what makes concurrent tool calls and SSE cheap |
+| Agent runtime | Hand-rolled | No LangChain or LangGraph. [One file](/configent/docs/agent-loop) covers tool execution, cost, caching, and streaming — a framework would hide exactly the parts worth showing |
+| Transport | SSE | One-way server push over plain HTTP. WebSockets buy nothing when only the server talks — [details](/configent/docs/sse-streaming) |
+| Frontend | Next.js + Tailwind | Client-agnostic; branding comes from the API, not the build |
 
 ---
 
-## Tools — letting the agent act, not just retrieve
+## Where the design decisions live
 
-A **tool** is a function the model can choose to call. Claude doesn't run code itself. It asks for a tool by name with arguments, the backend runs it, and the result returns to the conversation.
+The questions worth asking about this project, and the page that answers each.
 
-Configent has two kinds:
-
-- **Shared tools** — every client gets these: `search_docs` (the retrieval step above) and
-  `get_document` (fetch a full document when a chunk isn't enough).
-- **Client-specific tools** — bespoke actions for one client. Configent Support's
-  `create_support_ticket` files a ticket when the docs can't answer. Acme Fab's `pricing_lookup`
-  quotes a part.
-
-The rule of thumb: add a tool when the answer needs a **calculation, lookup, or action** that isn't
-in the documents. Otherwise the two shared tools are enough.
-→ [Tools System](/configent/docs/tools-system) · [Adding a New Use Case](/configent/docs/adding-a-use-case)
-
----
-
-## The agent loop — how a turn actually runs
-
-The **agent loop** is the back-and-forth between the backend and Claude for a single user message:
-
-```
-1. Send the question (+ system prompt + tool list) to Claude
-2. Claude either answers  ──► done
-   or asks to call a tool ──► run it, send the result back ──► go to step 1
-```
-
-This repeats until Claude produces a final answer (usually after one `search_docs` call), capped at
-8 iterations for safety. There's no framework — it's a plain loop, so cost, streaming, and tool
-execution are all visible in one file.
-→ [Agent Loop](/configent/docs/agent-loop)
+| Question | Page |
+|---|---|
+| How does one question actually flow through it? | [One Question, End to End](/configent/docs/pipeline) |
+| Why is retrieval a function call instead of a tool? | [Retrieval](/configent/docs/retrieval) |
+| Why score groundedness separately instead of one big prompt? | [Scoring](/configent/docs/scoring) |
+| Why two escalation signals rather than one? | [The Guardrail](/configent/docs/escalation-guardrail) |
+| How do you stop the model from escalating on its own? | [Answering](/configent/docs/answering) |
+| What happens if the process dies mid-turn? | [Runs & Durability](/configent/docs/runs-and-durability) |
+| How do you avoid filing the same ticket twice? | [Escalation & Ticket](/configent/docs/escalation-ticket) |
+| How is one tenant's corpus kept out of another's? | [Multi-Tenancy](/configent/docs/multi-tenancy) |
+| Why `voyage-3`, and why not a dedicated vector DB? | [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed) |
+| How does a long conversation not get linearly more expensive? | [Prompt Caching](/configent/docs/prompt-caching) |
+| What does adding a new client actually take? | [Adding a New Use Case](/configent/docs/adding-a-use-case) |
 
 ---
 
-## System prompt — the assistant's standing instructions
+## Vocabulary
 
-The **system prompt** is a text file (`prompts/<client>.md`) that sets the assistant's persona and
-rules: who it is, that it must answer *only* from retrieved documents, that it must cite sources, and
-*when* to use each tool (e.g. "file a ticket only when the docs can't answer"). It's the same on
-every turn, which is why it caches well (below).
+The terms the rest of the docs use without re-defining.
 
----
-
-## Citations — showing the receipts
-
-A grounded answer is only trustworthy if you can see *where* it came from. Configent uses Anthropic's
-native **citations**: when the loop passes retrieved passages as `search_result` blocks, Claude annotates
-its answer with markers pointing at the exact sentences it used. The UI renders these as inline,
-hoverable source links — not a footnote dump.
-→ [Citations](/configent/docs/citations)
+- **Client / tenant:** one assistant — corpus, prompt, tools, branding, limits — defined by one YAML file in `config/`.
+- **Chunk:** a passage of a document (512 tokens for the support agent), embedded and stored as a row in pgvector. Retrieval returns chunks, not documents, so a citation can point at a paragraph.
+- **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. Ranges 0–1; the support agent discards anything below `0.3`.
+- **Groundedness:** a separate cheap-model score for whether the retrieved passages actually support an answer. Similarity says "close"; groundedness says "sufficient".
+- **Stage:** one step of the pipeline engine — `retrieve`, `score`, `answer`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
+- **The two signals:** retrieval similarity (is anything in the corpus close?) and groundedness (is it enough?). One catches a corpus with nothing relevant; the other catches a corpus with something close but wrong.
+- **The branch:** the single `if` statement that decides answer-or-escalate. Everything else is a stage; only this decides.
+- **Tool starvation:** the answering call is sent no tool definitions at all, so escalation is unreachable from inside the model. A guarantee, not a prompt instruction.
+- **Run:** one pipeline turn, and the durable step trail it leaves in Postgres.
+- **Tool:** a function the model can ask the backend to call. The pipeline's answering call is sent none.
 
 ---
 
-## Multi-tenancy — one deployment, many isolated clients
-
-A **client** (or **tenant**) is a single assistant — its documents, branding, prompt, tools, and
-limits — defined by one YAML file. **Multi-tenancy** means one running deployment serves many of them
-side by side, fully isolated: `client_id` scopes every database query, so one client's documents can never appear in another's retrieval.
-
-Adding a client is a no-code operation: a config file, a folder of documents, a prompt.
-→ [Multi-Tenancy](/configent/docs/multi-tenancy) · [Config Reference](/configent/docs/config-reference)
-
----
-
-## SSE streaming — words appearing as they're generated
-
-Rather than waiting for the whole answer, the assistant **streams** it — text appears token by token,
-and a "Searching…" indicator shows while a tool runs. This uses **Server-Sent Events (SSE)**, a
-simple one-way "server keeps sending" channel over plain HTTP. The frontend reads the stream and
-updates the chat live.
-→ [SSE Streaming](/configent/docs/sse-streaming)
-
----
-
-## Prompt caching — not paying twice for the same prefix
-
-Every turn re-sends the system prompt and the full conversation history. **Prompt caching** tells
-Anthropic to remember the unchanged *prefix* of the prompt for a few minutes, so Anthropic bills those tokens ~10× cheaper on the next turn instead of reprocessing them from scratch. It's why a long
-conversation doesn't get linearly more expensive.
-→ [Prompt Caching](/configent/docs/prompt-caching)
-
----
-
-## Effort — how hard the model "thinks"
-
-**Effort** controls Claude's extended-thinking budget (`low` → `max`). Higher effort spends more
-tokens reasoning before answering. One caveat: extended thinking is only
-available on Sonnet 4+ and Opus 4+, so the `effort` key has **no effect on Haiku** — which every
-shipped client uses today.
-→ [Config Reference](/configent/docs/config-reference#agent)
-
----
-
-## Putting it together
-
-Here's a single Configent Support turn, using every concept above:
-
-```
-You ask: "How do I add a new client?"
-   │
-   ├─ system prompt + tool list sent to Claude        (cached prefix → cheap)
-   ├─ Claude calls search_docs("add a new client")    (agent loop, iteration 1)
-   │     └─ question embedded (Voyage) → pgvector finds nearest chunks (RAG retrieval)
-   │           scoped to configent-support only        (multi-tenancy)
-   ├─ passages returned as search_result blocks
-   ├─ Claude writes the answer, citing the chunks      (citations)
-   └─ answer streams back token by token               (SSE)
-```
-
-Ready to build one? → [Quickstart](/configent/docs/getting-started) ·
-[Adding a New Use Case](/configent/docs/adding-a-use-case)
+**Start here:** [One Question, End to End](/configent/docs/pipeline) for the design, or [Quickstart](/configent/docs/getting-started) to run it locally.
