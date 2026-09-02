@@ -35,6 +35,26 @@ Two things come back: the parsed judgement, and the raw response — the latter 
 
 ---
 
+## What the scorer is asked
+
+The prompt is `prompts/<client_id>/score.md`, and its first instruction is that the scorer **judges the passages, it does not answer the question**. It is told what it is for: that low confidence stops the pipeline and files a ticket, and that the failure that matters is the opposite one — high confidence on passages that do not contain the answer, which produces a confident wrong answer to an infrastructure question.
+
+It is given the question and the surviving passages, and calibrated against three bands:
+
+| Band | Score | When |
+|---|---|---|
+| **High** | `0.8`–`1.0` | The passages state the answer directly — a default value, an error message and its documented cause, a named constraint, a described mechanism |
+| **Middling** | `0.4`–`0.7` | On-topic and partly answering: the mechanism is described but the number asked for is absent, or one of two sub-questions is covered |
+| **Low** | `0.0`–`0.3` | Topically adjacent without containing the answer; **or** the question depends on the user's own environment; **or** it is about a product outside this corpus |
+
+Three details in that prompt do most of the work:
+
+- **"Score this low however relevant the passages look."** Questions about a user's own project, quota, spend, org policy, cluster state or an open incident cannot be answered from public documentation, no matter how well retrieval matched. This is the rule that fires in the example below.
+- **"Do not reward yourself for finding relevant-looking text."** The scorer is warned off the failure mode it is most prone to — mistaking topical proximity for an answer, which is exactly what similarity already measures.
+- **`reasoning` is written for the end user.** The prompt says so, because that sentence renders in the step trail. It is a product string, not a debug log.
+
+---
+
 ## A worked example
 
 Both questions retrieve well. Only one of them can be answered.
@@ -48,6 +68,7 @@ Both questions retrieve well. Only one of them can be answered.
 **"Can you raise my Cloud Run quota for europe-west1?"** — a real trace:
 
 - Retrieval was *confident*: the corpus has a quotas-and-limits page, and it matched well.
+- The environment rule fires. The question is about *this project's* quota in *this region*, which no public document can contain, so the scorer is instructed to score it low however good the match looked.
 - The scorer returns `confidence: 0.05`, `supported: false`, `missing_info: "the user's own project quota"`, and the reasoning *"The passages describe quota limits generally, not this project's."*
 - `0.05` is under the threshold, so the turn escalates. Cost of the judgement: `$0.000181`.
 
@@ -73,6 +94,7 @@ Reading the boolean would put the escalation decision back inside the model, whi
 
 ### The call itself
 
+- **The threshold cuts the middling band in half.** `confidence_threshold: 0.6` sits inside the `0.4`–`0.7` range, so a partial answer scoring `0.65` is served and one scoring `0.55` escalates. That is intended — a partly-supported answer with citations is often useful — but it means the prompt's bands and the config's threshold have to be tuned together.
 - **Its own prompt file.** `prompts/<client_id>/score.md`, separate from the answer prompt. A mega-prompt covering scoring and answering makes the guardrail unauditable.
 - **The cheap model.** A judgement this narrow costs a fraction of the answering call — about `$0.0002` per step.
 - **Structured output, never citations.** The Messages API returns 400 when `output_config.format` and citations are combined. `_structured_call()` is shared with the `escalate` stage, the other structured one.
