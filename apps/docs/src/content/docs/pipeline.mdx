@@ -89,7 +89,7 @@ agent:
 
 Config decides *which* engine, *which* model, and *where* the thresholds sit. Code decides the stage sequence and who makes the branch. Adding a client is a YAML file, a corpus, and a prompt directory — no Python. See [Adding a New Use Case](/configent/docs/adding-a-use-case).
 
-> **A pipeline client carries no `agent.tools` key.** Retrieval is a function call and the ticket executor is invoked from Python, so no tool definition is ever sent. `agent.tools` is read only by `loop.py`, which means a list here would be dead config that reads like a capability. See [Retrieval → Why not a retrieval agent tool?](/configent/docs/retrieval#why-not-a-retrieval-agent-tool).
+> **A pipeline client carries no `agent.tools` key.** Retrieval is a function call and the ticket executor is invoked from Python, so no tool definition is ever sent. `agent.tools` is read only by `loop.py`, which means a list here would be dead config that reads like a capability. See [Retrieval → Retrieval is a function call, not a tool](/configent/docs/retrieval#retrieval-is-a-function-call-not-a-tool).
 
 ---
 

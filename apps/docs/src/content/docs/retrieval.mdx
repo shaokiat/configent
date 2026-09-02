@@ -13,14 +13,6 @@ Its second return value is **signal 1** of the [guardrail](/configent/docs/escal
 
 ## The flow
 
-```python
-async def stage_retrieve(
-    db: AsyncSession, *, cfg: ClientConfig, client_id: str, query: str
-) -> tuple[list[Hit], float]
-```
-
-Returns the hits that survived the floor and `hits[0].similarity`, or `0.0` when nothing survived. Each `Hit` carries `document_title`, `source_uri`, `text`, `similarity`, and `chunk_index`, which is what the [answering stage](/configent/docs/answering) needs to build `search_result` blocks.
-
 ```
 stage_retrieve()
   │
@@ -32,46 +24,78 @@ stage_retrieve()
        └─ floor filter        drop below retrieval_drop_floor, then [:k]
 ```
 
-```python
-similarity = (1 - Chunk.embedding.cosine_distance(query_vec)).label("similarity")
-... .where(Chunk.client_id == client_id).order_by(similarity.desc()).limit(k * 2)
-hits = [Hit(...) for row in rows if float(row.similarity) >= floor]
-return hits[:k]
-```
+Two things come back: the hits that survived the floor, and the similarity of the best one — `0.0` when nothing survived. Each hit carries its document title, source URI, text, similarity and chunk index, which is what the [answering stage](/configent/docs/answering) needs to build `search_result` blocks.
 
 The loop engine reaches the same `search()` through `search_docs.execute()`, which wraps the hits as content blocks. One retrieval implementation, two callers, configured differently — the tool takes `search()`'s default floor, while this stage passes the client's. See [Tools System](/configent/docs/tools-system#search_docs-shared).
 
 ---
 
-## Why not a retrieval agent tool?
+## A worked example
 
-Agentic retrieval is for decisions with more than one right answer. This one doesn't have that.
+Two turns through the stage, with this client's thresholds: drop floor `0.3`, escalate below `0.45`. Similarity numbers are illustrative.
 
-- **The need is unconditional, not discovered.** A tool call is worth it when the model *might* need context. Here it always does, so delegating only adds a failure mode: the agent skipping or mistiming the call.
-- **It removes retrieval laziness.** Models sometimes decide they already know the answer and reply from parameters instead of searching. For an escalation flow that means a confident, invented resolution path. Grounding happens before the model gets a vote.
-- **One embedding beats a round trip.** A tool call costs reason, emit, wait, resume, sometimes twice if the model reformulates. Escalation paths are usually SLA-bound.
-- **The decision has to be defensible later.** Same question, same embedding, same top-k. A generative step produces different queries on different runs, leaving nothing fixed to replay when someone asks why a ticket was filed.
-- **It shrinks the injection surface.** The question is user-written. Turning that text into a search query with a model hands an attacker influence over what gets retrieved.
+**Turn 1 — "What is the maximum request timeout on Cloud Run?"**
 
-### When it should be a tool call
+- `_retrieval_query()` finds no previous user turn and returns the question unchanged.
+- Voyage embeds it; pgvector scans this client's chunks and returns the 10 nearest.
+- Six sit below `0.3` and are dropped. Four go forward, the best at `0.61`.
+- `0.61` clears `escalate_below`, so the turn continues to [scoring](/configent/docs/scoring).
 
-- **Multi-hop pays off.** "Nothing above the threshold, try broader." A second search earns its keep here. That is the [loop engine](/configent/docs/agent-loop) and its `search_docs` tool, which Configent's three other clients run. This one uses neither.
-- **The input is noisy.** Long logs, mixed languages, pasted boilerplate. The middle ground is one cheap call to extract a clean query, then a deterministic search. Still not agentic retrieval.
-- **Ticket types need genuinely different corpora.** A stack trace wants code and logs, a billing dispute wants another index. That needs routing before retrieval, which neither engine has: a client points at one `corpus.source`, so a tool call alone would not fix it.
+**Turn 2 — "And what about GKE?"**
 
-> **Why this client is the easy case.** It answers Cloud Run, GKE and IAM questions from one homogeneous set of public Google Cloud docs, and questions like "what does the Cloud Run PORT error mean?" embed well as written, so there is no index to choose and no query to rewrite. Its `category` and `product_area` enums do look like ticket types, but the escalate stage assigns them after retrieval to route the ticket to a queue, not to pick a corpus.
+- On its own that embeds to almost nothing — no product, no subject, nothing matchable. Best hit `0.29`, below the floor, zero survivors, and the turn escalates on `"retrieval returned no passages above the drop floor"`. The corpus had the answer; the query never asked for it.
+- `_retrieval_query()` prepends the previous user turn instead, so what gets embedded is:
+
+  ```
+  What is the maximum request timeout on Cloud Run?
+  And what about GKE?
+  ```
+
+- That carries enough of the topic to reach the GKE timeout docs. Best hit `0.48`, above `escalate_below`, and the turn proceeds.
 
 ---
 
-## Design
+## Design decisions
 
-- **Deterministic, not a tool.** The model cannot skip retrieval or search for something else. That is what makes the groundedness score mean anything — the scorer always rates the same passages the answerer will see.
-- **The query is embedded as a question, not a document.** `input_type="query"` differs from the `"document"` type used at ingest. Questions and answers have different linguistic patterns, and Voyage uses that asymmetry to improve recall. Free win, one argument. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline#why-voyage-ai).
-- **Over-fetch, then filter.** `limit(k * 2)`, drop below `retrieval_drop_floor` in Python, then truncate to `k`. pgvector cannot apply the floor inside the scan, so filtering in SQL would return fewer than `k` rows whenever the floor bites. With the default `k=5`, 10 rows come back and at most 5 go forward.
-- **The floor exists so "nothing matched" is a case.** Without it the model always receives `k` chunks regardless of relevance. When the corpus does not contain the answer, those chunks are noise the model may hallucinate around.
+### Retrieval is a function call, not a tool
+
+Agentic retrieval is for decisions with more than one right answer. This one doesn't have that — the model always needs context, so letting it choose adds failure modes without adding capability.
+
+| | Function call (this pipeline) | Tool call ([loop engine](/configent/docs/agent-loop)) |
+|---|---|---|
+| **Deciding to search** | Nothing to decide; it always happens | The model may skip it or mistime it |
+| **Answering from memory** | Impossible — grounding precedes the model | Models sometimes reply from parameters |
+| **Latency** | One embedding | Reason, emit, wait, resume — twice if it reformulates |
+| **Replay** | Same question, same embedding, same top-k | A generated query differs per run |
+| **Injection surface** | User text is embedded, never interpreted | An attacker influences what gets searched |
+| **Multi-hop** | Not possible | The reason to choose it |
+| **What the scorer rates** | Exactly the passages the answerer will see | A moving target |
+
+Switch to a tool when multi-hop pays off, or when the input is noisy enough to need a cleaning pass first. Different question types needing different corpora is a third case, but a tool alone wouldn't fix it — that needs routing *before* retrieval, which neither engine has.
+
+> **Why this client is the easy case.** One homogeneous set of public Google Cloud docs, and questions like "what does the Cloud Run PORT error mean?" embed well as written — no index to choose, no query to rewrite. Its `category` and `product_area` enums look like ticket types, but the escalate stage assigns them *after* retrieval, to route the ticket rather than to pick a corpus.
+
+### The search itself
+
+- **Embedded as a question, not a document.** `input_type="query"` differs from the `"document"` type used at ingest; Voyage exploits the asymmetry for recall. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline#why-voyage-ai).
+- **Over-fetch, then filter.** pgvector can't apply the floor inside the scan, so filtering in SQL would return fewer than `k` rows whenever the floor bites.
+- **The floor makes "nothing matched" a case.** Without it the model always receives `k` chunks regardless of relevance — noise it may hallucinate around. With it, empty retrieval short-circuits past scoring to an escalation.
 - **`client_id` is in the `WHERE` clause.** Tenant isolation is a query predicate, not a convention. See [Multi-Tenancy](/configent/docs/multi-tenancy).
 
-> **Follow-ups get the previous turn prepended.** "And what about GKE?" embeds to nothing useful when no model is rewriting the query. `_retrieval_query()` prepends the last user message: one line, no extra call. It is a heuristic, not query rewriting, and it fails on a three-turn reference chain. The alternative was a demo where the second question fails.
+### Follow-ups get the previous user turn prepended
+
+Nothing rewrites the query, so a question that isn't self-contained retrieves nothing. `_retrieval_query()` prepends the last *user* message — a heuristic, not query rewriting. Every option below fails the same way, by escalating an answerable question; none can produce an ungrounded answer, since a thin query only lowers similarity. So the choice is purely about how often each one misfires.
+
+| | Current turn only | **+ previous user turn** | + assistant reply |
+|---|---|---|---|
+| **Misfires when** | The question isn't self-contained | The subject changes *and* the new question is terse | The reply is long, or was wrong |
+| **How often** | Every follow-up — most turns after the first | The rare intersection: terse questions are almost always follow-ups, not switches | Most turns — a 400-token reply swamps a 6-token question |
+| **Extra cost** | — | — | Retrieval starts matching the model's own output |
+
+- **Known limits.** Only the immediately preceding turn is used, so a three-turn reference chain still loses the subject, and its contribution scales with its length rather than its relevance.
+- **The cheapest fix, unbuilt.** Embed both candidate queries and keep whichever scan scores higher: one batched call, no model, still replayable.
+
+> **Reproducibility is scoped to one embedding model version.** "Same query → same top-k" holds while the model is fixed. `voyage-3` is hardcoded in `embed.py` and no version is recorded on the chunk or the step, so bumping it silently changes what old runs would retrieve today. Not built — the corpus has only ever seen one model.
 
 ---
 
@@ -84,28 +108,6 @@ Agentic retrieval is for decisions with more than one right answer. This one doe
 `k` is fixed at 5 in the pipeline. Full key list: [Config Reference](/configent/docs/config-reference#agent).
 
 > **The floor and `escalate_below` are not the same knob.** The floor discards; `escalate_below` escalates. They read the same number at different points, and their ordering is validated at startup. See [The Guardrail](/configent/docs/escalation-guardrail#three-thresholds).
-
----
-
-## Edge cases
-
-- **Nothing survives the floor.** `stage_retrieve` returns `([], 0.0)`. The pipeline short-circuits past [scoring](/configent/docs/scoring) straight to the branch, which escalates with `"retrieval returned no passages above the drop floor"`. Asking a model to rate zero passages invents a number.
-- **First turn of a conversation.** `_retrieval_query()` finds no previous user message and returns the question unchanged.
-- **Non-string history content.** A prior turn stored as blocks rather than a string is skipped rather than coerced.
-
-> **Reproducibility is scoped to one embedding model version.** "Same query → same top-k" holds while the embedding model is fixed. `voyage-3` is hardcoded in `embed.py` and no version is recorded on the chunk or the step, so bumping it silently changes what old runs would retrieve today. Replaying a historical decision would need the version pinned per record and a re-embed on change. Not built — the corpus has only ever seen one model.
-
----
-
-## On the record
-
-```json
-{ "stage": "retrieve", "n_hits": 4, "top_similarity": 0.5013,
-  "reasoning": "Best match: Cloud Run quotas and limits",
-  "sources": ["corpus://gcp-platform-support/cloud-run-quotas", "..."] }
-```
-
-`top_similarity` is signal 1, recorded before anything can act on it. Trail schema: [Runs & Durability](/configent/docs/runs-and-durability).
 
 ---
 

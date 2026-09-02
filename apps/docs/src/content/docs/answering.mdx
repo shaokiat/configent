@@ -11,73 +11,73 @@ The interesting part of that request is what is missing from it.
 
 ---
 
-## Contract
-
-```python
-def answer_request_kwargs(
-    cfg: ClientConfig, *, hits: list, question: str, history: list[dict]
-) -> dict
-```
-
-```python
-{
-    "model": cfg.agent.model,
-    "max_tokens": cfg.agent.max_tokens,
-    "system": [{"type": "text", "text": ..., "cache_control": {"type": "ephemeral"}}],
-    "messages": history + [{"role": "user", "content": content}],
-}
-```
-
-There is no `tools` key. Not an empty list — the key never appears, and the string `"escalat"` appears nowhere in the request. A test asserts both, rather than leaving it to inspection.
-
----
-
 ## The flow
 
 ```
 answer_request_kwargs()
-  │  _search_result_blocks(hits) + [{"type": "text", "text": question}]
+  │  search_result blocks (passages first) + the question (last)
+  │  system prompt, cached · no `tools` key
   ▼
 Messages API (streaming, citations enabled)
+  │  text_delta      ──▶ SSE `text` event
   │  citations_delta ──▶ SSE `citation` event, as it arrives
   ▼
 _collect_segments(response) ──▶ (text, citations, segments)
 ```
 
-```python
-content = _search_result_blocks(hits) + [{"type": "text", "text": question}]
-```
+There is no `tools` key in the request. Not an empty list — the key never appears, and the string `"escalat"` appears nowhere in it. A test asserts both, rather than leaving it to inspection.
 
-Passages first, question last. `_collect_segments()` produces the same shape the loop engine produces, so the renderer and the stored format are unchanged by which engine ran.
+`_collect_segments()` produces the same shape the loop engine produces, so the renderer and the stored format are unchanged by which engine ran.
 
 ---
 
-## Design
+## A worked example
 
-- **Tool starvation is the mechanism, not the prompt.** The model is given no tool definitions, so it cannot file a ticket and cannot decline to answer by escalating instead. Prompting a model not to do something it is capable of doing is a request; removing the capability is a guarantee.
-- **`search_result` blocks go in as top-level user content.** They do not have to arrive inside a `tool_result`. That API fact is what lets retrieval be an ordinary function call while citations keep working exactly as they do in the loop. Without it the pipeline would need a fake tool round trip to get citations.
-- **Citations are enabled unconditionally.** The API requires citations on all search results in a request or none, and an uncited answer is not what this assistant is for.
+**"My Cloud Run container fails to start — what does the PORT error mean?"**
+
+- The guardrail passed it through on similarity `0.71` and groundedness `0.88`, and hands over the four surviving passages.
+- The request goes out as four `search_result` blocks followed by the question, plus a cached system prompt and the conversation history. No tools.
+- The reply streams: `text` events as the prose arrives, a `citation` event each time the model attributes a claim — three of them, to two different documents.
+- The step records `n_citations: 3`, `4210` input tokens, `260` output, `$0.00142`, and the guardrail's own sentence as its reasoning.
+
+The recorded reason on a successful answer is the *not*-escalating branch of the same comparison, so an answer is as justified in the trail as a refusal is.
+
+---
+
+## Design decisions
+
+### The model has nothing to escalate with
+
+Escalation is not this stage's decision, and the enforcement is structural rather than written down.
+
+| | **No `tools` key (built)** | Tools present, prompt says "don't escalate" |
+|---|---|---|
+| **Can it file a ticket?** | No — the capability is absent | Yes, if it decides to |
+| **Can it decline by escalating?** | No | Yes — the easy out on any hard question |
+| **What enforces it** | The API request | A sentence the model may weigh against others |
+| **How you verify it** | Assert on the request in a test | Re-run the evals and hope |
+
+Prompting a model not to do something it is capable of doing is a request. Removing the capability is a guarantee.
+
+### The request itself
+
+- **`search_result` blocks go in as top-level user content.** They do not have to arrive inside a `tool_result`. That API fact is what lets retrieval be an ordinary function call while citations keep working exactly as they do in the loop — without it, the pipeline would need a fake tool round trip to get citations.
+- **Passages first, question last.** The evidence is context; the question is the instruction.
+- **Citations are enabled unconditionally.** The API requires them on all search results in a request or none, and an uncited answer is not what this assistant is for.
 - **The system prompt is cached.** One `cache_control` breakpoint on a block that does not change between turns. See [Prompt Caching](/configent/docs/prompt-caching).
-- **The response object is assembled, not generated.** Citations and `output_config.format` cannot be combined, so this stage cannot return structured output. Python builds and validates the final response from the stage results — the stronger claim anyway, since the contract is constructed rather than hoped for.
-
----
-
-## Edge cases
-
+- **The response is assembled, not generated.** Citations and `output_config.format` cannot be combined, so this stage cannot return structured output. Python builds the final response from the stage results — the stronger claim anyway, since the contract is constructed rather than hoped for.
 - **This stage never sees empty retrieval.** The guardrail escalates first. The loop engine handles the empty case differently, because there the model is still holding tools — see [Citations → Empty retrieval](/configent/docs/citations#empty-retrieval).
-- **A model that answers without citing.** The passages are present and citations are on, so this reads as a corpus problem rather than a wiring one. The `n_citations` field on the step is what makes it visible.
+- **An answer that cites nothing is visible, not blocked.** The passages are present and citations are on, so `n_citations: 0` on the step reads as a corpus problem rather than a wiring one. Nothing currently branches on it.
 
 ---
 
-## On the record
+## Configuration
 
-```json
-{ "stage": "answer", "n_citations": 3,
-  "reasoning": "similarity 0.71 and groundedness 0.88 both above threshold",
-  "usage": { "input_tokens": 4210, "output_tokens": 260, "cost_usd": 0.00142 } }
-```
-
-`reasoning` is the guardrail's own sentence for the *not*-escalating case, so a successful answer is as justified in the trail as a refusal.
+| Key | Default | What it does |
+|---|---|---|
+| `agent.model` | — | The model that answers. The same one scores |
+| `agent.max_tokens` | `4096` | Cap on the streamed reply |
+| `agent.system_prompt_file` | — | The answer prompt. `score.md` and `ticket_draft.md` are resolved beside it |
 
 Citation payloads and how the frontend renders them: [Citations](/configent/docs/citations). Event contract: [SSE Streaming](/configent/docs/sse-streaming).
 
