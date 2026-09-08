@@ -9,7 +9,7 @@ import ArchDiagram from '@/components/ArchDiagram.astro';
 
 This is the hub for the pipeline engine. It follows one question from HTTP to answer, names the six components on the way, and hands each one to the page that owns it.
 
-The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations, and when it cannot answer, it files a ticket. The build is in `apps/api/app/`; the engine for this client is `agent/pipeline.py`.
+The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations, and when it cannot answer, it either replies conversationally or offers a drafted ticket the user confirms. The build is in `apps/api/app/`; the engine for this client is `agent/pipeline.py`.
 
 <ArchDiagram />
 

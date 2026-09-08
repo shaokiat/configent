@@ -8,7 +8,7 @@ group: Overview
 <div class="lead">
   Configent is a multi-tenant RAG assistant platform where a client is a YAML file, not a codebase.
   The reference client is a Google Cloud support agent that answers from documentation with
-  citations and files a ticket when it can't.
+  citations, and offers a drafted ticket when it can't.
 </div>
 
 ---
@@ -106,6 +106,8 @@ The terms the rest of the docs use without re-defining.
 - **Stage:** one step of the pipeline engine — `retrieve`, `score`, `answer`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
 - **The two signals:** retrieval similarity (is anything in the corpus close?) and groundedness (is it enough?). One catches a corpus with nothing relevant; the other catches a corpus with something close but wrong.
 - **The branch:** the single `if` statement that decides answer-or-escalate. Everything else is a stage; only this decides.
+- **Outcome:** how a turn ends — `answer` (cited, from the corpus), `converse` (a greeting, a thank-you, a meta-question or a follow-up handled from context; no ticket), or `ticket` (a real support request the corpus cannot answer; a ticket is drafted, offered, and filed on the user's confirmation). Three-way, because "not answerable from the docs" and "escalate" are not the same thing.
+- **Triage:** the `route` field on the escalate stage's structured output, which separates those last two. It rides inside a call that already happens rather than sitting in front of retrieval as an intent classifier.
 - **Tool starvation:** the answering call is sent no tool definitions at all, so escalation is unreachable from inside the model. A guarantee, not a prompt instruction.
 - **Run:** one pipeline turn, and the durable step trail it leaves in Postgres.
 - **Tool:** a function the model can ask the backend to call. The pipeline's answering call is sent none.

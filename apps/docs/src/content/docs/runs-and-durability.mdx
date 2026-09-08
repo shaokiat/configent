@@ -61,7 +61,9 @@ Each call opens its own connection, commits immediately, and closes. The cost is
 }
 ```
 
-Stage-specific fields ride along in the same entry: `n_hits` and `top_similarity` on `retrieve`, `n_citations` on `answer`, `category` and `priority` on `escalate`, `ticket_id` and `queue` on `ticket`.
+Stage-specific fields ride along in the same entry: `n_hits` and `top_similarity` on `retrieve`, `n_citations` on `answer`, `route` plus `category` and `priority` on `escalate`, `ticket_id` and `queue` on `ticket`.
+
+> **A run can gain a step after it finishes.** The `ticket` stage no longer runs inside the turn — the escalate stage parks its draft in `Run.state["ticket_draft"]` and the turn completes without filing. If the user confirms, `POST /c/{id}/runs/{run_id}/ticket` rehydrates a `RunRecorder` from the stored row, appends the `ticket` step, and writes `state["ticket_id"]`. So a `completed` run holding a draft and no ticket is a normal resting state, not an interrupted one, and the stored `ticket_id` is what makes a second confirmation a no-op.
 
 ## Runs vs. traces
 

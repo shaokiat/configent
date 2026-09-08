@@ -100,6 +100,7 @@ interface RunStep {
   status: string;
   reasoning?: string;
   latency_ms?: number;
+  route?: string;        // "converse" | "ticket", on the escalate stage
   // stage-specific: n_hits, top_similarity, confidence, n_citations, ticket_id
 }
 ```
@@ -112,9 +113,15 @@ interface RunStep {
   stays after the stream ends.
 
 `StepTrail` renders a collapsible timeline, open while live and collapsed afterwards.
-`STAGE_LABEL` maps stage names to human phrasing ("Scored the evidence"), and
+`stageLabel` maps stage names to human phrasing ("Scored the evidence"), and
 `stageDetail` renders the number that mattered for that stage — the confidence, the hit
 count, the ticket id. Escalated runs colour their trail differently from answered ones.
+
+The `escalate` stage needs the `route` to be labelled honestly, because it does two jobs:
+`route: "converse"` renders as *"Not a support request · no ticket"*, and `route: "ticket"`
+as *"Drafted a ticket for review"*. The amber "escalated" badge fires only on the second —
+a greeting passes through the same stage, and badging that as an escalation is the same
+conflation the backend fix removed.
 
 The loop's "Searching…" tool indicator is suppressed whenever steps are present, so a
 pipeline turn reports progress one way rather than two.
@@ -123,6 +130,27 @@ pipeline turn reports progress one way rather than two.
 > and the assistant `Message` carries a `run_id` to join back through. Replaying a
 > conversation rehydrates `msg.steps` from that join. See
 > [Runs & Durability](/configent/docs/runs-and-durability).
+
+---
+
+## The ticket proposal
+
+An escalating turn ends with a `ticket_proposal` event, not a filed ticket. `ChatPanel`
+stores it on the assistant message alongside a `proposalState` of `open | filing | filed |
+declined`, and `TicketProposalCard` renders the draft — subject, category, priority — under
+the reply, with **Open this ticket** and **Not now**.
+
+Confirming posts to `/api/c/{client_id}/runs/{run_id}/ticket` through a Next route handler,
+with **no request body**. The draft lives on the run server-side, so the client can accept an
+offer but cannot author a ticket of its own. The response's `reply` is appended as a new
+assistant message rather than mutating the one that made the offer, so the conversation reads
+as offer-then-confirmation, which is what actually happened.
+
+> **A pending offer does not survive a reload.** The filed confirmation is persisted as its
+> own assistant turn and comes back with history; an unanswered proposal is only a button,
+> and `historyToMessages` does not rebuild it. What is lost is the shortcut, not the record —
+> the user can ask again. Restoring it would mean reading `Run.state` back through the
+> history endpoint, which is more API surface than a re-ask costs.
 
 ---
 

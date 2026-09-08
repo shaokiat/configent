@@ -54,7 +54,7 @@ const decisions = [
 ];
 ---
 
-<BaseLayout title="Home" description="A support agent that answers from documentation with citations and escalates to a filed ticket when it can't — the decision made in code, every stage on the record.">
+<BaseLayout title="Home" description="A support agent that answers from documentation with citations and offers a ticket when it can't — the decision made in code, every stage on the record.">
 
   <Hero />
 
@@ -192,7 +192,8 @@ const decisions = [
             <li><strong>score</strong> — a cheap model rates how well the surviving passages actually support an answer, and returns a structured groundedness value.</li>
             <li><strong>the branch</strong> — Python compares both numbers to the configured thresholds and picks a path.</li>
             <li><strong>answer</strong> — passages go to the model as <code>search_result</code> blocks in top-level user content, so the API attaches citations at generation time. No tool definitions are sent on this call.</li>
-            <li><strong>escalate → ticket</strong> — the other path drafts a structured ticket and POSTs it to the ticket service, which assigns the id.</li>
+            <li><strong>escalate</strong> — the other path triages first: a greeting, a thank-you or a bare follow-up retrieves nothing and lands here too, and is answered conversationally rather than filed. A real support request gets a structured ticket drafted.</li>
+            <li><strong>ticket</strong> — the draft is shown to the user as an offer. On confirmation it is POSTed to the ticket service, which assigns the id. A queue is only worth reading if what reaches it needed a human.</li>
           </ol>
         </div>
       </div>

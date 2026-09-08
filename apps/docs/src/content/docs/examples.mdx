@@ -26,8 +26,10 @@ the API to bring one online.
 
 **Use case:** A deployment and infrastructure support agent, and the client the current build is
 organised around. **DeployBot** answers Cloud Run, GKE and IAM questions from public Google Cloud
-documentation with citations, and files a ticket when a question depends on the user's own
-project — quota, billing, IAM policy, cluster state. This is the assistant powering the
+documentation with citations, and offers a drafted ticket when a question depends on the user's
+own project — quota, billing, IAM policy, cluster state. Nothing is filed until the user
+confirms, and a turn that is not a support request at all — a greeting, a thank-you, a
+follow-up — is answered conversationally and files nothing. This is the assistant powering the
 [demo](/configent/demo).
 
 **Corpus:** A curated snapshot of public Google Cloud documentation (CC BY 4.0, attributed per

@@ -10,7 +10,7 @@
     viewBox="0 0 960 580"
     xmlns="http://www.w3.org/2000/svg"
     role="img"
-    aria-label="Configent pipeline architecture: a config file feeds the engine, which retrieves passages from pgvector, scores their groundedness, then branches in Python to either answer with citations or escalate and file a ticket over HTTP. Every stage commits to the run's step trail before the next begins."
+    aria-label="Configent pipeline architecture: a config file feeds the engine, which retrieves passages from pgvector, scores their groundedness, then branches in Python to either answer with citations or escalate. The escalate path triages the turn and, when it is a real support request, drafts a ticket the user confirms before it is POSTed over HTTP. Every stage commits to the run's step trail before the next begins."
   >
     <defs>
       <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
@@ -85,13 +85,13 @@
     <!-- ── Branch B: escalate → ticket ────────────────────────── -->
     <rect class="bg-raised stroke-dim" x="512" y="320" width="228" height="52" rx="8" stroke-width="1"/>
     <text x="626" y="342" text-anchor="middle" class="mono-sm-bold y-str">escalate</text>
-    <text x="626" y="360" text-anchor="middle" class="label-xs text-faint">draft a structured ticket</text>
+    <text x="626" y="360" text-anchor="middle" class="label-xs text-faint">triage, then draft a ticket</text>
 
     <line x1="626" y1="372" x2="626" y2="392" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
 
     <rect class="bg-raised stroke-dim" x="512" y="394" width="228" height="52" rx="8" stroke-width="1"/>
     <text x="626" y="416" text-anchor="middle" class="mono-sm-bold y-str">ticket</text>
-    <text x="626" y="434" text-anchor="middle" class="label-xs text-faint">HTTP POST · Idempotency-Key</text>
+    <text x="626" y="434" text-anchor="middle" class="label-xs text-faint">POST on confirm · Idempotency-Key</text>
 
     <!-- ── Outputs ────────────────────────────────────────────── -->
     <line x1="336" y1="392" x2="336" y2="462" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -100,7 +100,7 @@
 
     <line x1="626" y1="446" x2="626" y2="462" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
     <rect class="bg-surface stroke-amber" x="512" y="464" width="228" height="26" rx="6" stroke-width="1"/>
-    <text x="626" y="481" text-anchor="middle" class="label-sm text-amber" font-weight="500">Filed ticket · id from the service</text>
+    <text x="626" y="481" text-anchor="middle" class="label-sm text-amber" font-weight="500">Filed ticket · after user confirms</text>
 
     <!-- ── Durable step trail ─────────────────────────────────── -->
     <rect class="bg-raised stroke-dim" x="222" y="502" width="518" height="28" rx="6" stroke-width="1" stroke-dasharray="3 2"/>
