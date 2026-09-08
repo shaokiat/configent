@@ -6,7 +6,8 @@ claim of this workflow is that escalation is *not* the model's decision (D2):
 
     retrieve  ->  score  ->  branch  ->  answer   (cited, no tools offered)
                               |
-                              +------->  escalate -> ticket   (forced)
+                              +------->  escalate  +->  converse           (no ticket)
+                                                    +->  propose -> [user confirms] -> ticket
 
 Three properties fall out of the structure rather than out of prompting:
 
@@ -16,6 +17,19 @@ Three properties fall out of the structure rather than out of prompting:
    decline to answer by escalating instead.
 3. Every stage commits its own audit entry through `checkpoint_session()` before the next
    stage starts, so a crash leaves the completed stages durable (D3).
+
+The escalate arm is *two* situations, which is what D9 separates. Retrieval over public
+documentation returns nothing for `hi`, `thanks` or a bare follow-up, and empty retrieval
+short-circuits straight to escalate — so before D9 every non-question filed a ticket. The
+triage is a `route` field on the draft call that already happens, not a router in front of
+retrieval: a classifier upstream would relocate the escalate/answer decision to an earlier
+model with only the question text as evidence, which is the decision this engine exists to
+keep away from a model. And nothing is filed without the user confirming the draft — the
+user is mid-deploy and did not ask for a ticket.
+
+`converse` is the one path that produces user-facing text with no passages in front of the
+model. That is a hole in the grounding guarantee unless the prompt forbids stating platform
+facts there, which `ticket_draft.md` does.
 
 Two API constraints shape the stage boundaries, both verified 2026-08-30:
 
@@ -83,7 +97,9 @@ class PipelineResult:
     segments: list[dict] = field(default_factory=list)
     citations: list[dict] = field(default_factory=list)
     confidence: float = 0.0
-    escalated: bool = False
+    # Three-way since D9. A boolean `escalated` cannot express "this was not a support
+    # question", which is the distinction the whole fix turns on.
+    outcome: str = "answer"  # "answer" | "converse" | "ticket"
     ticket_id: str | None = None
     usage: UsageTotals = field(default_factory=UsageTotals)
 
@@ -261,6 +277,11 @@ _SCORE_SCHEMA = {
 _TICKET_SCHEMA = {
     "type": "object",
     "properties": {
+        # D9. `converse` ends the turn with `reply` and files nothing; `ticket` fills the
+        # fields below. Only `route` is required, so a conversational turn is not forced to
+        # invent a subject and a category it has no use for.
+        "route": {"type": "string", "enum": ["ticket", "converse"]},
+        "reply": {"type": "string"},
         "subject": {"type": "string"},
         "category": {
             "type": "string",
@@ -277,8 +298,17 @@ _TICKET_SCHEMA = {
         "priority": {"type": "string", "enum": ["low", "normal", "high"]},
         "body": {"type": "string"},
     },
-    "required": ["subject", "category", "product_area", "priority"],
+    "required": ["route"],
     "additionalProperties": False,
+}
+
+# Filled in when the model routes to `ticket` but leaves a field out. The pipeline never
+# skips filing over a missing enum — an under-described ticket still reaches a human, which
+# is the failure mode worth having.
+_TICKET_DEFAULTS = {
+    "category": "other",
+    "product_area": "other",
+    "priority": "normal",
 }
 
 
@@ -376,12 +406,17 @@ def answer_request_kwargs(
 async def stage_escalate(
     aclient: anthropic.AsyncAnthropic, *, cfg: ClientConfig, question: str, why: str
 ) -> tuple[dict, Any]:
-    """Draft the ticket fields. Structured output; the model never places the call."""
+    """Triage the turn, and draft the ticket fields if it needs one (D9).
+
+    Structured output; the model never places the call. It also never decides *whether the
+    question was answerable* — `should_escalate()` already settled that. All this call adds
+    is whether an unanswerable turn is a support request at all.
+    """
     user = (
         f"The assistant could not answer this question from its documentation.\n"
-        f"Reason: {why}\n\nUser's question:\n{question}"
+        f"Reason: {why}\n\nUser's message:\n{question}"
     )
-    return await _structured_call(
+    draft, response = await _structured_call(
         aclient,
         model=cfg.agent.model,
         system=_prompt(cfg, "ticket_draft"),
@@ -389,13 +424,34 @@ async def stage_escalate(
         schema=_TICKET_SCHEMA,
         max_tokens=768,
     )
+    return _normalise_draft(draft, question=question), response
+
+
+def _normalise_draft(draft: dict, *, question: str) -> dict:
+    """Fill what a `ticket` route left out, and fail toward filing.
+
+    An unrecognised route is treated as `ticket`: the model has already been told this turn
+    could not be answered, so the safe reading of a malformed reply is that a human should
+    see it. `converse` has to be asked for.
+    """
+    draft = dict(draft)
+    if draft.get("route") != "converse":
+        draft["route"] = "ticket"
+        draft["subject"] = (draft.get("subject") or "").strip() or _excerpt(question)
+        for key, value in _TICKET_DEFAULTS.items():
+            draft[key] = draft.get(key) or value
+    return draft
 
 
 async def stage_ticket(
     draft: dict, *, db: AsyncSession, client_id: str, run_id: str, stage_seq: int
 ) -> dict:
     """File the ticket. Python calls the executor directly — there is no tool-use round trip,
-    so there is exactly one call site to make idempotent (D4)."""
+    so there is exactly one call site to make idempotent (D4).
+
+    Since D9 this runs from `confirm_ticket()` rather than from the turn, so the call site
+    moved but did not multiply.
+    """
     executor = get_tool_executor(_TICKET_TOOL)
     return await executor(
         draft, client_id=client_id, db=db, run_id=run_id, stage_seq=stage_seq
@@ -561,10 +617,10 @@ async def _stream_pipeline_inner(
         retrieval_confidence=retrieval_confidence, score=score, cfg=cfg
     )
     result.confidence = float(score.get("confidence", 0.0)) if score else 0.0
-    result.escalated = escalate
 
     if not escalate:
         # ── 4a. answer ─────────────────────────────────────────────────────────
+        result.outcome = "answer"
         t = time.monotonic()
         citation_index = 0
         kwargs = answer_request_kwargs(cfg, hits=hits, question=user_message, history=history)
@@ -606,18 +662,32 @@ async def _stream_pipeline_inner(
         _maybe_crash("answer")
     else:
         # ── 4b. escalate ───────────────────────────────────────────────────────
+        # One call does two jobs: decide whether this is a support request at all (D9),
+        # and, if it is, draft the ticket. Riding inside the call that already happens is
+        # why triage costs nothing on the path that answers.
         t = time.monotonic()
         draft, draft_response = await stage_escalate(
             aclient, cfg=cfg, question=user_message, why=why
         )
         result.usage.add(getattr(draft_response, "usage", None))
         _record_trace(db, conversation_id, draft_response, t)
+        converse = draft["route"] == "converse"
+        result.outcome = "converse" if converse else "ticket"
+        # Persisted with the step below, so the confirm endpoint can file this draft later
+        # without re-running the turn.
+        if not converse:
+            recorder.state["ticket_draft"] = draft
         yield (
             "step",
             await recorder.step(
                 "escalate",
                 started=t,
-                reasoning=why,
+                reasoning=(
+                    "not a support request — answered conversationally, no ticket"
+                    if converse
+                    else why
+                ),
+                route=draft["route"],
                 category=draft.get("category"),
                 product_area=draft.get("product_area"),
                 priority=draft.get("priority"),
@@ -626,51 +696,19 @@ async def _stream_pipeline_inner(
         )
         _maybe_crash("escalate")
 
-        # ── 5. ticket ──────────────────────────────────────────────────────────
-        t = time.monotonic()
-        stage_seq = len(recorder.steps) + 1
-        ticket = await stage_ticket(
-            draft,
-            db=db,
-            client_id=client_id,
-            run_id=recorder.run_id,
-            stage_seq=stage_seq,
-        )
-        ok = "error" not in ticket
-        if ok:
-            result.ticket_id = ticket.get("ticket_id")
-            recorder.state["ticket_id"] = result.ticket_id
-        db.add(
-            Trace(
-                conversation_id=conversation_id,
-                span_type="tool",
-                tool_name=_TICKET_TOOL,
-                input_=_trace_payload(draft),
-                output=_trace_payload(ticket),
-                latency_ms=int((time.monotonic() - t) * 1000),
-            )
-        )
-        yield (
-            "step",
-            await recorder.step(
-                "ticket",
-                status="ok" if ok else "failed",
-                started=t,
-                reasoning=(
-                    f"filed as {result.ticket_id}" if ok else str(ticket.get("error"))
-                ),
-                ticket_id=result.ticket_id,
-                url=ticket.get("url"),
-                eta_hours=ticket.get("eta_hours"),
-                queue=ticket.get("queue"),
-            ),
-        )
-        _maybe_crash("ticket")
-        result.answer = _escalation_reply(ticket, ok)
+        # ── 5. converse, or propose a ticket ────────────────────────────────────
+        # No ticket is filed here. The user is mid-deploy and did not ask for one; an
+        # unrequested ticket reads as the assistant giving up, and it is what filled the
+        # queue with greetings. `POST /runs/{run_id}/ticket` files it on confirmation.
+        if converse:
+            result.answer = (draft.get("reply") or "").strip() or _CONVERSE_FALLBACK
+        else:
+            result.answer = _proposal_reply(draft)
+            yield ("ticket_proposal", {"run_id": recorder.run_id, **_proposal_payload(draft)})
         result.segments = [{"text": result.answer, "citations": []}]
-        # Emitted as a text event so a streaming client renders an escalation the same way
-        # it renders an answer. Without this the UI shows the step trail above an empty
-        # message bubble, which reads as a crash rather than a decision.
+        # Emitted as a text event so a streaming client renders this the same way it renders
+        # an answer. Without it the UI shows the step trail above an empty message bubble,
+        # which reads as a crash rather than a decision.
         yield ("text", {"delta": result.answer})
 
     # ── persist + done ─────────────────────────────────────────────────────────
@@ -694,7 +732,7 @@ async def _stream_pipeline_inner(
         {
             "conversation_id": conversation_id,
             "run_id": recorder.run_id,
-            "escalated": result.escalated,
+            "outcome": result.outcome,
             "confidence": round(result.confidence, 4),
             "ticket_id": result.ticket_id,
             "input_tokens": result.usage.input_tokens,
@@ -729,23 +767,64 @@ def _record_trace(db: AsyncSession, conversation_id: str, response: Any, started
     )
 
 
+_CONVERSE_FALLBACK = (
+    "I answer Cloud Run, GKE and IAM questions from public Google Cloud documentation, with "
+    "citations — and when something depends on your own project, I can raise it with the "
+    "platform team. What are you working on?"
+)
+
+_CATEGORY_LABEL = {
+    "account_config": "project configuration",
+    "quota_or_billing": "quota or billing",
+    "incident": "suspected incident",
+    "access_request": "access request",
+    "docs_gap": "documentation gap",
+    "other": "other",
+}
+
+
+def _proposal_payload(draft: dict) -> dict:
+    """The fields the UI renders in the confirm card. The draft itself stays server-side —
+    the client confirms a run, it does not post back a ticket it could have edited."""
+    return {
+        "subject": draft.get("subject", ""),
+        "category": draft.get("category", "other"),
+        "product_area": draft.get("product_area", "other"),
+        "priority": draft.get("priority", "normal"),
+        "body": draft.get("body", ""),
+    }
+
+
+def _proposal_reply(draft: dict) -> str:
+    """What the user sees *instead of* a filed ticket (D9).
+
+    The question was reasonable and the answer needs someone who can see their project. That
+    is worth saying plainly — and then offering, because filing unasked is what turned every
+    greeting into a ticket and what makes the queue not worth reading.
+    """
+    category = _CATEGORY_LABEL.get(draft.get("category", "other"), "other")
+    return (
+        "That one needs a human: it depends on your own project configuration, and my "
+        "knowledge base is public Google Cloud documentation only.\n\n"
+        f"I can open a **{category}** ticket for the platform team — "
+        f'"{draft.get("subject", "")}". Say the word and I\'ll file it.'
+    )
+
+
 def _escalation_reply(ticket: dict, ok: bool) -> str:
-    """What the user sees when the agent escalates.
+    """What the user sees once they have confirmed, and the ticket is filed.
 
     An escalation is not a refusal. The user asked a reasonable question; the honest answer
     is that it needs someone who can see their project, and that this has been arranged.
     """
     if not ok:
         return (
-            "I can't answer this from the Google Cloud documentation I have — it needs "
-            "someone with access to your project. I also couldn't reach the ticket system "
-            "just now, so please retry shortly or raise it with the platform team directly."
+            "I couldn't reach the ticket system just now, so nothing was filed. Please retry "
+            "shortly or raise it with the platform team directly."
         )
     eta = ticket.get("eta_hours")
     return (
-        f"That one needs a human: it depends on your own project configuration, and my "
-        f"knowledge base is public Google Cloud documentation only.\n\n"
-        f"I've opened **{ticket.get('ticket_id')}** with the "
+        f"Done — I've opened **{ticket.get('ticket_id')}** with the "
         f"{ticket.get('queue', 'platform')} team"
         + (f", who aim to respond within {eta} hours" if eta else "")
         + f". You can follow it at {ticket.get('url')}."
@@ -760,6 +839,94 @@ async def _accrue_totals(db: AsyncSession, conversation_id: str, usage: UsageTot
         return
     conv.total_cost += usage.cost_usd
     conv.total_tokens += usage.input_tokens + usage.output_tokens
+
+
+class TicketUnavailable(Exception):
+    """No draft to file for this run — wrong client, unknown run, or a turn that never
+    proposed a ticket. Surfaces as a 404; the router never invents a draft of its own."""
+
+
+async def confirm_ticket(*, run_id: str, client_id: str, db: AsyncSession) -> dict:
+    """File the ticket this run proposed, once the user has said yes (D9).
+
+    The draft is read from `Run.state`, not from the request: the client confirms a run, it
+    never posts back a ticket body it could have rewritten on the way.
+
+    Both D4 guards still hold, and the second one now earns its keep on a path a user can
+    actually double-fire — the stored `ticket_id` short-circuits a second confirmation, and
+    the `{run_id}:{stage_seq}` idempotency key covers a retry that races it.
+    """
+    run = await db.get(Run, run_id)
+    if run is None or run.client_id != client_id:
+        raise TicketUnavailable(f"Run {run_id!r} not found")
+
+    state = dict(run.state or {})
+    if state.get("ticket_id"):
+        return {"ticket_id": state["ticket_id"], "reply": None, "already_filed": True}
+
+    draft = state.get("ticket_draft")
+    if not draft:
+        raise TicketUnavailable(f"Run {run_id!r} did not propose a ticket")
+
+    recorder = RunRecorder(run.id, run.conversation_id, run.client_id)
+    recorder.steps = list(run.steps or [])
+    recorder.state = state
+
+    t = time.monotonic()
+    stage_seq = len(recorder.steps) + 1
+    ticket = await stage_ticket(
+        draft, db=db, client_id=client_id, run_id=run.id, stage_seq=stage_seq
+    )
+    ok = "error" not in ticket
+    if ok:
+        recorder.state["ticket_id"] = ticket.get("ticket_id")
+    db.add(
+        Trace(
+            conversation_id=run.conversation_id,
+            span_type="tool",
+            tool_name=_TICKET_TOOL,
+            input_=_trace_payload(draft),
+            output=_trace_payload(ticket),
+            latency_ms=int((time.monotonic() - t) * 1000),
+        )
+    )
+    step = await recorder.step(
+        "ticket",
+        status="ok" if ok else "failed",
+        started=t,
+        reasoning=(
+            f"filed as {ticket.get('ticket_id')}" if ok else str(ticket.get("error"))
+        ),
+        ticket_id=ticket.get("ticket_id"),
+        url=ticket.get("url"),
+        eta_hours=ticket.get("eta_hours"),
+        queue=ticket.get("queue"),
+    )
+    await recorder.finish("completed")
+
+    reply = _escalation_reply(ticket, ok)
+    # Recorded as an assistant turn so reloading the conversation shows the confirmation,
+    # not just the offer that preceded it.
+    db.add(
+        Message(
+            conversation_id=run.conversation_id,
+            role="assistant",
+            content=reply,
+            citations={"segments": [{"text": reply, "citations": []}]},
+            run_id=run.id,
+        )
+    )
+    await db.commit()
+    return {
+        "ok": ok,
+        "ticket_id": ticket.get("ticket_id"),
+        "url": ticket.get("url"),
+        "queue": ticket.get("queue"),
+        "eta_hours": ticket.get("eta_hours"),
+        "reply": reply,
+        "step": step,
+        "already_filed": False,
+    }
 
 
 async def run_pipeline(
@@ -784,7 +951,7 @@ async def run_pipeline(
         elif event == "done":
             result.conversation_id = data["conversation_id"]
             result.run_id = data["run_id"]
-            result.escalated = data["escalated"]
+            result.outcome = data["outcome"]
             result.confidence = data["confidence"]
             result.ticket_id = data.get("ticket_id")
     return result

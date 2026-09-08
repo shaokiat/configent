@@ -112,6 +112,43 @@ For the full SSE event contract and frontend consumption, see [SSE Streaming](/c
 
 ---
 
+## `POST /api/c/{client_id}/runs/{run_id}/ticket`
+
+Files the ticket a pipeline turn proposed, on the user's confirmation. Pipeline clients only.
+
+**No request body.** The draft lives on the run, put there by the `escalate` stage; the
+request supplies a run id and nothing else. That is the point: a client can accept an offer
+but cannot author a ticket, so no caller can post a subject and category of its own choosing
+into the platform team's queue.
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "ticket_id": "PLATFORM-1043",
+  "url": "https://platform.internal.example/tickets/PLATFORM-1043",
+  "queue": "platform-serverless",
+  "eta_hours": 4,
+  "reply": "Done — I've opened **PLATFORM-1043** with the platform-serverless team…",
+  "already_filed": false
+}
+```
+
+`reply` is rendered as an assistant turn and is also persisted as one, so reloading the
+conversation shows the confirmation and not just the offer that preceded it.
+
+**404** when the run is unknown, belongs to another client, or never proposed a ticket. The
+cross-client case is deliberately a 404 rather than a 403 — tenancy is enforced in the
+application (P8), and the response reveals nothing about whether that run exists.
+
+**A second confirmation returns the first ticket** with `already_filed: true` and files
+nothing. A double-click is the failure this path can actually produce, and the run's stored
+`ticket_id` is what stops it; the `{run_id}:{stage_seq}` idempotency key covers a retry that
+races past it. See [Escalation & Ticket](/configent/docs/escalation-ticket).
+
+---
+
 ## `GET /healthz`
 
 Liveness probe. Returns `{"status": "ok"}` immediately — no DB check.

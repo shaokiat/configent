@@ -14,7 +14,12 @@ from app.agent.limits import (
 )
 from app.agent.loop import ConversationNotFoundError, stream_turn
 from app.agent.loop import run as agent_run
-from app.agent.pipeline import run_pipeline, stream_pipeline
+from app.agent.pipeline import (
+    TicketUnavailable,
+    confirm_ticket,
+    run_pipeline,
+    stream_pipeline,
+)
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
@@ -198,6 +203,31 @@ async def chat_stream(client_id: str, req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/c/{client_id}/runs/{run_id}/ticket")
+async def file_proposed_ticket(
+    client_id: str,
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """File the ticket a pipeline turn proposed, on the user's confirmation (D9).
+
+    The turn drafts and offers; this files. Nothing about the ticket comes from the request
+    body — there isn't one — so a client can confirm a proposal but cannot author one.
+    """
+    registry = get_registry()
+    try:
+        registry.get(client_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found") from None
+
+    try:
+        return await confirm_ticket(run_id=run_id, client_id=client_id, db=db)
+    except TicketUnavailable as exc:
+        # Also the answer when the run belongs to another client: a 404 leaks nothing
+        # about whether that run exists (P8 — tenancy is enforced here, not by the DB).
+        raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
 @router.get("/clients/{client_id}/branding")

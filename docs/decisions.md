@@ -215,7 +215,7 @@ today. Week 3's headline artifact is a cost comparison; it has to be built on re
 **Consequence:** prices are hardcoded and will drift. Date the comment; don't build a price
 API.
 
-### D9 — "Not answerable from the docs" is not the same as "escalate" · OPEN (decided 2026-09-08, unbuilt)
+### D9 — "Not answerable from the docs" is not the same as "escalate" · LOCKED (decided 2026-09-08, built 2026-09-09)
 The pipeline branch gains a third terminal state. `should_escalate()` keeps deciding
 answerable vs. not, in Python, exactly as D2 specifies. What changes is the else-arm: it no
 longer means *file a ticket*.
@@ -267,9 +267,6 @@ accuracy is a 3-way exact match rather than a boolean compare. `golden.jsonl` ne
 step costs a blocked user one extra turn — an accepted trade, listed as open question 1 in
 the brief. Tuning `escalate_below` is explicitly *not* the fix and is sequenced after this
 (W2-8), since a follow-up turn is a conversation-state problem, not a threshold problem.
-
-**Status is OPEN because it is designed, not built.** The public docs under `apps/docs/`
-still describe the shipped two-arm behaviour and stay that way until the code lands (W4-2).
 
 ---
 

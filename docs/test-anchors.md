@@ -114,11 +114,12 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
   step reports a confidence below the configured threshold; a ticket is POSTed to the
   mock ticket service exactly once; the final answer carries `escalated: true` and the
   ticket id. The answering model is never offered `create_escalation_ticket`.
-- **Amended 2026-09-08 for D9 (W2-2a/b):** the escalate draft also returns
-  `route: "ticket"`, and the ticket is POSTed only after the user confirms the proposal —
-  so the shipped `escalate` → `ticket` sequence becomes `escalate` → *proposal rendered* →
-  `POST /runs/{run_id}/ticket` → `ticket`. Still exactly one ticket per run (D4).
-  `escalated: true` becomes `outcome: "ticket"`.
+- **Amended 2026-09-09 for D9 (W2-2a/b), and this is now the behaviour:** the escalate
+  draft also returns `route: "ticket"`, and the ticket is POSTed only after the user confirms
+  the proposal — so `escalate` → `ticket` in one turn becomes `escalate` → `ticket_proposal`
+  event → `POST /runs/{run_id}/ticket` → `ticket`. Still exactly one ticket per run (D4), and
+  a second confirmation returns the first ticket. `escalated: true` becomes
+  `outcome: "ticket"`, and `ticket_id` is `null` on the `done` event of the proposing turn.
 
 ## UC-12 — Crash and resume (support agent) · planned, W2
 
@@ -135,7 +136,7 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
   the run ends with status `failed_ticket` and the last error recorded in `Run.steps`; the
   user still receives a response saying the question was recorded.
 
-## UC-14 — A non-question does not file a ticket (support agent) · planned, W2
+## UC-14 — A non-question does not file a ticket (support agent) · shipped, W2-2b
 
 - **Client:** `gcp-platform-support`.
 - **Users, one per case:** `hey` · `thanks` · `what can you do?` · a bare follow-up on the

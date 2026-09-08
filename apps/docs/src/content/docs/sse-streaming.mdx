@@ -25,11 +25,19 @@ Both engines emit the same contract. `tool` frames come only from the loop; `run
 | `tool` | `{name, status: "start"\|"end"}` | Before and after each tool call | loop |
 | `text` | `{delta: str}` | Each text chunk from the model | both |
 | `citation` | `{index, source, title, cited_text}` | Each inline citation | both |
+| `ticket_proposal` | `{run_id, subject, category, product_area, priority, body}` | When a turn offers to file a ticket | pipeline |
 | `done` | `{conversation_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit | both |
 | `error` | `{message: str}` | On any exception — replaces `done` | both |
 
 A pipeline `done` frame carries three extra fields the loop has no use for: `run_id`,
-`escalated`, and `ticket_id`.
+`outcome` and `ticket_id`. `outcome` is `"answer"`, `"converse"` or `"ticket"` — three-way,
+because a boolean cannot express *this was not a support question*, which is the turn that
+used to file a ticket for a greeting. See [The Guardrail](/configent/docs/escalation-guardrail).
+
+`ticket_proposal` is an **offer**, not a record: the ticket has not been filed when it
+arrives. The client renders it as a card with a confirm button, which posts to
+`/api/c/{client_id}/runs/{run_id}/ticket`. Nothing about the ticket travels in that request —
+the draft stays on the run, so a client can accept an offer but never author one.
 
 ### The `step` event
 
@@ -81,17 +89,38 @@ event: step
 data: {"seq": 2, "stage": "score", "status": "ok", "confidence": 0.05, "supported": false, ...}
 
 event: step
-data: {"seq": 3, "stage": "escalate", "status": "ok", "category": "quota_or_billing", "priority": "high", ...}
+data: {"seq": 3, "stage": "escalate", "status": "ok", "route": "ticket", "category": "quota_or_billing", "priority": "high", ...}
 
-event: step
-data: {"seq": 4, "stage": "ticket", "status": "ok", "ticket_id": "PLATFORM-1043", "queue": "platform-serverless", ...}
+event: ticket_proposal
+data: {"run_id": "3f2b...", "subject": "Cloud Run instance quota increase in europe-west1", "priority": "high", ...}
 
 event: text
-data: {"delta": "I can't answer that from the documentation — I've opened PLATFORM-1043."}
+data: {"delta": "That one needs a human… I can open a quota or billing ticket for the platform team."}
 
 event: done
-data: {"conversation_id": "...", "run_id": "3f2b...", "escalated": true, "ticket_id": "PLATFORM-1043", ...}
+data: {"conversation_id": "...", "run_id": "3f2b...", "outcome": "ticket", "ticket_id": null, ...}
 ```
+
+There is no `ticket` step in that stream. It arrives later, on the run, when the user
+confirms — `ticket_id` is `null` here because nothing has been filed yet.
+
+A turn that is not a support question at all stops one event earlier:
+
+```
+event: step
+data: {"seq": 1, "stage": "retrieve", "status": "ok", "n_hits": 0, "top_similarity": 0.0, ...}
+
+event: step
+data: {"seq": 2, "stage": "escalate", "status": "ok", "route": "converse", ...}
+
+event: text
+data: {"delta": "Hey — I answer Cloud Run, GKE and IAM questions from Google's public docs…"}
+
+event: done
+data: {"conversation_id": "...", "run_id": "3f2b...", "outcome": "converse", "ticket_id": null, ...}
+```
+
+Two stages, no scoring call (there was nothing retrieved to score), and no ticket.
 
 > **The escalation reply is a `text` event too.** A streaming client renders it exactly
 > like an answer. Without it the UI shows a step trail above an empty bubble, which reads
