@@ -54,6 +54,42 @@ Read them in that order and you have read the engine. Each page states its contr
 
 ---
 
+## Why the first stage is retrieval, not an intent router
+
+The conventional support-bot shape puts classification first. An NLU router — Dialogflow, Rasa, or an LLM doing the same job — reads the incoming turn, assigns an intent (`greeting`, `faq`, `handoff_request`, `fallback`), and dispatches to a flow. The LLM-era variant drops the explicit router and hands one conversational model a set of tools, letting it decide when to search and when to escalate.
+
+Both are reasonable. Neither is used here, and the reasons are worth stating because "we didn't know about it" is not one of them.
+
+### A router in front is a model in front of the guardrail
+
+This engine exists to support one claim: *escalation is not the model's decision.* A router upstream of retrieval does not weaken that claim so much as relocate it. Deciding "this is a support question, send it to RAG" **is** the escalate/answer decision, made earlier, by a different model, on less evidence — and a mis-route skips retrieval and scoring altogether, so the two signals the guardrail is built from are never produced. The failure is silent: a router does not report low confidence, it reports an intent.
+
+`should_escalate()` decides *after* retrieval, which means it decides with evidence. A router has only the question text; the guardrail has the question text **and** what the corpus actually returned for it. That is the difference between "this sounds like a quota question" and "the quota page came back at 0.50 similarity and the scorer rates it 0.05 for supporting *this* question" — the case in [the worked example](/configent/docs/escalation-guardrail#a-worked-example) that similarity alone would have answered wrong.
+
+### It taxes the path that matters
+
+A router is a model call on every turn, including the ~80% that are ordinary documented questions. It buys nothing on those — they were always going to retrieve — and it adds latency and cost to the interaction the product is judged on.
+
+The counterpoint is real and worth conceding: retrieval-first means embedding and searching on a turn like `hey`, where a router would have skipped both. But an embedding call and a pgvector query cost a fraction of the classifier call that would avoid them, and they are not on the critical path of anything a user waits for.
+
+### A taxonomy is a maintained object
+
+Intents drift from how people actually type. Somebody owns the label set, the training examples, and the arbitration when two intents overlap — and the drift is invisible until someone reads transcripts. Two thresholds in a YAML file, swept offline against a golden set, are a smaller thing to own and a falsifiable one.
+
+### When a router *is* the right answer
+
+When routing selects between genuinely different flows: password reset, order status, refund, cancellation — each with its own tools, forms and policies. Classification is doing real work there, because the branches are real and text is the only evidence available before you commit to one.
+
+This agent has two destinations: answer from the documentation, or a human. For a two-way branch that evidence already decides, a router is a stage that spends a model call re-deriving what the next stage was about to establish anyway.
+
+### What this costs, and where the fix goes
+
+The trade is not free, and the demo found the bill. A pipeline whose first move is always retrieval has nowhere to put a turn that is not a question. `hey`, `thanks` and bare follow-ups retrieve nothing, empty retrieval short-circuits straight to escalate, and every one of them filed a ticket.
+
+The fix keeps the ordering rather than reversing it: a `route` field on the escalate stage's existing structured output, downstream of the guardrail, separating *not a support question* from *a support question we cannot answer*. Two schema fields and a branch, in a model call that was already being made — not a stage, and not a model call added to the answerable path. Tracked as **D9**; see [Escalation & Ticket](/configent/docs/escalation-ticket).
+
+---
+
 ## The two API constraints that set the boundaries
 
 Both were verified against the Messages API before the build, and both would have been expensive to discover mid-implementation. Between them they explain why the stages are cut where they are.
@@ -98,6 +134,7 @@ Config decides *which* engine, *which* model, and *where* the thresholds sit. Co
 - **The pipeline cannot do multi-hop.** A question needing two searches gets one. That is the price of determinism, and the loop engine exists for clients that need the other trade.
 - **The follow-up fix is a heuristic.** Prepending the previous user turn is not query rewriting. It fails on a three-turn reference chain.
 - **The scorer is a model judging a model's inputs.** It is cheap and narrow, which is why it works. It is a second model call, not a proof.
+- **There is no place for a turn that is not a question.** Retrieval-first means a greeting retrieves nothing and falls into the escalate arm. Fixed downstream rather than by adding a router (D9, above) — but it is a real consequence of the ordering, not an oversight in it.
 - **One retry policy is missing.** The ticket executor makes one attempt and reports retryability. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool, so it is deliberately not inlined.
 
 ---

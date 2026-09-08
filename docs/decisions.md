@@ -226,11 +226,14 @@ retrieve → score → branch ─┬─ answer                              (cit
                                       └─ propose ticket → user confirms → file
 ```
 
-1. **Triage rides inside the existing escalate-draft call.** `_TICKET_SCHEMA` gains
+1. **A ticket is filed on user confirmation**, not on the branch. The drafted ticket is
+   streamed back as a proposal; a `POST /c/{id}/runs/{run_id}/ticket` files it. *This is the
+   half that fixes the bug*: with no auto-filing, a greeting files zero tickets whether or
+   not triage exists.
+2. **Triage rides inside the existing escalate-draft call.** `_TICKET_SCHEMA` gains
    `route: "ticket" | "converse"` and a `reply` string. No new stage, no extra API call, and
-   nothing added to the latency of the answerable path.
-2. **A ticket is filed on user confirmation**, not on the branch. The drafted ticket is
-   streamed back as a proposal; a `POST /c/{id}/runs/{run_id}/ticket` files it.
+   nothing added to the latency of the answerable path. This half fixes the *reply* — a
+   greeting should not be met with a ticket proposal.
 
 **Why:** the corpus is public documentation (D1), so retrieval returns nothing for `hi`,
 `thanks`, `what can you do?`, or a bare follow-up — and zero hits short-circuits straight to
@@ -244,7 +247,20 @@ Filing without asking is the second half. The user is mid-deploy and did not ask
 ticket; a ticket that appears unrequested reads as the assistant giving up, where an offer
 reads as help. It is also the better demo — the escalation becomes a choice on screen.
 
-**Consequence:** `PipelineResult.escalated: bool` can no longer carry the outcome — it
+**Why not an intent router in front, which is the conventional shape:** a classifier upstream
+of retrieval does not remove the escalate/answer decision from a model, it relocates it —
+earlier, to a different model, with only the question text as evidence, and with a failure
+that is silent, because a router reports an intent rather than low confidence. It also spends
+a model call on every turn to re-derive what retrieval was about to establish anyway. Written
+up publicly at `apps/docs/src/content/docs/pipeline.mdx` → *Why the first stage is retrieval,
+not an intent router*. Triage therefore goes **downstream** of the guardrail, inside a call
+that already happens.
+
+**Consequence:** `converse` is the only path producing user-facing text with no passages in
+front of the model — a hole in the grounding guarantee if a technical question is answered
+there. The prompt constrains it to acknowledge-and-redirect and forbids stating any platform
+fact; G2.6 carries the adversarial case. And `PipelineResult.escalated: bool` can no longer
+carry the outcome — it
 becomes a three-way `outcome: "answer" | "converse" | "ticket"`, and week 2's decision
 accuracy is a 3-way exact match rather than a boolean compare. `golden.jsonl` needs
 `expected_outcome: "converse"` cases or the regression is unmeasurable (W2-4). The confirm

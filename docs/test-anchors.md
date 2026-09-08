@@ -147,6 +147,10 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
 - **Why it exists:** every one of these filed a ticket on the week-1 pipeline (D9). This is
   the regression test for the queue-precision criterion in
   [`briefs/gcp-platform-support.md`](../briefs/gcp-platform-support.md), and it is gate G2.6.
+- **Adversarial companion:** a real technical question phrased casually (`quick one — whats
+  the default cloud run cpu again`) must route to `answer`, never `converse`. `converse` is
+  the only path that skips scoring, so a platform fact stated there is ungrounded by
+  construction — the failure D2 exists to prevent, arriving through the new door.
 
 ---
 
