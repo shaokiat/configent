@@ -114,6 +114,11 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
   step reports a confidence below the configured threshold; a ticket is POSTed to the
   mock ticket service exactly once; the final answer carries `escalated: true` and the
   ticket id. The answering model is never offered `create_escalation_ticket`.
+- **Amended 2026-09-08 for D9 (W2-2a/b):** the escalate draft also returns
+  `route: "ticket"`, and the ticket is POSTed only after the user confirms the proposal —
+  so the shipped `escalate` → `ticket` sequence becomes `escalate` → *proposal rendered* →
+  `POST /runs/{run_id}/ticket` → `ticket`. Still exactly one ticket per run (D4).
+  `escalated: true` becomes `outcome: "ticket"`.
 
 ## UC-12 — Crash and resume (support agent) · planned, W2
 
@@ -129,6 +134,19 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
 - **Expected:** 3 attempts with exponential backoff, visible as separate `step` events;
   the run ends with status `failed_ticket` and the last error recorded in `Run.steps`; the
   user still receives a response saying the question was recorded.
+
+## UC-14 — A non-question does not file a ticket (support agent) · planned, W2
+
+- **Client:** `gcp-platform-support`.
+- **Users, one per case:** `hey` · `thanks` · `what can you do?` · a bare follow-up on the
+  previous answer (`so is that the same as the health check timing out?`).
+- **Expected:** each gets a short reply; the escalate draft returns `route: "converse"`;
+  `outcome` is `converse`; **zero** POSTs reach the mock ticket service across all four.
+  The follow-up case runs with prior turns in the conversation, since that is what makes it
+  answerable at all.
+- **Why it exists:** every one of these filed a ticket on the week-1 pipeline (D9). This is
+  the regression test for the queue-precision criterion in
+  [`briefs/gcp-platform-support.md`](../briefs/gcp-platform-support.md), and it is gate G2.6.
 
 ---
 

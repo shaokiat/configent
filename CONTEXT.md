@@ -9,23 +9,33 @@ The canonical project name — used for the repo, database, CLI, and all user-fa
 _Avoid_: POC Factory (legacy name; see `docs/architecture.md` for public architecture docs — the original planning doc and build plan now live privately, untracked, since they contain interview-prep framing rather than engineering documentation)
 
 **Client**:
-A tenant of the platform (e.g., Acme Fab Equipment, Meridian Insurance, Configent Support), defined entirely by one YAML file in `config/` plus a corpus directory.
+A tenant of the platform (e.g., Cloud Platform Support, Acme Fab Equipment, Meridian Insurance), defined entirely by one YAML file in `config/` plus a corpus directory. Only configs directly in `config/` are loaded; `config/disabled/` holds tenants kept in the repo but out of the demo.
 _Avoid_: tenant, customer
 
-**Dogfood tenant**:
-A Client whose Corpus is Configent's own published documentation, used as the primary illustrative example. The `configent-support` Client (assistant `ConfigentBot`) answers questions about the platform itself. It is a Client like any other — "Configent" stays canonical for the *platform*; `configent-support` is just a tenant that happens to document it.
+**Demo tenant**:
+The one Client the demo serves: `gcp-platform-support` (assistant `DeployBot`), which answers Google Cloud questions from public GCP documentation and escalates what those documents cannot know. "Configent" stays canonical for the *platform*.
+_Removed 2026-09-08_: the `configent-support` dogfood tenant, which answered questions about Configent itself, was deleted from the repo.
 
 **Corpus**:
 The set of source documents belonging to one Client, ingested into pgvector scoped by `client_id`.
 
+**Outcome**:
+How a turn ends on the pipeline engine — one of three, decided in Python, never by the
+answering model: **answer** (cited, from the Corpus), **converse** (a greeting, a
+thank-you, a meta-question, or a follow-up handled from context — no ticket), or
+**escalate** (a real support question the Corpus cannot answer; a ticket is drafted,
+proposed, and filed on the user's confirmation). _Added 2026-09-08, D9: "not answerable"
+and "escalate" were one arm of a binary branch, so every non-question filed a ticket._
+_Avoid_: "fallback", and "escalate" as a synonym for any non-answer.
+
 **Sentinel fact**:
-A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5, CS-1..5). `evals/sentinels.yaml` is the single source of truth; scenario assertions built on them live in `docs/test-anchors.md`.
+A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5, GCP-1..5). `evals/sentinels.yaml` is the single source of truth; scenario assertions built on them live in `docs/test-anchors.md`.
 
 **Shared tool**:
 A tool available to every Client (`search_docs`, `get_document`).
 
 **Client-specific tool**:
-A mock business-system tool enabled per Client via its YAML (`pricing_lookup` for Acme, `coverage_check` for Meridian, `create_support_ticket` for Configent Support).
+A mock business-system tool enabled per Client via its YAML (`pricing_lookup` for Acme, `coverage_check` for Meridian).
 
 ## Relationships
 

@@ -30,13 +30,26 @@ question → retrieve → score confidence → ┬→ answer with citations
                                           └→ [forced] escalate → file ticket
 ```
 
+**Amended 2026-09-08 (D9), scheduled into week 2.** That branch has two arms and three
+situations. A greeting, a thank-you or a bare follow-up retrieves nothing, and zero hits
+short-circuits straight to escalate — so every non-question filed a ticket, which fails the
+queue-precision criterion in [`briefs/gcp-platform-support.md`](../briefs/gcp-platform-support.md)
+however correctly each component behaves. The else-arm gains a triage that separates
+*converse* from *escalate*, and the ticket is filed on user confirmation:
+
+```
+                                          └→ triage ┬→ converse (no ticket)
+                                                    └→ propose → [user confirms] → file
+```
+
 with a durable audit trail, checkpoint/resume, and retries that end in a recorded
 failure rather than a silent one.
 
 **Scope discipline.** Single-tenant, single-loop. Multi-tenancy is one line if asked
 ("the underlying platform is config-driven for multi-tenant deployment") and nothing
-more. Acme, Meridian and `configent-support` stay in the repo on the free-form loop (D5), dormant, out of
-the demo and out of the eval matrix.
+more. Acme and Meridian stay in the repo on the free-form loop (D5), dormant, out of
+the demo (`config/disabled/`) and out of the eval matrix. The `configent-support`
+dogfood tenant was removed from the repo outright.
 
 ## How to run this plan
 
@@ -189,8 +202,8 @@ contain, so they are settled first.
 
 | Metric | Graded by | Applies to | Why this way |
 |---|---|---|---|
-| **Decision accuracy** | exact match: `PipelineResult.escalated` vs `expected_outcome` | every case | The guardrail's own claim (D2), and the headline number. A string compare — no judge, no cost, no flake. |
-| **Escalation precision / recall** | confusion matrix over the same field | every case | A single accuracy figure hides the asymmetry below. Report both, always. |
+| **Decision accuracy** | exact match: `PipelineResult.outcome` vs `expected_outcome`, three-way (`answer` / `converse` / `ticket`) | every case | The guardrail's own claim (D2), and the headline number. A string compare — no judge, no cost, no flake. Three-way since D9: a boolean `escalated` cannot express *this was not a support question*. |
+| **Escalation precision / recall** | confusion matrix over the same field, collapsed to `ticket` vs. not | every case | A single accuracy figure hides the asymmetry below. Report both, always. Collapsed because the asymmetry is about *reaching a human*; `converse`-vs-`answer` confusion is a separate, cheaper error. |
 | **Citation recall / precision** | set compare of cited `source` doc ids against `expected_citations` | cases that answered | Recall: did it find the right document. Precision: did it avoid padding with wrong ones. Deterministic, no judge. |
 | **Answer correctness** | structured-output judge returning `{correct: bool, reasoning: str}`, given question + `golden_answer` + the produced answer | cases that answered | The only metric that needs a model. Everything else is a string or set compare — keep it that way, because a judge is an instrument with its own error. |
 | **Ticket category accuracy** | exact match on the escalate draft's `category` | cases that escalated | Free: the draft is already structured output with an enum. |
@@ -266,6 +279,9 @@ cheap position, in order of what it costs:
       from `Trace.cost_usd`, not from an estimate.
 - [ ] **G2.5** The offline threshold sweep reproduces the shipped thresholds' decision
       accuracy exactly, and shows the curve either side of them.
+- [ ] **G2.6** `hi`, `thanks`, `what can you do?` and a bare follow-up on the previous answer
+      each produce a reply and **zero** tickets in the mock service (D9), asserted in a test
+      and scored as `converse` cases on the golden set.
 
 ### Tasks
 
@@ -273,20 +289,26 @@ cheap position, in order of what it costs:
 |---|---|---|---|
 | **W2-1** | `app/agent/loop.py` | **Replace `_PRICE_*` constants with `_PRICES: dict[str, ModelPrice]`; price each call by the model that served it; unknown id raises at config load** | D8. Every cost number in the repo is currently wrong (Sonnet rates on Haiku calls). **Do this first** — it invalidates everything measured before it. |
 | **W2-2** | `app/agent/pipeline.py` | `json.loads` in `_structured_call` gets a try/except: re-ask once, then raise. Ticket-draft failure falls back to a hardcoded draft (`category: other`, subject = truncated question) | ~8 lines, and 30 cases × 2 profiles is exactly where a malformed structured response surfaces. The fallback exists because "route to escalate on failure" is meaningless when the failing call *is* the escalate draft. |
+| **W2-2a** | `app/agent/pipeline.py`, `prompts/gcp-platform-support/ticket_draft.md` | `_TICKET_SCHEMA` gains `route: "ticket"\|"converse"` and `reply`; `stage_ticket` runs only on `route == "ticket"`; `PipelineResult.escalated` becomes `outcome: "answer"\|"converse"\|"ticket"` | D9, and **before W2-4** — the golden set has to encode the outcome this produces. Triage rides inside the escalate-draft call that already runs, so no new stage and no cost on the answerable path. |
+| **W2-2b** | `app/agent/pipeline.py`, `app/routers/clients.py`, `apps/web/.../ChatPanel.tsx` | Stream the draft as a proposal instead of filing it; `POST /c/{id}/runs/{run_id}/ticket` files it on confirm, reusing `stage_ticket` | D9. `stage_ticket` is already idempotent per run and stage_seq (D4), so the endpoint is thin. Slips to week 4 with the demo polish if week 2 runs long — W2-2a is the half that fixes the bug. |
 | **W2-3** | `app/config/schema.py`, `config/gcp-platform-support.yaml` | `AgentConfig.models: {router, answer}`; a single `model` back-fills both | The profile swap needs two models per client; today it is one field. |
-| **W2-4** | `evals/gcp-platform-support/golden.jsonl` | Grow 10 → 25–30, same schema the seed set already uses. ~15 answerable, ~10 escalate, ~3 adversarial. Spread the answerable cases across all ten corpus documents | The adversarial cases — questions that sit *next to* an answerable one in the corpus but whose specific number is absent — are what separate this from a happy-path demo. Ten documents and ten cases today means some documents are untested. |
+| **W2-4** | `evals/gcp-platform-support/golden.jsonl` | Grow 10 → 25–30, same schema the seed set already uses. ~13 answerable, ~9 escalate, ~6 `converse`, ~3 adversarial. Spread the answerable cases across all ten corpus documents | The adversarial cases — questions that sit *next to* an answerable one in the corpus but whose specific number is absent — are what separate this from a happy-path demo. Ten documents and ten cases today means some documents are untested. The `converse` cases are the canonical session in the brief — greeting, meta, thanks, and a bare follow-up on a previous answer; without them D9 is unmeasurable and will regress. |
 | **W2-5** | — | **Commit W2-4 whole, in one commit, before W2-6 is written** | D7. Commit order is the evidence. |
 | **W2-6** | `evals/runner/run_evals.py` *(new)*, `app/cli.py` | `configent eval --client --model-profile`; scores the six metrics above; writes one JSON result row per case including `retrieval_confidence` and `groundedness_confidence` | `evals/runner/` is an empty `.gitkeep` and `cli.py`'s docstring already claims eval commands that do not exist. The two confidences are what W2-8 sweeps. |
 | **W2-7** | `app/models.py` | `EvalRun.model_profile` column | Compare runs by profile. The table already exists. |
 | **W2-8** | `evals/runner/sweep.py` *(new)* | Offline threshold sweep over a committed results JSON; no model calls | The free artifact. Reads `retrieval_confidence` / `groundedness_confidence` and re-runs `should_escalate()`'s comparison, nothing more. |
 | **W2-9** | `app/agent/pipeline.py` | Per-stage cost breakdown on the `done` event | **Mostly done:** `RunRecorder.step` already writes `tokens_in`, `tokens_out`, `cost_usd` per stage. Only the roll-up onto `done` is missing. |
 | **W2-10** | `evals/reports/` *(new)* | Committed JSON + Markdown report per profile, each stamped with `git_sha`, model ids, thresholds | The artifact you actually show. |
-| **W2-11** | `tests/test_evals.py` *(new)* | G2.1 (per-model pricing), G2.5 (sweep reproduces shipped thresholds), and the W2-2 corrupted-response case | Three assertions, one file. The scorer is pure functions over dicts — test it without a model. |
+| **W2-11** | `tests/test_evals.py` *(new)* | G2.1 (per-model pricing), G2.5 (sweep reproduces shipped thresholds), G2.6 (four non-questions file zero tickets), and the W2-2 corrupted-response case | Four assertions, one file. The scorer is pure functions over dicts — test it without a model. |
 
 ### Build order
 
-`W2-1` → `W2-3` → `W2-2` → `W2-4` → **`W2-5` (commit)** → `W2-6` → `W2-7` → `W2-9` →
-`W2-8` → `W2-10` → `W2-11`
+`W2-1` → `W2-3` → `W2-2` → `W2-2a` → `W2-4` → **`W2-5` (commit)** → `W2-6` → `W2-7` →
+`W2-9` → `W2-8` → `W2-10` → `W2-11` → `W2-2b`
+
+`W2-2a` sits before the golden set because the set has to encode the three-way outcome it
+introduces. `W2-2b` is last: it is UI-facing, changes no measured number, and is the piece
+to drop into week 4 if the week runs long.
 
 The commit boundary at `W2-5` is load-bearing. Nothing that reads the golden set may exist
 in the working tree when it lands.

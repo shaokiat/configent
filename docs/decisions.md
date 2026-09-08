@@ -55,12 +55,12 @@ corpora. **Consequence:** a second API key and a second vendor outage surface.
 ### P7 — SSE, not WebSockets · LOCKED
 **Why:** chat streaming is one-directional; SSE is proxy-friendly and needs no
 connection lifecycle management. **Consequence:** no server-push outside a live request,
-and no automatic reconnect in the current `fetch` + `ReadableStream` client (see D15).
+and no automatic reconnect in the current `fetch` + `ReadableStream` client (see D3).
 
 ### P8 — Application-level tenancy, no row-level security · LOCKED
 **Why:** demo scale, single trusted deployment, and RLS adds a policy layer to explain
 without changing observable behaviour. **Consequence:** the `client_id` path param is a
-trusted value guarded by explicit ownership checks (`_prepare_conversation`, D9), not by
+trusted value guarded by explicit ownership checks (`_prepare_conversation`), not by
 the database. Say this plainly when asked; it is a real limitation, not a hidden one.
 
 ### P9 — Homegrown tracing into Postgres · LOCKED
@@ -170,7 +170,9 @@ kwargs, a signature change touching every tool; do it once, in W1.
 
 ### D5 — Pipeline and loop coexist, selected by config · LOCKED
 `AgentConfig.mode: "loop" | "pipeline"`, default `loop`. `gcp-platform-support` runs
-`pipeline`; Acme, Meridian and `configent-support` stay on `loop`, dormant.
+`pipeline`; Acme and Meridian stay on `loop`, dormant — their configs sit in
+`config/disabled/`, which the registry does not load, so the demo serves GCP alone.
+The `configent-support` dogfood tenant was removed from the repo outright.
 
 **Why:** deleting the loop throws away working code and the "when would you *not* use a
 fixed pipeline" answer, which is a good one — exploratory tool use wants a loop, a workflow
@@ -212,6 +214,46 @@ today. Week 3's headline artifact is a cost comparison; it has to be built on re
 
 **Consequence:** prices are hardcoded and will drift. Date the comment; don't build a price
 API.
+
+### D9 — "Not answerable from the docs" is not the same as "escalate" · OPEN (decided 2026-09-08, unbuilt)
+The pipeline branch gains a third terminal state. `should_escalate()` keeps deciding
+answerable vs. not, in Python, exactly as D2 specifies. What changes is the else-arm: it no
+longer means *file a ticket*.
+
+```
+retrieve → score → branch ─┬─ answer                              (cited, unchanged)
+                           └─ triage ─┬─ converse                 (no ticket)
+                                      └─ propose ticket → user confirms → file
+```
+
+1. **Triage rides inside the existing escalate-draft call.** `_TICKET_SCHEMA` gains
+   `route: "ticket" | "converse"` and a `reply` string. No new stage, no extra API call, and
+   nothing added to the latency of the answerable path.
+2. **A ticket is filed on user confirmation**, not on the branch. The drafted ticket is
+   streamed back as a proposal; a `POST /c/{id}/runs/{run_id}/ticket` files it.
+
+**Why:** the corpus is public documentation (D1), so retrieval returns nothing for `hi`,
+`thanks`, `what can you do?`, or a bare follow-up — and zero hits short-circuits straight to
+escalate (D2). Every non-question therefore filed a ticket. That is not a threshold that
+needs tuning; it is two different situations sharing one arm of a binary branch. And the
+brief's queue-precision criterion is a property of what *doesn't* reach the queue
+(`briefs/gcp-platform-support.md`), so a queue full of greetings fails the engagement even
+while every individual component behaves as specified.
+
+Filing without asking is the second half. The user is mid-deploy and did not ask for a
+ticket; a ticket that appears unrequested reads as the assistant giving up, where an offer
+reads as help. It is also the better demo — the escalation becomes a choice on screen.
+
+**Consequence:** `PipelineResult.escalated: bool` can no longer carry the outcome — it
+becomes a three-way `outcome: "answer" | "converse" | "ticket"`, and week 2's decision
+accuracy is a 3-way exact match rather than a boolean compare. `golden.jsonl` needs
+`expected_outcome: "converse"` cases or the regression is unmeasurable (W2-4). The confirm
+step costs a blocked user one extra turn — an accepted trade, listed as open question 1 in
+the brief. Tuning `escalate_below` is explicitly *not* the fix and is sequenced after this
+(W2-8), since a follow-up turn is a conversation-state problem, not a threshold problem.
+
+**Status is OPEN because it is designed, not built.** The public docs under `apps/docs/`
+still describe the shipped two-arm behaviour and stay that way until the code lands (W4-2).
 
 ---
 
