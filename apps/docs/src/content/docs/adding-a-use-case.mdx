@@ -1,12 +1,12 @@
 ---
 title: Adding a New Use Case
-description: The repeatable recipe for adding a new client (assistant) to Configent, using the Configent Support bot as the worked end-to-end example.
+description: The repeatable recipe for adding a new client (assistant) to Configent, using the Acme Fab Equipment bot as the worked end-to-end example.
 order: 6
 # group: Getting Started  # hidden from sidebar — reachable by link
 ---
 
 <div class="lead">
-  Configent's <a href="/configent/docs/examples#configent-support">Configent Support</a> bot was
+Configent's <a href="/configent/docs/examples#acme-fab-equipment">Acme Fab Equipment</a> bot was
   added with <strong>zero engine changes</strong> — a corpus, a prompt, one config file, and one
   small tool. This guide turns that into a recipe you can follow for any new use case, and
   foregrounds the single decision that matters: can your assistant run on the shared tools alone,
@@ -44,13 +44,13 @@ something deterministic that retrieval can't:
 - **Add a client-specific tool** → when the assistant must return an auditable, structured result:
   look up a live price, return a deterministic verdict, file a ticket.
 
-The three shipped clients sit on that spectrum:
+The shipped clients sit on that spectrum:
 
 | Client | Client-specific tool | Why it needs one |
 |--------|----------------------|------------------|
-| **Configent Support** | `create_support_ticket` | Escalate when the docs don't answer the question, instead of guessing |
 | **Acme Fab Equipment** | `pricing_lookup` | Return a real quote (price, discount, lead time) for a part |
 | **Meridian Insurance** | `coverage_check` | Return an auditable covered / not-covered verdict for a claim scenario |
+| **Cloud Platform Support** | `create_escalation_ticket` | File a ticket when a question depends on project state the docs can't know — invoked from the pipeline, not chosen by the model |
 
 **A quick checklist — you need a tool when the answer:**
 
@@ -62,18 +62,22 @@ If none of these are true, ship with the shared tools.
 
 ---
 
-## Walkthrough: building the Configent Support bot
+## Walkthrough: building the Acme Fab Equipment bot
 
-Here's the exact sequence used to add the Configent Support assistant — the one powering the
-[live demo](/configent/demo).
+Here's the exact sequence used to add the Acme Fab Equipment assistant.
+
+> **A note on `config/disabled/`.** The demo deployment serves Cloud Platform Support alone, so
+> Acme's config currently lives in `config/disabled/acme-fab.yaml` — a directory the registry does
+> not read. Everything else about the client is unchanged, and moving the file up to `config/` and
+> restarting the API brings it online. Write your own config straight to `config/`.
 
 ### 1. Plant the corpus
 
-The corpus lives in `corpora/configent-support/`. For this dogfood tenant, the documents are
-plain-markdown exports of the published docs (platform overview, quickstart, configuration
-reference, tools, multi-tenancy, citations, adding a client).
+The corpus lives in `corpora/acme-fab/`: product overview, the PX-900 operations, maintenance and
+troubleshooting manuals, the LT-200 operations manual, an installation guide, a process chemistry
+guide, a spare parts catalog, and two FAQs.
 
-> **Exporting published docs into a corpus.** If your source is MDX/HTML, strip the frontmatter
+> **Getting source documents into a corpus.** If your source is MDX/HTML, strip the frontmatter
 > and any JSX/components so chunks contain prose, not markup. Keep each key fact on a single line
 > so it survives chunking and can be cited verbatim. Remember the corpus is a *snapshot* — re-run
 > ingestion to refresh it when the source changes.
@@ -82,111 +86,107 @@ Each client's corpus is isolated: a fact planted for one client is never retriev
 
 ### 2. Write the system prompt
 
-`prompts/configent-support.md` sets the persona (a developer-support engineer), the grounding
-rules (answer only from retrieved docs, cite the source, say "I don't know" on empty retrieval),
-and — critically — *when to escalate*: file a ticket only when the docs can't answer, never as a
-substitute for searching.
+`prompts/acme-fab.md` sets the persona (a senior field-service engineer for the PX-900 and LT-200
+lines), the grounding rules (answer only from retrieved docs, cite the source, say "I don't know"
+on empty retrieval), and — critically — *when to call the tool*: look a price up rather than
+reading one out of a catalog chunk.
 
 ### 3. (If needed) add a client-specific tool
 
-Configent Support needs the escalation action, so it gets one tool. A tool is a small module that
-exposes a `DEFINITION` (the Anthropic tool schema) and an async `execute` function:
+Acme needs live quotes, so it gets one tool. A tool is a small module that exposes a `DEFINITION`
+(the Anthropic tool schema) and an async `execute` function:
 
 ```python
-# apps/api/app/tools/configent_support/create_support_ticket.py
-import zlib
+# apps/api/app/tools/acme_fab/pricing_lookup.py
 from typing import Any
 
 DEFINITION = {
-    "name": "create_support_ticket",
-    "description": "File a support ticket for a question the docs can't answer ...",
+    "name": "pricing_lookup",
+    "description": "Look up the unit price, volume discount, and lead time for an Acme part ...",
     "input_schema": {
         "type": "object",
         "properties": {
-            "subject":  {"type": "string"},
-            "category": {"type": "string",
-                         "enum": ["billing", "bug", "account", "feature_request", "other"]},
-            "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+            "part_number": {"type": "string"},
+            "quantity":    {"type": "integer", "default": 1},
         },
-        "required": ["subject", "category"],
+        "required": ["part_number"],
     },
 }
 
 async def execute(tool_input: dict[str, Any], **_) -> dict:
-    # Deterministic mock: same input → same ticket id (zlib.crc32, not hash()).
-    digest = zlib.crc32(f"{tool_input['category']}:{tool_input['subject']}".lower().encode())
-    return {"ticket_id": f"CONFIGENT-{digest % 9000 + 1000}", "status": "open", ...}
+    # Canned catalog data — deterministic, and agrees with the spare-parts sentinel facts.
+    part = _CATALOG[tool_input["part_number"]]
+    return {"unit_price_usd": part["unit_price_usd"], "lead_time_days": ..., ...}
 ```
 
 Then register it **once** in the tool registry:
 
 ```python
 # apps/api/app/tools/registry.py
-from app.tools.configent_support import create_support_ticket
+from app.tools.acme_fab import pricing_lookup
 
 _REGISTRY = {
     # ...shared + other client tools...
-    "create_support_ticket": (create_support_ticket.DEFINITION, create_support_ticket.execute),
+    "pricing_lookup": (pricing_lookup.DEFINITION, pricing_lookup.execute),
 }
 ```
 
-That one line makes the name available to configs. Use the shipped
-`create_support_ticket` as a copy-paste template for your own tool. Keep tools **deterministic** —
-they should return structured data the agent can cite, not invent business facts.
+That one line makes the name available to configs. Use the shipped `pricing_lookup` as a
+copy-paste template for your own tool. Keep tools **deterministic** — they should return
+structured data the agent can cite, not invent business facts.
 
 ### 4. Write the config
 
-`config/configent-support.yaml` ties it together and lists exactly the tools the assistant should
-have:
+`config/acme-fab.yaml` ties it together and lists exactly the tools the assistant should have:
 
 ```yaml
-client_id: configent-support
-name: "Configent Support"
+client_id: acme-fab
+name: "Acme Fab Equipment"
 
 branding:
-  logo: assets/configent-support/logo.svg
-  primary_color: "#10b981"
-  assistant_name: ConfigentBot
+  logo: assets/acme-fab/logo.svg
+  primary_color: "#1B4F8A"
+  assistant_name: AcmeAssist
 
 corpus:
-  source: corpora/configent-support/
+  source: corpora/acme-fab/
   chunking:
-    chunk_size: 512   # smaller chunks → precise lookups for short factual Q&A
-    overlap: 64
+    chunk_size: 800   # larger chunks → whole procedure steps survive intact
+    overlap: 100
 
 agent:
-  model: claude-haiku-4-5-20251001   # fast + cheap is right for tier-1 support
-  system_prompt_file: prompts/configent-support.md
-  max_tokens: 2048
-  effort: low
+  model: claude-haiku-4-5-20251001   # fast + cheap is right for factual lookup
+  system_prompt_file: prompts/acme-fab.md
+  max_tokens: 4096
+  effort: medium
   tools:
     - search_docs
     - get_document
-    - create_support_ticket
+    - pricing_lookup
 
 limits:
-  rate_limit_per_minute: 60
+  rate_limit_per_minute: 20
   daily_budget_usd: 2.00
 ```
 
 ### 5. Add a branding asset
 
-Drop a `logo.svg` into `assets/configent-support/`. The UI reads `branding` to render a chat that
+Drop a `logo.svg` into `assets/acme-fab/`. The UI reads `branding` to render a chat that
 looks like the client's own product.
 
 ### 6. (Optional) add a golden eval set
 
-`evals/configent-support/golden.jsonl` holds Q&A pairs — including a refusal case that should
-trigger a ticket — so you can measure grounding before shipping a change. See
+`evals/acme-fab/golden.jsonl` holds Q&A pairs — including a refusal case the corpus can't answer —
+so you can measure grounding before shipping a change. See
 [Citations](/configent/docs/citations) for how grounding is evaluated.
 
 ### 7. Ingest and try it
 
 ```bash
-make ingest CLIENT=configent-support   # or just restart the API — it ingests on startup
+make ingest CLIENT=acme-fab   # or just restart the API — it ingests on startup
 ```
 
-Open `/c/configent-support` and ask away. Re-running ingest is safe: unchanged documents are
+Open `/c/acme-fab` and ask away. Re-running ingest is safe: unchanged documents are
 skipped, changed ones are re-embedded.
 
 ---
@@ -215,8 +215,7 @@ assets/<id>/logo.svg     5. Add branding → make ingest CLIENT=<id>
 ```
 
 No code change for a documents-only assistant. No deployment pipeline. If something doesn't
-validate, the startup error names the field and the file — and if you hit a genuine gap, the
-Configent Support bot will happily file you a ticket.
+validate, the startup error names the field and the file.
 
 See also: [Configuration Reference](/configent/docs/config-reference) ·
 [Tools System](/configent/docs/tools-system) ·

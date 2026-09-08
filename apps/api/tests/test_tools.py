@@ -37,22 +37,6 @@ async def test_coverage_check_gradual_seepage():
     assert result["clause"] == "4.2.1"
 
 
-@pytest.mark.asyncio
-async def test_create_support_ticket_is_deterministic():
-    from app.tools.configent_support.create_support_ticket import execute
-
-    args = {"subject": "Ingestion fails with missing VOYAGE_API_KEY", "category": "bug"}
-    first = await execute(args)
-    second = await execute(dict(args))
-
-    assert first["ticket_id"] == second["ticket_id"]
-    assert first["ticket_id"].startswith("CONFIGENT-")
-    assert first["status"] == "open"
-    assert first["category"] == "bug"
-    assert first["priority"] == "normal"  # default applied
-    assert first["eta_hours"] == 8  # bug ETA
-
-
 # ── create_escalation_ticket: real HTTP against the mock service ────────────────────
 
 

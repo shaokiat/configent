@@ -6,7 +6,6 @@ Unknown tool names fail startup, not at request time.
 from collections.abc import Callable
 
 from app.tools.acme_fab import pricing_lookup
-from app.tools.configent_support import create_support_ticket
 from app.tools.gcp_platform import create_escalation_ticket
 from app.tools.meridian import coverage_check
 from app.tools.shared import get_document, search_docs
@@ -17,10 +16,6 @@ _REGISTRY: dict[str, tuple[dict, Callable]] = {
     "get_document": (get_document.DEFINITION, get_document.execute),
     "pricing_lookup": (pricing_lookup.DEFINITION, pricing_lookup.execute),
     "coverage_check": (coverage_check.DEFINITION, coverage_check.execute),
-    "create_support_ticket": (
-        create_support_ticket.DEFINITION,
-        create_support_ticket.execute,
-    ),
     "create_escalation_ticket": (
         create_escalation_ticket.DEFINITION,
         create_escalation_ticket.execute,

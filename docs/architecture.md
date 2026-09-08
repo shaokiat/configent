@@ -204,13 +204,13 @@ configent/
 │       └── app/
 │           ├── agent/        # loop, streaming, citations, limits
 │           ├── retrieval/    # pgvector search, embed()
-│           ├── tools/        # registry, shared/, acme_fab/, meridian/, configent_support/
+│           ├── tools/        # registry, shared/, acme_fab/, meridian/, gcp_platform/
 │           ├── tracing/      # trace persistence
 │           └── config/       # Pydantic schema, registry
-├── config/                   # acme-fab.yaml, meridian-insurance.yaml, configent-support.yaml, gcp-platform-support.yaml
+├── config/                   # gcp-platform-support.yaml (+ disabled/ — configs the registry does not load)
 ├── corpora/                  # source docs per client (small; committed)
 ├── prompts/                  # per-client system prompts
-├── evals/                    # sentinels.yaml + golden sets (configent-support, gcp-platform-support)
+├── evals/                    # sentinels.yaml + golden sets (gcp-platform-support)
 ├── docs/                     # this file, config reference, docs site source
 ├── infra/                    # Dockerfiles, docker-compose (local pg), CI
 └── README.md

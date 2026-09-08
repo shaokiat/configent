@@ -32,16 +32,13 @@ async function getClients(): Promise<ClientSummary[]> {
 
 // Copy the registry cannot supply: what each client is for, in the words a visitor
 // needs. Keyed by client_id; a client with no entry still renders from its tagline.
+// Acme and Meridian are kept here against their configs in `config/disabled/` — the
+// demo loads GCP alone, so those two never render unless a config is moved back up.
 const BLURBS: Record<string, { description: string; tags: string[] }> = {
   "gcp-platform-support": {
     description:
       "Answers Cloud Run, GKE and IAM questions from public Google Cloud documentation, with citations. Questions that depend on your own project can't be answered from those documents, so it files a ticket instead.",
     tags: ["Explicit pipeline", "Two-signal guardrail", "Escalation"],
-  },
-  "configent-support": {
-    description:
-      "Answers questions about Configent itself from the published documentation — the dogfood tenant.",
-    tags: ["Docs Q&A", "Citations"],
   },
   "acme-fab": {
     description:
