@@ -9,7 +9,7 @@ import ArchDiagram from '@/components/ArchDiagram.astro';
 
 This is the hub for the pipeline engine. It follows one question from HTTP to answer, names the six components on the way, and hands each one to the page that owns it.
 
-The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations, and when it cannot answer, it files a ticket. The build is in `apps/api/app/`; the engine for this client is `agent/pipeline.py`.
+The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations, and when it cannot answer, it either replies conversationally or offers a drafted ticket the user confirms. The build is in `apps/api/app/`; the engine for this client is `agent/pipeline.py`.
 
 <ArchDiagram />
 
@@ -47,7 +47,7 @@ Three properties fall out of the structure rather than out of prompting:
 | `score` | structured output | Rate how well the passages support an answer. Emits **signal 2** | [Scoring](/configent/docs/scoring) |
 | *the branch* | none | `should_escalate()` compares both signals to three thresholds | [The Guardrail](/configent/docs/escalation-guardrail) |
 | `answer` | citations | Answer from the passages, cited, with no tools in the request | [Answering](/configent/docs/answering) |
-| `escalate` → `ticket` | structured output | Draft the ticket fields, then POST them from Python | [Escalation & Ticket](/configent/docs/escalation-ticket) |
+| `escalate` → `ticket` | structured output | Triage the turn; draft the ticket fields if it needs one, then POST them from Python once the user confirms | [Escalation & Ticket](/configent/docs/escalation-ticket) |
 | the step trail | none | One durable entry per stage, committed before the next starts | [Runs & Durability](/configent/docs/runs-and-durability) |
 
 Read them in that order and you have read the engine. Each page states its contract, its design points, its edge cases, and the `step` event it leaves behind.
@@ -86,7 +86,7 @@ This agent has two destinations: answer from the documentation, or a human. For 
 
 The trade is not free, and the demo found the bill. A pipeline whose first move is always retrieval has nowhere to put a turn that is not a question. `hey`, `thanks` and bare follow-ups retrieve nothing, empty retrieval short-circuits straight to escalate, and every one of them filed a ticket.
 
-The fix keeps the ordering rather than reversing it: a `route` field on the escalate stage's existing structured output, downstream of the guardrail, separating *not a support question* from *a support question we cannot answer*. Two schema fields and a branch, in a model call that was already being made — not a stage, and not a model call added to the answerable path. Tracked as **D9**; see [Escalation & Ticket](/configent/docs/escalation-ticket).
+The fix keeps the ordering rather than reversing it: a `route` field on the escalate stage's existing structured output, downstream of the guardrail, separating *not a support question* from *a support question we cannot answer*. Two schema fields and a branch, in a model call that was already being made — not a stage, and not a model call added to the answerable path. Shipped as **D9**; see [Escalation & Ticket](/configent/docs/escalation-ticket).
 
 ---
 
@@ -134,7 +134,7 @@ Config decides *which* engine, *which* model, and *where* the thresholds sit. Co
 - **The pipeline cannot do multi-hop.** A question needing two searches gets one. That is the price of determinism, and the loop engine exists for clients that need the other trade.
 - **The follow-up fix is a heuristic.** Prepending the previous user turn is not query rewriting. It fails on a three-turn reference chain.
 - **The scorer is a model judging a model's inputs.** It is cheap and narrow, which is why it works. It is a second model call, not a proof.
-- **There is no place for a turn that is not a question.** Retrieval-first means a greeting retrieves nothing and falls into the escalate arm. Fixed downstream rather than by adding a router (D9, above) — but it is a real consequence of the ordering, not an oversight in it.
+- **There is no place for a turn that is not a question.** Retrieval-first means a greeting retrieves nothing and falls into the escalate arm. Fixed downstream rather than by adding a router (D9, above) — but it is a real consequence of the ordering, not an oversight in it, and it cost a wasted draft call on every greeting until the route landed.
 - **One retry policy is missing.** The ticket executor makes one attempt and reports retryability. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool, so it is deliberately not inlined.
 
 ---

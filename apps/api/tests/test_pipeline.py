@@ -161,3 +161,56 @@ async def test_stream_emits_error_instead_of_done_when_a_stage_throws(cfg, monke
     assert "internal error" in events[0][1]["message"].lower()
 
 
+
+
+# ── triage and the ticket handshake (D9) ────────────────────────────────────────────
+
+
+def test_an_unrecognised_route_fails_toward_filing():
+    """A malformed draft must not silently become small talk. The turn was already judged
+    unanswerable, so the safe reading is that a human should see it — `converse` has to be
+    asked for explicitly."""
+    for draft in ({}, {"route": "banana"}, {"route": None}):
+        out = pipeline._normalise_draft(dict(draft), question="why is my quota 0?")
+        assert out["route"] == "ticket"
+
+
+def test_a_ticket_draft_missing_fields_is_completed_rather_than_dropped():
+    out = pipeline._normalise_draft(
+        {"route": "ticket"}, question="Can you raise my Cloud Run quota in europe-west1?"
+    )
+    assert out["category"] == "other"
+    assert out["product_area"] == "other"
+    assert out["priority"] == "normal"
+    assert "quota" in out["subject"]
+
+
+def test_converse_route_is_left_alone():
+    out = pipeline._normalise_draft(
+        {"route": "converse", "reply": "Any time."}, question="thanks"
+    )
+    assert out == {"route": "converse", "reply": "Any time."}
+
+
+def test_the_proposal_offers_and_does_not_claim():
+    reply = pipeline._proposal_reply(
+        {"subject": "Quota increase in europe-west1", "category": "quota_or_billing"}
+    )
+    assert "quota or billing" in reply
+    assert "europe-west1" in reply
+    assert "I can open" in reply
+    assert "PLATFORM-" not in reply
+
+
+def test_the_confirmation_names_the_filed_ticket():
+    reply = pipeline._escalation_reply(
+        {"ticket_id": "PLATFORM-1042", "queue": "platform-serverless", "eta_hours": 8,
+         "url": "https://platform.internal.example/tickets/PLATFORM-1042"},
+        ok=True,
+    )
+    assert "PLATFORM-1042" in reply and "platform-serverless" in reply and "8 hours" in reply
+
+
+def test_a_failed_filing_does_not_claim_a_ticket_exists():
+    reply = pipeline._escalation_reply({"error": "unreachable"}, ok=False)
+    assert "nothing was filed" in reply.lower()

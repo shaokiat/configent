@@ -29,10 +29,8 @@ agent:
   escalate_below: 0.45
   # The cheap scorer's own groundedness confidence, below which we escalate.
   confidence_threshold: 0.6
-  tools:
-    - search_docs
-    - get_document
-    - create_escalation_ticket
+  # No tools key: retrieval is a function call and the ticket executor is
+  # invoked from Python, so no tool definition is ever sent to a model.
 
 limits:
   rate_limit_per_minute: 60
@@ -74,16 +72,28 @@ const escalatedRun = {
   steps: [
     { stage: 'Searched the documentation', detail: 'best match 0.50 — above the escalate floor' },
     { stage: 'Scored the evidence', detail: 'groundedness 0.05 — below the 0.60 threshold' },
-    { stage: 'Escalated to a human', detail: 'quota_or_billing · priority high' },
-    { stage: 'Filed a ticket', detail: 'PLATFORM-1043' },
+    { stage: 'Drafted a ticket for review', detail: 'quota_or_billing · priority high' },
+    { stage: 'Filed a ticket', detail: 'PLATFORM-1045 — after you confirm' },
   ],
-  footer: '4 step events + done · $0.014 · 5.0s',
+  footer: '3 steps + a proposal · the fourth lands when you say yes',
+};
+
+// The turn that used to be a bug. Retrieval finds nothing for a greeting, and empty
+// retrieval routes here — so before the triage existed, this filed a ticket.
+const conversedRun = {
+  question: 'hi',
+  outcome: 'conversed' as const,
+  steps: [
+    { stage: 'Searched the documentation', detail: 'no matching passages' },
+    { stage: 'Not a support request', detail: 'no ticket' },
+  ],
+  footer: '2 step events + done · zero tickets · no scoring call',
 };
 ---
 
 <BaseLayout
   title="Demo"
-  description="Walk through the Cloud Platform Support agent — an explicit pipeline that answers from Google Cloud documentation or escalates to a filed ticket, with every stage on the record."
+  description="Walk through the Cloud Platform Support agent — an explicit pipeline that answers from Google Cloud documentation, converses when a turn is not a support request, or offers a ticket you confirm, with every stage on the record."
 >
 
   <div class="page container">
@@ -94,8 +104,9 @@ const escalatedRun = {
         <strong>DeployBot</strong> answers Cloud Run, GKE and IAM questions from public
         Google Cloud documentation, with citations. When a question depends on your own
         project — quota, billing, IAM policy, cluster state — it can't be answered from
-        those documents, so the agent files a ticket instead. That decision is a branch
-        in Python, not a choice the model makes, and every stage of it is on the record.
+        those documents, so the agent drafts a ticket and offers to file it. That decision
+        is a branch in Python, not a choice the model makes, and every stage of it is on
+        the record. Say <code>hi</code> and nothing is filed at all.
       </p>
     </div>
 
@@ -181,15 +192,14 @@ const escalatedRun = {
 
     <!-- ── The two trails ──────────────────────────────────────── -->
     <section class="section">
-      <h2>Two questions, two branches</h2>
+      <h2>Three messages, three outcomes</h2>
       <p class="section-sub">
         Each stage emits a <code>step</code> event as it finishes, and the UI renders
-        them above the reply. The trails below are the recorded output of the week 1
-        exit gates, not mock-ups.
+        them above the reply. The trails below are recorded output, not mock-ups.
       </p>
 
       <div class="trail-grid">
-        {[answeredRun, escalatedRun].map(run => (
+        {[answeredRun, escalatedRun, conversedRun].map(run => (
           <div class:list={['trail-card', run.outcome]}>
             <div class="trail-q">{run.question}</div>
             <ol class="trail-steps">
@@ -203,6 +213,15 @@ const escalatedRun = {
             <div class="trail-footer">{run.footer}</div>
           </div>
         ))}
+      </div>
+
+      <div class="trail-note">
+        <strong>The third trail is the one to ask about.</strong> <code>hi</code> retrieves
+        nothing, and empty retrieval routes to the same branch as a quota question — so for
+        a while, every greeting filed a ticket. The fix is not a threshold: it is a
+        <code>route</code> field on the draft call that already runs, separating <em>not a
+        support request</em> from <em>a support request we cannot answer</em>. A queue is
+        only worth reading if what reaches it needed a human.
       </div>
 
       <div class="trail-note">
@@ -583,7 +602,7 @@ const escalatedRun = {
   /* ── Step trails ──────────────────────────────────────────────── */
   .trail-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 1.25rem;
   }
 
@@ -597,6 +616,7 @@ const escalatedRun = {
     flex-direction: column;
   }
   .trail-card.escalated { border-top-color: #f59e0b; }
+  .trail-card.conversed { border-top-color: #10b981; }
 
   .trail-q {
     font-size: 0.9rem;
@@ -635,6 +655,7 @@ const escalatedRun = {
     background: var(--accent);
   }
   .trail-card.escalated .trail-steps li:nth-child(n+3)::before { background: #f59e0b; }
+  .trail-card.conversed .trail-steps li:nth-child(n+2)::before { background: #10b981; }
   .trail-steps li:not(:last-child)::after {
     content: '';
     position: absolute;

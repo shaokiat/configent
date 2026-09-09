@@ -49,6 +49,8 @@ if idempotency_key and (existing_id := _by_idempotency_key.get(idempotency_key))
 
 A replay answers **200**, not 201, and sets `replayed: true`, so the caller can tell a fresh create from a replay.
 
+The caller is the confirm endpoint, not the turn: a ticket is POSTed when the user accepts the draft the `escalate` stage offered. That moved the realistic duplicate from a crash-and-resume to a double-click, and the run's stored `ticket_id` short-circuits the second click before this service is reached at all. The key still covers the case where it doesn't — two confirmations racing, or a resume that replays the filing.
+
 > **Order matters here.** The idempotency check runs *before* the chaos switch. Otherwise a retry storm could duplicate an already-created ticket simply because the service happened to be flapping.
 
 Without a `run_id` no key is sent, and the service creates a duplicate. That is correct: the free-form loop has no run, so there is nothing to deduplicate against.

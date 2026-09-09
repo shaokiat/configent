@@ -14,9 +14,22 @@ interface TurnMeta {
   cost_usd: number;
   latency_ms: number;
   cache_read_input_tokens: number;
-  escalated?: boolean;
+  // "answer" | "converse" | "ticket" (D9). Three-way, because a boolean cannot express
+  // "this was not a support question" — the case that used to file a ticket.
+  outcome?: string;
   confidence?: number;
   ticket_id?: string | null;
+}
+
+// A drafted ticket the agent is *offering* to file. Nothing is filed until the user says
+// so, which is what keeps greetings and follow-ups out of the platform team's queue.
+export interface TicketProposal {
+  run_id: string;
+  subject: string;
+  category: string;
+  product_area: string;
+  priority: string;
+  body?: string;
 }
 
 // One completed pipeline stage. Emitted by the `step` SSE event and rendered as an
@@ -31,14 +44,27 @@ export interface RunStep {
   confidence?: number;
   n_hits?: number;
   top_similarity?: number;
+  category?: string;
   n_citations?: number;
   ticket_id?: string;
+  route?: string;
   cost_usd?: number;
 }
 
 type ChatMessage =
   | { role: "user"; text: string }
-  | { role: "assistant"; parts: Part[]; meta?: TurnMeta; error?: string; steps?: RunStep[] };
+  | {
+      role: "assistant";
+      parts: Part[];
+      meta?: TurnMeta;
+      error?: string;
+      steps?: RunStep[];
+      proposal?: TicketProposal;
+      // undefined = no offer was made. Reloading a conversation does not restore an
+      // unanswered offer; the filed confirmation is its own assistant turn, so what is
+      // lost is a button, not a record.
+      proposalState?: "open" | "filing" | "filed" | "declined";
+    };
 
 interface SseEvent {
   event: string;
@@ -286,6 +312,14 @@ const STAGE_LABEL: Record<string, string> = {
   ticket: "Filed a ticket",
 };
 
+// The escalate stage does double duty since D9: it triages, then drafts only if the turn is
+// a support request. The trail says which of the two happened.
+function stageLabel(step: RunStep): string {
+  if (step.stage === "escalate" && step.route === "converse") return "Not a support request";
+  if (step.stage === "escalate") return "Drafted a ticket for review";
+  return STAGE_LABEL[step.stage] ?? step.stage;
+}
+
 function stageDetail(step: RunStep): string | null {
   switch (step.stage) {
     case "retrieve":
@@ -296,6 +330,8 @@ function stageDetail(step: RunStep): string | null {
       return step.confidence !== undefined ? `confidence ${step.confidence.toFixed(2)}` : null;
     case "answer":
       return step.n_citations !== undefined ? `${step.n_citations} citations` : null;
+    case "escalate":
+      return step.route === "converse" ? "no ticket" : (step.category ?? null);
     case "ticket":
       return step.ticket_id ?? null;
     default:
@@ -303,10 +339,89 @@ function stageDetail(step: RunStep): string | null {
   }
 }
 
+// ── Ticket proposal ───────────────────────────────────────────────────────────────
+// The agent drafts; the user decides. This card is the confirmation step that keeps the
+// platform team's queue worth reading — an escalation the user chose, not one that
+// happened to them.
+
+const PRIORITY_STYLE: Record<string, string> = {
+  high: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+  normal: "bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-white/60",
+  low: "bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-white/45",
+};
+
+function TicketProposalCard({
+  proposal,
+  state,
+  onFile,
+  onDecline,
+}: {
+  proposal: TicketProposal;
+  state: "open" | "filing" | "filed" | "declined";
+  onFile: () => void;
+  onDecline: () => void;
+}) {
+  return (
+    <div className="mt-2 rounded-xl border border-amber-200 dark:border-amber-500/25 bg-amber-50/60 dark:bg-amber-500/5 px-4 py-3">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[11px] uppercase tracking-wide font-medium text-amber-700 dark:text-amber-400">
+          Draft ticket
+        </span>
+        <span
+          className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${
+            PRIORITY_STYLE[proposal.priority] ?? PRIORITY_STYLE.normal
+          }`}
+        >
+          {proposal.priority}
+        </span>
+        <span className="text-[11px] text-gray-400 dark:text-white/35">
+          {proposal.category.replace(/_/g, " ")}
+        </span>
+      </div>
+      <p className="text-sm text-gray-700 dark:text-white/80 leading-snug">{proposal.subject}</p>
+      {proposal.body && (
+        <p className="mt-1 text-xs text-gray-500 dark:text-white/45 leading-relaxed">{proposal.body}</p>
+      )}
+
+      {state === "filed" ? (
+        <p className="mt-2.5 text-xs text-gray-500 dark:text-white/45">Filed.</p>
+      ) : state === "declined" ? (
+        <p className="mt-2.5 text-xs text-gray-500 dark:text-white/45">
+          Not filed. Ask again if you change your mind.
+        </p>
+      ) : (
+        <div className="mt-2.5 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onFile}
+            disabled={state === "filing"}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-60 transition-opacity"
+            style={{ backgroundColor: "#b45309" }}
+          >
+            {state === "filing" ? "Filing…" : "Open this ticket"}
+          </button>
+          <button
+            type="button"
+            onClick={onDecline}
+            disabled={state === "filing"}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 dark:text-white/50 hover:text-gray-800 dark:hover:text-white/80 disabled:opacity-60 transition-colors"
+          >
+            Not now
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepTrail({ steps, live }: { steps: RunStep[]; live: boolean }) {
   const [open, setOpen] = useState(live);
   if (steps.length === 0) return null;
-  const escalated = steps.some((s) => s.stage === "escalate");
+  // Only a real handoff earns the badge. A greeting also passes through `escalate`, and
+  // labelling that "escalated" is the same conflation the backend fix removed.
+  const escalated = steps.some(
+    (s) => (s.stage === "escalate" && s.route !== "converse") || s.stage === "ticket"
+  );
 
   return (
     <div className="mb-2 text-xs">
@@ -347,7 +462,8 @@ function StepTrail({ steps, live }: { steps: RunStep[]; live: boolean }) {
                   className={`absolute -left-[17px] top-1.5 w-1.5 h-1.5 rounded-full ${
                     failed
                       ? "bg-red-500"
-                      : step.stage === "escalate" || step.stage === "ticket"
+                      : (step.stage === "escalate" && step.route !== "converse") ||
+                          step.stage === "ticket"
                         ? "bg-amber-500"
                         : "bg-gray-300 dark:bg-white/25"
                   }`}
@@ -355,7 +471,7 @@ function StepTrail({ steps, live }: { steps: RunStep[]; live: boolean }) {
                 />
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <span className="text-gray-600 dark:text-white/60 font-medium">
-                    {STAGE_LABEL[step.stage] ?? step.stage}
+                    {stageLabel(step)}
                   </span>
                   {detail && (
                     <span className="text-gray-400 dark:text-white/35 tabular-nums">{detail}</span>
@@ -475,6 +591,11 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
     } else if (event === "tool") {
       if (data.status === "start") setToolStatus(toolLabel(data.name as string));
       else setToolStatus(null);
+    } else if (event === "ticket_proposal") {
+      updateLastAssistant((msg) => {
+        msg.proposal = data as unknown as TicketProposal;
+        msg.proposalState = "open";
+      });
     } else if (event === "run") {
       setRunId(data.run_id as string);
     } else if (event === "step") {
@@ -495,7 +616,7 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
           cost_usd: data.cost_usd as number,
           latency_ms: data.latency_ms as number,
           cache_read_input_tokens: data.cache_read_input_tokens as number,
-          escalated: data.escalated as boolean | undefined,
+          outcome: data.outcome as string | undefined,
           confidence: data.confidence as number | undefined,
           ticket_id: (data.ticket_id as string | null) ?? null,
         };
@@ -506,6 +627,48 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
         msg.error = (data.message as string) || "Something went wrong.";
       });
     }
+  }
+
+  // Confirming a proposal files it. The draft itself stays server-side — this posts a run
+  // id and nothing else, so the client can accept an offer but never author a ticket.
+  async function fileTicket(messageIndex: number, proposal: TicketProposal) {
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === messageIndex && m.role === "assistant" ? { ...m, proposalState: "filing" } : m
+      )
+    );
+    try {
+      const res = await fetch(`/api/c/${branding.id}/runs/${proposal.run_id}/ticket`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setMessages((prev) => {
+        const next = prev.map((m, i) =>
+          i === messageIndex && m.role === "assistant"
+            ? { ...m, proposalState: "filed" as const }
+            : m
+        );
+        if (data.reply) next.push({ role: "assistant", parts: [{ kind: "text", text: data.reply }] });
+        return next;
+      });
+    } catch {
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === messageIndex && m.role === "assistant"
+            ? { ...m, proposalState: "open" as const, error: "Couldn't file that ticket — try again." }
+            : m
+        )
+      );
+    }
+  }
+
+  function declineTicket(messageIndex: number) {
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === messageIndex && m.role === "assistant" ? { ...m, proposalState: "declined" } : m
+      )
+    );
   }
 
   async function send(text?: string) {
@@ -683,6 +846,15 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
                     </div>
                   )}
                 </div>
+
+                {msg.proposal && msg.proposalState && (
+                  <TicketProposalCard
+                    proposal={msg.proposal}
+                    state={msg.proposalState}
+                    onFile={() => fileTicket(mi, msg.proposal!)}
+                    onDecline={() => declineTicket(mi)}
+                  />
+                )}
 
                 {msg.meta && (
                   <div className="flex items-center gap-3 mt-1.5 px-1 text-[11px] text-gray-400 dark:text-white/30">
