@@ -32,18 +32,23 @@ export interface TicketProposal {
   body?: string;
 }
 
-// One completed pipeline stage. Emitted by the `step` SSE event and rendered as an
-// audit trail beside the answer — the same data the backend commits to Run.steps, so
+// One completed node of the support graph. Emitted by the `step` SSE event and rendered as
+// an audit trail beside the answer — the same data the backend commits to Run.steps, so
 // what the user watches and what is recorded cannot drift.
 export interface RunStep {
   seq: number;
   stage: string;
   status: string;
+  // 1 = RAG, 2 = corrective RAG, 3 = human. Absent on runs from before the graph.
+  level?: number;
   reasoning?: string | null;
   latency_ms?: number;
   confidence?: number;
+  kind?: string;
   n_hits?: number;
   top_similarity?: number;
+  queries?: string[];
+  keywords?: string;
   category?: string;
   n_citations?: number;
   ticket_id?: string;
@@ -306,28 +311,45 @@ function TypingDots({ color }: { color: string }) {
 
 const STAGE_LABEL: Record<string, string> = {
   retrieve: "Searched the documentation",
-  score: "Scored the evidence",
+  grade: "Graded the evidence",
+  converse: "Not a support request",
+  rewrite: "Rewrote the question",
+  hybrid_retrieve: "Searched again: keyword + semantic",
+  regrade: "Graded the new evidence",
   answer: "Answered from sources",
-  escalate: "Escalated to a human",
+  escalate: "Drafted a ticket for review",
   ticket: "Filed a ticket",
+  // The retired pipeline's name for grade, still replayed when an older conversation reloads.
+  score: "Scored the evidence",
 };
 
-// The escalate stage does double duty since D9: it triages, then drafts only if the turn is
-// a support request. The trail says which of the two happened.
 function stageLabel(step: RunStep): string {
+  // Before the graph, `escalate` also carried triage. A reloaded run from then says which.
   if (step.stage === "escalate" && step.route === "converse") return "Not a support request";
-  if (step.stage === "escalate") return "Drafted a ticket for review";
   return STAGE_LABEL[step.stage] ?? step.stage;
 }
 
 function stageDetail(step: RunStep): string | null {
   switch (step.stage) {
     case "retrieve":
-      return step.n_hits === 0
-        ? "no matching passages"
-        : `${step.n_hits} passage${step.n_hits === 1 ? "" : "s"} · best match ${step.top_similarity?.toFixed(2)}`;
+    case "hybrid_retrieve":
+      if (step.n_hits === 0) return "no matching passages";
+      return (
+        `${step.n_hits} passage${step.n_hits === 1 ? "" : "s"}` +
+        (step.top_similarity !== undefined ? ` · best match ${step.top_similarity.toFixed(2)}` : "")
+      );
     case "score":
+    case "grade":
+    case "regrade":
       return step.confidence !== undefined ? `confidence ${step.confidence.toFixed(2)}` : null;
+    case "rewrite":
+      if (!step.queries) return null;
+      return (
+        `${step.queries.length} rewrite${step.queries.length === 1 ? "" : "s"}` +
+        (step.keywords ? ` · "${step.keywords}"` : "")
+      );
+    case "converse":
+      return "no ticket";
     case "answer":
       return step.n_citations !== undefined ? `${step.n_citations} citations` : null;
     case "escalate":

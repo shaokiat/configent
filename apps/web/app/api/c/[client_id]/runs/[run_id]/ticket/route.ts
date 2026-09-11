@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
-// Confirms the ticket a pipeline turn proposed. Deliberately forwards no request body:
-// the draft lives on the run server-side, so a caller can accept an offer but cannot
-// author a ticket of its own.
+// Confirms the ticket a support-graph turn proposed. Deliberately forwards no request body:
+// the draft lives in the run's checkpoint server-side, so a caller can accept an offer but
+// cannot author a ticket of its own.
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ client_id: string; run_id: string }> }
