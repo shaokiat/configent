@@ -11,6 +11,34 @@ This is the hub for the graph engine. It follows one question from HTTP to answe
 
 The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations. When the first search cannot ground an answer, it searches again a different way. When that fails too, it offers a drafted ticket the user confirms. The engine is `agent/graph.py`, built on LangGraph.
 
+## At a glance
+
+```
+          User question
+                │
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 1 · RAG                ├──────────────────▶│ Cited answer   │
+│ search the docs, grade them  │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 2 · Corrective RAG     ├──────────────────▶│ Cited answer   │
+│ rewrite, search again        │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐   user says yes   ┌────────────────┐
+│ Level 3 · Human              ├──────────────────▶│ Ticket filed   │
+│ draft a ticket, offer it     │                   └────────────────┘
+└──────────────────────────────┘
+```
+
+A question moves down a level only when the one above falls short, and Python decides each move. A greeting never moves down: it gets a short reply at Level 1 and no ticket.
+
+The detailed diagram adds every node, both decision points, and the step trail:
+
 <ArchDiagram />
 
 ---

@@ -25,6 +25,34 @@ Four requirements, and every design decision below traces back to one of them.
 
 ---
 
+## The support agent at a glance
+
+```
+          User question
+                │
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 1 · RAG                ├──────────────────▶│ Cited answer   │
+│ search the docs, grade them  │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 2 · Corrective RAG     ├──────────────────▶│ Cited answer   │
+│ rewrite, search again        │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐   user says yes   ┌────────────────┐
+│ Level 3 · Human              ├──────────────────▶│ Ticket filed   │
+│ draft a ticket, offer it     │                   └────────────────┘
+└──────────────────────────────┘
+```
+
+Each level answers if it can and hands down only what it can't. A Python function chooses every arrow; the model chooses none. The walkthrough is [The Support Graph](/configent/docs/support-graph).
+
+---
+
 ## The shape
 
 ```
