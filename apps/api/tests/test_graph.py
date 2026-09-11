@@ -66,6 +66,14 @@ def test_strong_evidence_answers_even_if_the_grader_called_it_conversation(cfg):
     assert route == "answer"
 
 
+def test_asking_for_a_human_goes_straight_to_a_proposal(cfg):
+    """Even over strong evidence: they asked for a person, and it's only an offer."""
+    route, _ = graph.decide_level1(
+        top_similarity=0.8, score=grade(0.9, kind="handoff"), n_hits=3, cfg=cfg
+    )
+    assert route == "escalate"
+
+
 def test_a_missing_kind_is_a_question(cfg):
     """`converse` has to be asked for; a malformed grade must not become small talk."""
     score = {"confidence": 0.1, "reasoning": "?"}

@@ -252,7 +252,7 @@ _GRADE_SCHEMA = {
     "properties": {
         # Triage rides on the grade call (D9): no extra call, and made with the passages in
         # view rather than by a router that sees only the question.
-        "kind": {"type": "string", "enum": ["question", "conversation"]},
+        "kind": {"type": "string", "enum": ["question", "conversation", "handoff"]},
         "supported": {"type": "boolean"},
         "confidence": {"type": "number"},
         "missing_info": {"type": "string"},
@@ -320,6 +320,10 @@ def decide_level1(
     """
     confidence = float(score.get("confidence", 0.0))
     agent = cfg.agent
+    # Asked for a human: skip the search for an answer they didn't want. Still only a
+    # proposal — nothing files until they confirm, so a misread costs one offer.
+    if score.get("kind") == "handoff":
+        return "escalate", "the user asked for the platform team"
     if n_hits and top_similarity >= agent.escalate_below and confidence >= agent.confidence_threshold:
         return "answer", (
             f"similarity {top_similarity:.2f} and groundedness {confidence:.2f} both above "
