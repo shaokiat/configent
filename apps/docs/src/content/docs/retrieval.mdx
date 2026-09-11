@@ -1,101 +1,89 @@
 ---
 title: Retrieval
-description: The retrieve stage — embed the query, scan pgvector scoped to the client, drop weak hits. No model call, and the first of the two guardrail signals.
+description: The retrieve node. Embed the message, scan pgvector scoped to the client, drop weak hits. No model call, and the first of the two guardrail signals.
 order: 9
-group: The Answer Pipeline
+group: The Support Graph
 ---
 
-`retrieve` is the first stage of the pipeline and the only one that makes no model call. It embeds the question, runs a cosine scan over the client's chunks, and discards anything below the drop floor. It lives in `agent/pipeline.py`; the search itself is `retrieval/search.py`, shared with the loop engine's `search_docs` tool.
+`retrieve` is Level 1's first node and makes no model call. It embeds the message, runs a cosine scan over the client's chunks, and discards anything below the drop floor. The node lives in `agent/graph.py`; the search is `search()` in `retrieval/search.py`, shared with the loop engine's `search_docs` tool.
 
-Its second return value is **signal 1** of the [guardrail](/configent/docs/escalation-guardrail).
+The best surviving similarity is **signal 1** of the [guardrail](/configent/docs/escalation-guardrail).
 
 ---
 
 ## The flow
 
 ```
-stage_retrieve()
-  │
-  ├─ _retrieval_query()       previous user turn + this one
+retrieve(state)
   │
   └─ search()                 retrieval/search.py
        ├─ embed_query()       Voyage, input_type="query"
-       ├─ pgvector cosine     WHERE client_id = ? · ORDER BY similarity · LIMIT k*2
-       └─ floor filter        drop below retrieval_drop_floor, then [:k]
+       ├─ _dense()            pgvector cosine · WHERE client_id = ? · LIMIT k*2
+       └─ floor filter        drop below retrieval_drop_floor, then [:k=5]
 ```
 
-Two things come back: the hits that survived the floor, and the similarity of the best one — `0.0` when nothing survived. Each hit carries its document title, source URI, text, similarity and chunk index, which is what the [answering stage](/configent/docs/answering) needs to build `search_result` blocks.
+The node writes two things to state: the surviving hits, and `top_similarity`, which is `0.0` when nothing survived. Hits are stored as plain dicts (title, source URI, text, similarity) because the checkpointer saves state as JSON.
 
-The loop engine reaches the same `search()` through `search_docs.execute()`, which wraps the hits as content blocks. One retrieval implementation, two callers, configured differently — the tool takes `search()`'s default floor, while this stage passes the client's. See [Tools System](/configent/docs/tools-system#search_docs-shared).
+`search()` has two other callers. The loop engine reaches it through `search_docs`, and Level 2 reuses its `_dense()` half inside `hybrid_search()`. See [Corrective Retrieval](/configent/docs/corrective-retrieval).
 
 ---
 
 ## A worked example
 
-Two turns through the stage, with this client's thresholds: drop floor `0.3`, escalate below `0.45`. Similarity numbers are illustrative.
+Two turns from one conversation, with drop floor `0.3` and escalate below `0.45`. A real run.
 
-**Turn 1 — "What is the maximum request timeout on Cloud Run?"**
+**Turn 1: "My Cloud Run container fails to start — what does the PORT error mean?"**
 
-- `_retrieval_query()` finds no previous user turn and returns the question unchanged.
-- Voyage embeds it; pgvector scans this client's chunks and returns the 10 nearest.
-- Six sit below `0.3` and are dropped. Four go forward, the best at `0.61`.
-- `0.61` clears `escalate_below`, so the turn continues to [scoring](/configent/docs/scoring).
+- Voyage embeds the message, and pgvector returns the 10 nearest chunks for this client.
+- Five survive the floor. The best, from *Cloud Run: deployment and runtime errors*, sits at `0.62`.
+- `0.62` clears `escalate_below`, so signal 1 passes and the turn goes to [grading](/configent/docs/grading). The node took 405 ms.
 
-**Turn 2 — "And what about GKE?"**
+**Turn 2: "so is that the same as the health check timing out?"**
 
-- On its own that embeds to almost nothing — no product, no subject, nothing matchable. Best hit `0.29`, below the floor, zero survivors, and the turn escalates on `"retrieval returned no passages above the drop floor"`. The corpus had the answer; the query never asked for it.
-- `_retrieval_query()` prepends the previous user turn instead, so what gets embedded is:
-
-  ```
-  What is the maximum request timeout on Cloud Run?
-  And what about GKE?
-  ```
-
-- That carries enough of the topic to reach the GKE timeout docs. Best hit `0.48`, above `escalate_below`, and the turn proceeds.
+- The message is embedded as written. Nothing in it names Cloud Run or the PORT error.
+- Two chunks survive the floor, the best at `0.36`, from the right document.
+- `0.36` is under `escalate_below`. Level 1 falls short, and the turn goes to [Level 2](/configent/docs/corrective-retrieval), where a rewrite with the conversation in view finds the answer.
 
 ---
 
 ## Design decisions
 
-### Retrieval is a function call, not a tool
+### Retrieval is a node, not a tool
 
-Agentic retrieval is for decisions with more than one right answer. This one doesn't have that — the model always needs context, so letting it choose adds failure modes without adding capability.
+Agentic retrieval is for decisions with more than one right answer. This one has one: the model always needs context, so letting it choose adds failure modes without adding capability.
 
-| | Function call (this pipeline) | Tool call ([loop engine](/configent/docs/agent-loop)) |
+| | **Node (this graph)** | Tool call ([loop engine](/configent/docs/agent-loop)) |
 |---|---|---|
 | **Deciding to search** | Nothing to decide; it always happens | The model may skip it or mistime it |
-| **Answering from memory** | Impossible — grounding precedes the model | Models sometimes reply from parameters |
-| **Latency** | One embedding | Reason, emit, wait, resume — twice if it reformulates |
-| **Replay** | Same question, same embedding, same top-k | A generated query differs per run |
+| **Answering from memory** | Impossible, grounding precedes the model | Models sometimes reply from parameters |
+| **Latency** | One embedding | Reason, emit, wait, resume, twice if it reformulates |
+| **Replay** | Same message, same embedding, same top-k | A generated query differs per run |
 | **Injection surface** | User text is embedded, never interpreted | An attacker influences what gets searched |
 | **Multi-hop** | Not possible | The reason to choose it |
-| **What the scorer rates** | Exactly the passages the answerer will see | A moving target |
+| **What the grader rates** | Exactly the passages the answerer will see | A moving target |
 
-Switch to a tool when multi-hop pays off, or when the input is noisy enough to need a cleaning pass first. Different question types needing different corpora is a third case, but a tool alone wouldn't fix it — that needs routing *before* retrieval, which neither engine has.
+Switch to a tool when multi-hop pays off. Reformulating a bad query is not a reason to: Level 2 does that with a structured call, and keeps the search itself deterministic.
 
-> **Why this client is the easy case.** One homogeneous set of public Google Cloud docs, and questions like "what does the Cloud Run PORT error mean?" embed well as written — no index to choose, no query to rewrite. Its `category` and `product_area` enums look like ticket types, but the escalate stage assigns them *after* retrieval, to route the ticket rather than to pick a corpus.
+### Follow-ups are Level 2's job
+
+Level 1 embeds the bare message. The retired pipeline prepended the previous user turn instead. The graph dropped that heuristic because Level 2 does the job properly.
+
+| | Prepend the previous user turn (retired) | **Bare message, rewrite at Level 2 (built)** |
+|---|---|---|
+| **A follow-up at Level 1** | Often clears, for free | Usually falls short |
+| **A three-turn reference chain** | Loses the subject | The rewrite sees the last six turns |
+| **A change of subject** | The old subject pollutes the query | Nothing pollutes it |
+| **Cost on a follow-up** | Nothing | A rewrite, a regrade, one embedding call: $0.039 against $0.026 in the live run |
+| **Failure direction** | Escalates an answerable question | The same, one tier later |
 
 ### The search itself
 
-- **Embedded as a question, not a document.** `input_type="query"` differs from the `"document"` type used at ingest; Voyage exploits the asymmetry for recall. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline#why-voyage-ai).
+- **Embedded as a question, not a document.** `input_type="query"` differs from the `"document"` type used at ingest, and Voyage exploits the asymmetry for recall. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline#why-voyage-ai).
 - **Over-fetch, then filter.** pgvector can't apply the floor inside the scan, so filtering in SQL would return fewer than `k` rows whenever the floor bites.
-- **The floor makes "nothing matched" a case.** Without it the model always receives `k` chunks regardless of relevance — noise it may hallucinate around. With it, empty retrieval short-circuits past scoring to an escalation.
+- **The floor makes "nothing matched" a case.** Zero survivors still go to the grader, which has to recognise a greeting. Python then overwrites its confidence with `0`.
 - **`client_id` is in the `WHERE` clause.** Tenant isolation is a query predicate, not a convention. See [Multi-Tenancy](/configent/docs/multi-tenancy).
 
-### Follow-ups get the previous user turn prepended
-
-Nothing rewrites the query, so a question that isn't self-contained retrieves nothing. `_retrieval_query()` prepends the last *user* message — a heuristic, not query rewriting. Every option below fails the same way, by escalating an answerable question; none can produce an ungrounded answer, since a thin query only lowers similarity. So the choice is purely about how often each one misfires.
-
-| | Current turn only | **+ previous user turn** | + assistant reply |
-|---|---|---|---|
-| **Misfires when** | The question isn't self-contained | The subject changes *and* the new question is terse | The reply is long, or was wrong |
-| **How often** | Every follow-up — most turns after the first | The rare intersection: terse questions are almost always follow-ups, not switches | Most turns — a 400-token reply swamps a 6-token question |
-| **Extra cost** | — | — | Retrieval starts matching the model's own output |
-
-- **Known limits.** Only the immediately preceding turn is used, so a three-turn reference chain still loses the subject, and its contribution scales with its length rather than its relevance.
-- **The cheapest fix, unbuilt.** Embed both candidate queries and keep whichever scan scores higher: one batched call, no model, still replayable.
-
-> **Reproducibility is scoped to one embedding model version.** "Same query → same top-k" holds while the model is fixed. `voyage-3` is hardcoded in `embed.py` and no version is recorded on the chunk or the step, so bumping it silently changes what old runs would retrieve today. Not built — the corpus has only ever seen one model.
+> **Reproducibility is scoped to one embedding model version.** "Same query, same top-k" holds while the model is fixed. `voyage-3` is hardcoded in `embed.py` and no version is recorded on the chunk or the step, so bumping it silently changes what old runs would retrieve today.
 
 ---
 
@@ -103,12 +91,12 @@ Nothing rewrites the query, so a question that isn't self-contained retrieves no
 
 | Key | Default | What it does |
 |---|---|---|
-| `agent.retrieval_drop_floor` | `0.3` | Similarity below which a chunk is discarded before anyone sees it |
+| `agent.retrieval_drop_floor` | `0.3` | Similarity below which a chunk is discarded. Also applied to the dense half of Level 2 |
 
-`k` is fixed at 5 in the pipeline. Full key list: [Config Reference](/configent/docs/config-reference#agent).
+`k` is fixed at 5. Full key list: [Config Reference](/configent/docs/config-reference#agent).
 
-> **The floor and `escalate_below` are not the same knob.** The floor discards; `escalate_below` escalates. They read the same number at different points, and their ordering is validated at startup. See [The Guardrail](/configent/docs/escalation-guardrail#three-thresholds).
+> **The floor and `escalate_below` are not the same knob.** The floor discards; `escalate_below` fails Level 1. They read the same number at different points, and their ordering is validated at startup. See [The Guardrail](/configent/docs/escalation-guardrail#three-thresholds).
 
 ---
 
-**Next:** [Scoring](/configent/docs/scoring) — the second signal, and the only model call the guardrail depends on.
+**Next:** [Grading](/configent/docs/grading), the second signal and the triage that rides with it.

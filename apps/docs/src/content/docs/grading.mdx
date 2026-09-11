@@ -1,0 +1,148 @@
+---
+title: Grading
+description: The grade node. One cheap structured-output call that rates whether the passages support an answer, and whether the message is a support question at all. Runs at both levels.
+order: 10
+group: The Support Graph
+---
+
+`grade` is the guardrail's model call. It hands the message, the recent conversation and the passages to a cheap model, and gets back two judgements: how well the passages support an answer, and whether the message is a question or conversation. The same function runs twice in the graph, as `grade` at Level 1 and `regrade` at Level 2. It lives in `agent/graph.py`.
+
+Similarity says *close*. Groundedness says *sufficient*. They fail differently, which is the reason this node exists.
+
+---
+
+## The flow
+
+```
+grade(state)                      node "grade" at Level 1, "regrade" at Level 2
+  │
+  ├─ passages                     state["hits"], numbered [1..k], or "(none …)"
+  ├─ recent conversation          the last 6 readable turns
+  │
+  ├─ _structured_call()           prompts/<client_id>/grade.md · json_schema
+  │     → kind · supported · confidence · missing_info · reasoning · reply
+  │
+  ├─ zero passages?               Python overwrites confidence with 0.0
+  │
+  └─ decide_level1 / decide_level2
+        → route + why, written to state
+```
+
+| Field | What it is | Who reads it |
+|---|---|---|
+| `confidence` | `0.0` to `1.0`, how well the passages support an answer | The [guardrail](/configent/docs/escalation-guardrail). **This is signal 2** |
+| `kind` | `question` or `conversation` | `decide_level1`, which sends a conversation to `converse` |
+| `reply` | One or two lines for a conversation | The `converse` node |
+| `reasoning` | Why the model scored it that way | The step trail and the UI |
+| `supported`, `missing_info` | The same judgement as a boolean, and what the corpus lacked | Nothing. Kept on state |
+
+---
+
+## What the grader is asked
+
+The prompt is `prompts/<client_id>/grade.md`. Its first instruction is that the grader **judges the passages, it does not answer the question**. It is told that low confidence means the system searches again and then offers a human, and that the failure that matters is the opposite one: high confidence on passages that do not contain the answer.
+
+Groundedness is calibrated against three bands:
+
+| Band | Score | When |
+|---|---|---|
+| **High** | `0.8` to `1.0` | The passages state the answer directly: a default value, an error and its documented cause, a named constraint |
+| **Middling** | `0.4` to `0.7` | On-topic and partly answering: the mechanism is described but the number asked for is absent |
+| **Low** | `0.0` to `0.3` | Adjacent without containing the answer; **or** it depends on the user's own environment; **or** it concerns a product outside the corpus; **or** there are no passages |
+
+Triage is a second rule set in the same prompt:
+
+- **`conversation`:** a greeting or sign-off, a question about the assistant itself, a request to rephrase what was already said, or something too unclear to act on.
+- **`question`:** everything else, including a terse technical question, a pasted error, and a follow-up that asks something new.
+- **When unsure, `question`.** A question routed as conversation is answered with nothing checked. A conversation routed as a question costs one extra search.
+
+Four lines in that prompt do most of the work:
+
+- **"Score this low however relevant the passages look."** A question about the user's own project, quota, spend or cluster cannot be answered from public documentation, however well retrieval matched.
+- **"Do not reward yourself for finding relevant-looking text."** Topical proximity is what similarity already measures.
+- **`reasoning` is written for the end user.** It renders in the step trail. It is a product string, not a debug log.
+- **The reply may not state a platform fact.** If replying would need one, the message is a question.
+
+---
+
+## A worked example
+
+Three messages from a real run.
+
+**"Can you raise my Cloud Run instance quota for europe-west1?"**
+
+- Five passages survive retrieval, the best at `0.50`. Signal 1 passes: the deployment docs matched.
+- The environment rule fires. `grade` returns `confidence: 0.05`, `kind: question`.
+- `decide_level1` sends the turn to Level 2. After corrective retrieval, `regrade` returns `0.05` again, and the turn goes to a human.
+
+**"hi"**
+
+- Zero passages. The grader still runs and returns `kind: conversation` and a reply. Python overwrites its confidence to `0.0`.
+- `decide_level1` routes to `converse`. One model call, $0.006, 3.6 s for the whole turn.
+
+**"so is that the same as the health check timing out?"** (a follow-up)
+
+- Level 1: two passages at `0.36`. `grade` returns `0.15`: *"The passages describe the PORT error and startup timeout, but do not explain Cloud Run's health check…"*
+- Level 2: five passages from the rewritten queries. `regrade` returns `0.95`, and the turn is answered with three citations.
+
+The quota case is the one similarity alone cannot catch. The right documents were retrieved. They do not contain the answer.
+
+---
+
+## Design decisions
+
+### Triage rides on the grade call
+
+Triage belongs on a call that already happens, after retrieval, before Level 2. Anywhere later and a greeting pays for a second search. Anywhere earlier and it decides without evidence.
+
+| | Intent router in front | `route` on the draft call (D9, retired) | **`kind` on the grade call (built)** |
+|---|---|---|---|
+| **Sees the passages** | No | No | Yes |
+| **In a three-tier graph, a greeting pays for** | A router call on every turn | A rewrite, a hybrid search and a regrade, then triage | One grade call |
+| **Added to the answerable path** | One model call | Nothing | Nothing |
+| **A follow-up question** | Classified from its text | Conversed with, from context | A question, rewritten at Level 2 |
+
+### The routes read the number, not the boolean
+
+The schema returns both. Only `confidence` is wired to a route, because a threshold outside the model is a threshold you can move, tune and defend.
+
+| | **Threshold in Python, reading `confidence`** | Reading `supported` |
+|---|---|---|
+| **Where the bar lives** | One float in `config/*.yaml` | Inside the prompt and the weights |
+| **Moving the bar** | Edit the number | Re-prompt, then re-evaluate |
+| **Tuning it** | Sweep it offline over recorded scores | No dial to sweep |
+| **What the trail shows** | `0.05 < 0.6` | `false` |
+| **Who decides to escalate** | Python | The model |
+
+### `converse` is the one ungrounded path
+
+- **No passages sit behind the reply.** Every other user-facing text is either cited or fixed copy.
+- **The prompt closes the hole.** `grade.md` forbids stating any default, limit, error string or role name in a reply.
+- **Strong evidence beats `kind`.** `decide_level1` checks the answer condition first, so a casual question the docs answer is answered even if the grader thought it sounded like small talk.
+- **An empty reply falls back to fixed copy** that says what the assistant does.
+
+### The call itself
+
+- **One function, two nodes.** `state["level"]` picks which decide function runs and what the step is called.
+- **The recent conversation is included.** Triage has to know whether "that fixed it" follows something, and the prompt sees the last six readable turns.
+- **The threshold cuts the middling band in half.** `confidence_threshold: 0.6` sits inside `0.4` to `0.7`, so the prompt's bands and the config's threshold have to be tuned together.
+- **Its own prompt file.** A mega-prompt covering grading and answering makes the guardrail unauditable.
+- **The cheap model.** Grading took 2.6 s to 6.5 s per call in the live run, the slowest node on an answerable turn.
+- **Structured output, never citations.** The Messages API returns 400 when `output_config.format` and citations are combined.
+- **A malformed judgement fails safe.** A missing `confidence` reads as `0`, and a missing `kind` reads as a question. Neither can produce an answer or a silent conversation.
+- **Zero passages are still graded.** The retired pipeline skipped the call. The graph needs the `kind`, so it makes the call and discards the number.
+
+> **The honest limitation.** This is a model judging a model's inputs. It is cheap and narrow, which is why it works, but it is a second model call, not a proof. At Level 1 the deterministic signal from [retrieval](/configent/docs/retrieval) keeps the guardrail from resting on it alone. At Level 2 it does rest on it alone.
+
+---
+
+## Configuration
+
+| Key | Default | What it does |
+|---|---|---|
+| `agent.model` | none | The model that grades. The same one rewrites, drafts and answers |
+| `agent.confidence_threshold` | `0.6` | The bar `confidence` has to clear, at both levels. Read by the routes, not here |
+
+---
+
+**Next:** [The Guardrail](/configent/docs/escalation-guardrail), where both signals meet two plain functions.

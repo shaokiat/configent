@@ -80,7 +80,7 @@ for (;;) {
 | `error` | Renders the error string inside the assistant bubble |
 
 **Unknown events are dropped silently.** Backend work on a new event type stays invisible
-until a case is added here — which is why the pipeline's `step` events needed a frontend
+until a case is added here — which is why the graph's `step` events needed a frontend
 change to become visible at all.
 
 For the full SSE event contract, see [SSE Streaming](/configent/docs/sse-streaming).
@@ -89,19 +89,20 @@ For the full SSE event contract, see [SSE Streaming](/configent/docs/sse-streami
 
 ## The step trail
 
-Pipeline turns render an audit trail above the reply. It is the deliverable, not
-decoration: it shows *why* a question was answered or escalated, which is what an
-escalation decision has to be able to justify.
+Graph turns render an audit trail above the reply. It is the deliverable, not
+decoration: it shows *why* a question was answered, searched again or escalated, which is
+what an escalation decision has to be able to justify.
 
 ```typescript
 interface RunStep {
   seq: number;
-  stage: string;         // retrieve | score | answer | escalate | ticket
+  stage: string;         // retrieve | grade | converse | rewrite | hybrid_retrieve
+                         // | regrade | answer | escalate | ticket
   status: string;
   reasoning?: string;
   latency_ms?: number;
-  route?: string;        // "converse" | "ticket", on the escalate stage
-  // stage-specific: n_hits, top_similarity, confidence, n_citations, ticket_id
+  // node-specific: n_hits, top_similarity, confidence, queries, keywords,
+  //                category, n_citations, ticket_id
 }
 ```
 
@@ -113,18 +114,17 @@ interface RunStep {
   stays after the stream ends.
 
 `StepTrail` renders a collapsible timeline, open while live and collapsed afterwards.
-`stageLabel` maps stage names to human phrasing ("Scored the evidence"), and
-`stageDetail` renders the number that mattered for that stage — the confidence, the hit
-count, the ticket id. Escalated runs colour their trail differently from answered ones.
+`stageLabel` maps node names to human phrasing ("Graded the evidence", "Searched again:
+keyword + semantic"), and `stageDetail` renders the number that mattered for that node:
+the confidence, the hit count, the rewrite count and keywords, the ticket id. Escalated
+runs colour their trail differently from answered ones.
 
-The `escalate` stage needs the `route` to be labelled honestly, because it does two jobs:
-`route: "converse"` renders as *"Not a support request · no ticket"*, and `route: "ticket"`
-as *"Drafted a ticket for review"*. The amber "escalated" badge fires only on the second —
-a greeting passes through the same stage, and badging that as an escalation is the same
-conflation the backend fix removed.
+The amber "escalated" badge fires on `escalate` and `ticket` steps only. A greeting ends at
+its own `converse` node, labelled *"Not a support request · no ticket"*, so it can never be
+badged as an escalation.
 
 The loop's "Searching…" tool indicator is suppressed whenever steps are present, so a
-pipeline turn reports progress one way rather than two.
+graph turn reports progress one way rather than two.
 
 > **The trail survives a reload.** Steps live in the `runs` table, not on the message row,
 > and the assistant `Message` carries a `run_id` to join back through. Replaying a
@@ -141,7 +141,7 @@ declined`, and `TicketProposalCard` renders the draft — subject, category, pri
 the reply, with **Open this ticket** and **Not now**.
 
 Confirming posts to `/api/c/{client_id}/runs/{run_id}/ticket` through a Next route handler,
-with **no request body**. The draft lives on the run server-side, so the client can accept an
+with **no request body**. The draft lives in the run's checkpoint server-side, so the client can accept an
 offer but cannot author a ticket of its own. The response's `reply` is appended as a new
 assistant message rather than mutating the one that made the offer, so the conversation reads
 as offer-then-confirmation, which is what actually happened.
@@ -149,8 +149,8 @@ as offer-then-confirmation, which is what actually happened.
 > **A pending offer does not survive a reload.** The filed confirmation is persisted as its
 > own assistant turn and comes back with history; an unanswered proposal is only a button,
 > and `historyToMessages` does not rebuild it. What is lost is the shortcut, not the record —
-> the user can ask again. Restoring it would mean reading `Run.state` back through the
-> history endpoint, which is more API surface than a re-ask costs.
+> the user can ask again. Restoring it would mean reading the paused graph's pending
+> interrupt back through the history endpoint, which is more API surface than a re-ask costs.
 
 ---
 

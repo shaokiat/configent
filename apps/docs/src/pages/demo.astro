@@ -18,19 +18,23 @@ corpus:
     overlap: 64
 
 agent:
-  mode: pipeline
+  mode: graph
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   effort: low
   # Retrieval below this similarity is discarded before the model sees it.
   retrieval_drop_floor: 0.3
-  # The best surviving hit being weaker than this forces escalation.
+  # Level 1: the best surviving hit being weaker than this fails the tier.
   escalate_below: 0.45
-  # The cheap scorer's own groundedness confidence, below which we escalate.
+  # Both levels: the grader's groundedness confidence, below which the tier fails.
   confidence_threshold: 0.6
-  # No tools key: retrieval is a function call and the ticket executor is
-  # invoked from Python, so no tool definition is ever sent to a model.
+  # Level 2. Turn it off and a turn Level 1 cannot answer goes straight to a human.
+  corrective:
+    enabled: true
+    query_rewrites: 3
+  # No tools key: retrieval is a node and the ticket executor is invoked from
+  # Python, so no tool definition is ever sent to a model.
 
 limits:
   rate_limit_per_minute: 60
@@ -53,47 +57,51 @@ const questions = [
   },
 ];
 
-// Both trails below are the observed output of the week 1 exit gates (G1.1, G1.2),
-// not illustrations. Details are shown only where the gate recorded a number.
+// Every trail below is the observed output of a live run on 2026-09-11 (Haiku 4.5, Voyage,
+// Postgres, the mock ticket service), not an illustration.
 const answeredRun = {
   question: 'My Cloud Run container fails to start — what does the PORT error mean?',
   outcome: 'answered' as const,
   steps: [
-    { stage: 'Searched the documentation', detail: 'passages above the 0.30 drop floor' },
-    { stage: 'Scored the evidence', detail: 'groundedness at or above the 0.60 threshold' },
-    { stage: 'Answered from sources', detail: '3 citations' },
+    { stage: 'Searched the documentation', detail: '5 passages · best match 0.62' },
+    { stage: 'Graded the evidence', detail: 'confidence 0.95' },
+    { stage: 'Answered from sources', detail: '2 citations' },
   ],
-  footer: '3 step events + done · 3 citations · 7.0s',
+  footer: '3 step events + done · 2 citations · 9.6s',
 };
 
 const escalatedRun = {
   question: 'Can you raise my Cloud Run instance quota for europe-west1?',
   outcome: 'escalated' as const,
   steps: [
-    { stage: 'Searched the documentation', detail: 'best match 0.50 — above the escalate floor' },
-    { stage: 'Scored the evidence', detail: 'groundedness 0.05 — below the 0.60 threshold' },
-    { stage: 'Drafted a ticket for review', detail: 'quota_or_billing · priority high' },
-    { stage: 'Filed a ticket', detail: 'PLATFORM-1045 — after you confirm' },
+    { stage: 'Searched the documentation', detail: '5 passages · best match 0.50' },
+    { stage: 'Graded the evidence', detail: 'confidence 0.05' },
+    { stage: 'Rewrote the question', detail: '3 rewrites · "Cloud Run quota europe-west1"' },
+    { stage: 'Searched again: keyword + semantic', detail: '5 passages' },
+    { stage: 'Graded the new evidence', detail: 'confidence 0.05' },
+    { stage: 'Drafted a ticket for review', detail: 'quota_or_billing' },
+    { stage: 'Filed a ticket', detail: 'PLATFORM-1042 — after you confirm' },
   ],
-  footer: '3 steps + a proposal · the fourth lands when you say yes',
+  footer: '6 steps + a proposal · the seventh lands when you say yes',
 };
 
-// The turn that used to be a bug. Retrieval finds nothing for a greeting, and empty
-// retrieval routes here — so before the triage existed, this filed a ticket.
+// The turn that used to be a bug. A greeting retrieves nothing, and before triage existed
+// it filed a ticket. Now the grader recognises it, and it leaves at Level 1.
 const conversedRun = {
   question: 'hi',
   outcome: 'conversed' as const,
   steps: [
     { stage: 'Searched the documentation', detail: 'no matching passages' },
+    { stage: 'Graded the evidence', detail: 'kind: conversation' },
     { stage: 'Not a support request', detail: 'no ticket' },
   ],
-  footer: '2 step events + done · zero tickets · no scoring call',
+  footer: '3 step events + done · zero tickets · one model call · 3.6s',
 };
 ---
 
 <BaseLayout
   title="Demo"
-  description="Walk through the Cloud Platform Support agent — an explicit pipeline that answers from Google Cloud documentation, converses when a turn is not a support request, or offers a ticket you confirm, with every stage on the record."
+  description="Walk through the Cloud Platform Support agent — a three-tier support graph that answers from Google Cloud documentation, searches again when the first attempt falls short, converses when a turn is not a support request, or offers a ticket you confirm, with every step on the record."
 >
 
   <div class="page container">
@@ -104,9 +112,10 @@ const conversedRun = {
         <strong>DeployBot</strong> answers Cloud Run, GKE and IAM questions from public
         Google Cloud documentation, with citations. When a question depends on your own
         project — quota, billing, IAM policy, cluster state — it can't be answered from
-        those documents, so the agent drafts a ticket and offers to file it. That decision
-        is a branch in Python, not a choice the model makes, and every stage of it is on
-        the record. Say <code>hi</code> and nothing is filed at all.
+        those documents. The agent searches again a different way first, then drafts a
+        ticket and offers to file it. Every one of those routes is a Python function, not a
+        choice the model makes, and every step is on the record. Say <code>hi</code> and
+        nothing is filed at all.
       </p>
     </div>
 
@@ -124,7 +133,7 @@ const conversedRun = {
           </div>
           <div class="meta-row">
             <span class="meta-key">Agent mode</span>
-            <code class="meta-val green">pipeline</code>
+            <code class="meta-val green">graph</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Model</span>
@@ -144,7 +153,7 @@ const conversedRun = {
           </div>
           <div class="meta-row">
             <span class="meta-key">Custom code</span>
-            <code class="meta-val dim">one config, one pipeline module</code>
+            <code class="meta-val dim">one config, one graph module</code>
           </div>
         </div>
 
@@ -194,7 +203,7 @@ const conversedRun = {
     <section class="section">
       <h2>Three messages, three outcomes</h2>
       <p class="section-sub">
-        Each stage emits a <code>step</code> event as it finishes, and the UI renders
+        Each node emits a <code>step</code> event as it finishes, and the UI renders
         them above the reply. The trails below are recorded output, not mock-ups.
       </p>
 
@@ -217,11 +226,11 @@ const conversedRun = {
 
       <div class="trail-note">
         <strong>The third trail is the one to ask about.</strong> <code>hi</code> retrieves
-        nothing, and empty retrieval routes to the same branch as a quota question — so for
-        a while, every greeting filed a ticket. The fix is not a threshold: it is a
-        <code>route</code> field on the draft call that already runs, separating <em>not a
-        support request</em> from <em>a support request we cannot answer</em>. A queue is
-        only worth reading if what reaches it needed a human.
+        nothing, and for a while every greeting filed a ticket. The fix is not a threshold:
+        it is a <code>kind</code> field on the grade call that already runs, separating
+        <em>not a support request</em> from <em>a support request</em> before any second
+        search is spent on it. A queue is only worth reading if what reaches it needed a
+        human.
       </div>
 
       <div class="trail-note">
@@ -229,7 +238,9 @@ const conversedRun = {
         the 0.45 escalate floor, so the first signal passed. The second signal caught it:
         groundedness 0.05 says the retrieved passage does not contain the answer. That is
         the "found the right document, which doesn't answer the question" case, and it is
-        why the guardrail reads two signals rather than one.
+        why the guardrail reads two signals rather than one. Level 2 then rewrote the
+        question and searched again, keyword and semantic, and graded the new passages 0.05
+        too. Only then did it offer a ticket.
       </div>
     </section>
 
@@ -245,10 +256,11 @@ const conversedRun = {
             </svg>
           </div>
           <div>
-            <h4>The decision is a Python branch</h4>
+            <h4>Every route is a Python function</h4>
             <p>
-              Retrieval similarity and a groundedness score are compared against two
-              configured thresholds. The model is never asked whether it should escalate.
+              Retrieval similarity and a groundedness score are compared against configured
+              thresholds at each retrieval tier. The model is never asked whether it should
+              escalate.
             </p>
           </div>
         </div>
@@ -261,9 +273,9 @@ const conversedRun = {
             </svg>
           </div>
           <div>
-            <h4>Every stage is on the record</h4>
+            <h4>Every step is on the record</h4>
             <p>
-              Each stage commits to <code>Run.steps</code> before the next one starts, so
+              Each node commits to <code>Run.steps</code> before the next one starts, so
               the trail survives a reload — and a process death mid-run.
             </p>
           </div>
@@ -313,6 +325,14 @@ const conversedRun = {
             step trail in the UI. All four exit gates verified.
           </span>
         </div>
+        <div class="status-row done">
+          <span class="status-mark">✓</span>
+          <span class="status-week">D10</span>
+          <span class="status-text">
+            The pipeline becomes a three-tier LangGraph graph: corrective retrieval with query
+            rewriting and hybrid search, and a ticket offer the graph pauses for.
+          </span>
+        </div>
         <div class="status-row next">
           <span class="status-mark">○</span>
           <span class="status-week">Week 2</span>
@@ -338,7 +358,7 @@ const conversedRun = {
         <div>
           <h2>Point it at your own documents</h2>
           <p>
-            The pipeline reads its thresholds, corpus and prompts from config. A different
+            The graph reads its thresholds, corpus and prompts from config. A different
             support domain is a new YAML file and a folder of documents.
           </p>
         </div>

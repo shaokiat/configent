@@ -1,13 +1,13 @@
 ---
 title: The Guardrail
-description: should_escalate() — two signals, three thresholds, one if statement. The decision the model is structurally unable to make.
+description: decide_level1 and decide_level2. Two signals, three thresholds, two plain functions. The routes the model is structurally unable to choose.
 order: 11
-group: The Answer Pipeline
+group: The Support Graph
 ---
 
 import Mermaid from '@/components/Mermaid.astro';
 
-The guardrail is the only branch in the pipeline, and it is plain Python. `should_escalate()` reads the two signals produced by [retrieval](/configent/docs/retrieval) and [scoring](/configent/docs/scoring), compares them to configured thresholds, and returns the decision **and the reason for it**.
+The guardrail is every route in the graph, and it is plain Python. `decide_level1` and `decide_level2` read the signals from [retrieval](/configent/docs/retrieval) and [grading](/configent/docs/grading), compare them to configured thresholds, and return the route **and the reason for it**. The grade node writes both to state; the edge only reads the route.
 
 No model is consulted, and none can override it. This is the component the whole engine exists to make possible.
 
@@ -17,40 +17,49 @@ No model is consulted, and none can override it. This is the component the whole
 
 <Mermaid diagram={`
 flowchart TD
-    A[should_escalate] --> B{score is None?}
-    B -->|yes — retrieval was empty| E[Escalate]
-    B -->|no| C{top similarity &lt; escalate_below?}
-    C -->|yes — signal 1| E
-    C -->|no| D{groundedness &lt; confidence_threshold?}
-    D -->|yes — signal 2| E
-    D -->|no| F[Answer]
+    A[decide_level1] --> B{hits, similarity at least escalate_below, and groundedness at least confidence_threshold?}
+    B -->|yes| ANS[answer]
+    B -->|no| C{kind is conversation?}
+    C -->|yes| CON[converse]
+    C -->|no| D{corrective.enabled?}
+    D -->|yes| L2[Level 2: rewrite, hybrid_retrieve, regrade]
+    D -->|no| ESC[escalate]
+    L2 --> E[decide_level2]
+    E --> F{hits, and groundedness at least confidence_threshold?}
+    F -->|yes| ANS
+    F -->|no| ESC
 `} />
 
-Three checks, evaluated in order. Two things come back: the decision, and a human-readable sentence saying which check produced it — recorded on the step and rendered in the UI, so every escalation carries its own justification.
+Each function returns a route and a human-readable sentence saying which check produced it. The sentence is recorded on the next step and rendered in the UI, so every answer and every escalation carries its own justification.
 
 ---
 
 ## A worked example
 
-Three questions from the same client, one down each path.
+Four messages from a real run, one down each path.
 
 **"My Cloud Run container fails to start — what does the PORT error mean?"**
 
-- Similarity `0.71`, above `escalate_below: 0.45`. Groundedness `0.88`, above `confidence_threshold: 0.6`.
-- Both checks pass, so the turn [answers](/configent/docs/answering). The reason recorded is *"similarity 0.71 and groundedness 0.88 both above threshold"* — a successful answer is as justified in the trail as a refusal.
+- Similarity `0.62`, above `escalate_below: 0.45`. Groundedness `0.95`, above `confidence_threshold: 0.6`.
+- `decide_level1` returns `answer` with *"similarity 0.62 and groundedness 0.95 both above threshold"*. A successful answer is as justified in the trail as a refusal.
 
-**"Can you raise my Cloud Run instance quota for europe-west1?"** — a real trace:
+**"hi"**
 
-- Similarity `0.50`. Above the floor, so signal 1 **passes**: the corpus does have a quotas-and-limits page, and it matched.
-- Groundedness `0.05`. Signal 2 fails, and that forces the branch — the corpus documents Cloud Run quota in general, and says nothing about *this user's* quota.
-- Recorded reason: *"groundedness 0.05 < confidence_threshold 0.6"*.
+- No passages, and the grader returned `kind: conversation`.
+- `decide_level1` returns `converse` with *"not a support request — answered conversationally, no ticket"*.
 
-**A question about something the corpus has never covered**
+**"Can you raise my Cloud Run instance quota for europe-west1?"**
 
-- Nothing survives the drop floor, so scoring was skipped and `score is None`.
-- The first check fires: *"retrieval returned no passages above the drop floor"*. No model was called at all on this path.
+- Similarity `0.50` passes signal 1: the deployment docs matched. Groundedness `0.05` fails signal 2.
+- `decide_level1` returns `rewrite` with *"groundedness 0.05 < confidence_threshold 0.6"*.
+- After corrective retrieval, `decide_level2` returns `escalate` with *"groundedness 0.05 < confidence_threshold 0.6 after corrective retrieval"*.
 
-The middle case is the one that justifies the whole design. Similarity alone would have answered it.
+**"How do I configure a Cloud SQL read replica to fail over automatically?"**
+
+- One passage survives the floor, at `0.33`, from a Cloud Run autoscaling page.
+- `decide_level1` returns `rewrite` with *"top similarity 0.33 < escalate_below 0.45"*. Level 2 finds nothing better, and the turn escalates as a documentation gap.
+
+The quota case is the one that justifies two signals. Similarity alone would have answered it.
 
 ---
 
@@ -58,26 +67,38 @@ The middle case is the one that justifies the whole design. Similarity alone wou
 
 ### Why two signals, not one
 
-Each signal alone fails in a way the other one covers.
+Each signal alone fails in a way the other covers.
 
-| | Similarity only | Groundedness only | **Both (built)** |
+| | Similarity only | Groundedness only | **Both (Level 1)** |
 |---|---|---|---|
 | **Nothing in the corpus is close** | Caught | Caught | Caught |
-| **Right document, wrong content** | Missed — answers from a near-miss | Caught | Caught |
-| **Deterministic?** | Yes | No — a model call | Half, and the half that can't fail open |
+| **Right document, wrong content** | Missed, answers from a near-miss | Caught | Caught |
+| **Deterministic?** | Yes | No, a model call | Half, and the half that can't fail open |
 | **Cost** | Free | One cheap call | One cheap call |
-| **Failure mode** | Confident answers to unanswerable questions | The guardrail rests entirely on a model judging a model | — |
+| **Failure mode** | Confident answers to unanswerable questions | The guardrail rests entirely on a model judging a model | None of those |
 
-Groundedness is the signal that earns its keep, but putting the *entire* guardrail behind a model call is what the deterministic signal exists to prevent.
+### Level 2 drops the cosine floor
+
+Level 2 answers on groundedness alone. The passages it exists to find are the ones dense retrieval ranked low.
+
+| | Keep `escalate_below` at Level 2 | **Groundedness only at Level 2 (built)** |
+|---|---|---|
+| **A keyword-only match** | Rejected: it carries no cosine similarity | Graded like any other passage |
+| **A follow-up with a vague embedding** | Rejected again, whatever the rewrite found | Answered if the passages support it |
+| **What stops a wrong answer** | Both signals | The grader, and citations on the answer |
+| **Deterministic half** | Kept | Given up, for this tier only |
+
+The trade is stated in the trail: a Level 2 answer's reason names groundedness only.
 
 ### The decision, and the record of it
 
-- **The reason string is a product feature, not a log line.** It is the answer to "why did it escalate?", generated by the comparison that made the decision, and it renders in the step trail the user sees.
-- **The escalate path never asks a model whether to escalate.** The `escalate` stage drafts ticket fields *after* this function has decided. See [Escalation & Ticket](/configent/docs/escalation-ticket).
-- **"Escalate" is not the same as "file a ticket".** This function decides answerable vs. not; the `escalate` stage then separates a real support request from a greeting, a thank-you or a bare follow-up — all of which retrieve nothing and arrive here. Without that split every non-question filed a ticket, which is a queue nobody reads rather than a guardrail nobody can argue with (D9).
-- **Empty retrieval is checked first.** The scoring call was skipped, so there is no number to compare.
-- **A malformed score escalates.** `score.get("confidence", 0.0)` — a judgement missing its number fails toward the human, which is the correct default for a support agent.
-- **There is no `branch` step in the trail.** The decision is recorded as the reason on the stage it produced, keeping the trail one entry per unit of work.
+- **The reason string is a product feature, not a log line.** It is the answer to "why did it escalate?", produced by the comparison that made the decision.
+- **The route is a string on state.** The grade node calls the decide function and writes `route`; the conditional edge is a one-line `state["route"]` lookup. LangGraph never evaluates a condition.
+- **The answer check runs first.** Strong evidence answers even when the grader called the message conversation.
+- **`converse` has to be asked for.** A missing or malformed `kind` is a question, so a broken grade can never become small talk.
+- **No model is asked whether to escalate.** The `escalate` node drafts ticket fields *after* the route is chosen. See [Escalation & Ticket](/configent/docs/escalation-ticket).
+- **"Escalate" is not "file a ticket".** It is an offer the user confirms. Nothing reaches the queue unrequested.
+- **There is no decision step in the trail.** The reason is recorded on the step the route produced, which keeps the trail one entry per unit of work.
 
 ---
 
@@ -88,13 +109,12 @@ Groundedness is the signal that earns its keep, but putting the *entire* guardra
 | Key | Default | Job |
 |---|---|---|
 | `retrieval_drop_floor` | `0.3` | **Discards** weak chunks before the model sees them |
-| `escalate_below` | `0.45` | **Escalates** when the best surviving chunk is still weak |
-| `confidence_threshold` | `0.6` | **Escalates** when the scorer says the passages do not support an answer |
+| `escalate_below` | `0.45` | **Fails Level 1** when the best surviving chunk is still weak |
+| `confidence_threshold` | `0.6` | **Fails either level** when the grader says the passages do not support an answer |
+| `corrective.enabled` | `true` | Whether a turn that fails Level 1 gets Level 2 or goes straight to a human |
 
-The first two operate on the same number at different points, so their ordering matters. Every surviving hit is at or above the drop floor by construction, so if `escalate_below <= retrieval_drop_floor`, signal 1 can never fire — the guardrail would look configured and be half dead. The config validator rejects that relationship at startup.
-
-Setting both escalation thresholds to `0` is legal, and disables escalation for everything except empty retrieval. That is a deliberate config choice, so the validator allows it. Keys in full: [Config Reference](/configent/docs/config-reference#agent).
+The first two operate on the same number at different points, so their ordering matters. Every surviving hit is at or above the drop floor by construction, so if `escalate_below <= retrieval_drop_floor`, signal 1 can never fire. The config validator rejects that relationship at startup for graph clients. Keys in full: [Config Reference](/configent/docs/config-reference#agent).
 
 ---
 
-**Next:** [Answering](/configent/docs/answering) for the branch that answers, or [Escalation & Ticket](/configent/docs/escalation-ticket) for the branch that does not.
+**Next:** [Corrective Retrieval](/configent/docs/corrective-retrieval), where a turn goes when Level 1 falls short.

@@ -20,13 +20,21 @@ _Removed 2026-09-08_: the `configent-support` dogfood tenant, which answered que
 The set of source documents belonging to one Client, ingested into pgvector scoped by `client_id`.
 
 **Outcome**:
-How a turn ends on the pipeline engine — one of three, decided in Python, never by the
-answering model: **answer** (cited, from the Corpus), **converse** (a greeting, a
-thank-you, a meta-question, or a follow-up handled from context — no ticket), or
-**escalate** (a real support question the Corpus cannot answer; a ticket is drafted,
-proposed, and filed on the user's confirmation). _Added 2026-09-08, D9: "not answerable"
-and "escalate" were one arm of a binary branch, so every non-question filed a ticket._
+How a turn ends on the graph engine — one of three, decided in Python, never by the
+answering model: **answer** (cited, from the Corpus, at Level 1 or Level 2), **converse**
+(a greeting, a thank-you or a meta-question — no ticket), or **escalate** (a real support
+question neither level can answer; a ticket is drafted, proposed, and filed on the user's
+confirmation). _Added 2026-09-08, D9: "not answerable" and "escalate" were one arm of a
+binary branch, so every non-question filed a ticket. Amended 2026-09-11, D10: a follow-up
+question is a question, answered by Level 2 rather than conversed with._
 _Avoid_: "fallback", and "escalate" as a synonym for any non-answer.
+
+**Level**:
+One tier of the support graph: **Level 1** is RAG (dense retrieval and a grade), **Level 2**
+is corrective RAG (a query rewrite, hybrid search, a regrade), **Level 3** is a human (a
+ticket the user confirms). A turn moves down only when the level above falls short.
+_Added 2026-09-11, D10._
+_Avoid_: "stage" for a graph node — stages belonged to the retired pipeline.
 
 **Sentinel fact**:
 A sentence planted verbatim in a Corpus document so retrieval, citation, and eval tests have deterministic ground truth (AF-1..5, MI-1..5, GCP-1..5). `evals/sentinels.yaml` is the single source of truth; scenario assertions built on them live in `docs/test-anchors.md`.

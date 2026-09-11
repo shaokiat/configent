@@ -27,7 +27,7 @@ retrieved chunks
 | Engine | Where the blocks go |
 |---|---|
 | `loop` | Inside `tool_result.content`, returned by [`search_docs`](/configent/docs/tools-system#search_docs-shared) |
-| `pipeline` | Directly in the user message, built by `_search_result_blocks()` — see [Answering](/configent/docs/answering) |
+| `graph` | Directly in the user message, built by `answer_request_kwargs()` — see [Answering](/configent/docs/answering) |
 
 Either way the blocks are passed verbatim, never serialized to JSON. The distinction matters: the API only enables citation tracking on the `search_result` content type, not on the same data JSON-stringified into a text block.
 
@@ -81,10 +81,10 @@ The database stores both: the raw response for debugging replay, and the segment
 
 ## Empty retrieval
 
-The two engines handle it differently, and the difference is the point of the pipeline.
+The two engines handle it differently, and the difference is the point of the graph.
 
 - **`loop`:** `search_docs` returns a plain `text` block (`"No documents matched the query."`) instead of `search_result` blocks. The system prompt instructs the model to say it doesn't know rather than hallucinate. No citation markers are emitted.
-- **`pipeline`:** the turn never reaches the answering call. Zero hits short-circuits straight to escalation, so there is no uncited reply to guard against.
+- **`graph`:** the answering call never runs with zero passages. Both route functions require at least one before they choose `answer`, so an empty retrieval goes to Level 2, a greeting reply, or a ticket offer. There is no uncited answer to guard against.
 
 ---
 

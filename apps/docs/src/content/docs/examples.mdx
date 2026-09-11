@@ -36,11 +36,14 @@ follow-up — is answered conversationally and files nothing. This is the assist
 file) in `corpora/gcp-platform-support/` — 10 files across Cloud Run, GKE, and IAM.
 
 **What's notable:**
-- The only client running `mode: pipeline`. The escalate/answer decision is a branch in Python,
-  not a tool the model may call. See [The Answer Pipeline](/configent/docs/pipeline).
-- Three thresholds instead of one: `retrieval_drop_floor` discards weak chunks,
-  `escalate_below` and `confidence_threshold` route to a human. See
+- The only client running `mode: graph`. Every route, from answer to a second search to a
+  human, is a Python function, not a tool the model may call. See
+  [The Support Graph](/configent/docs/support-graph).
+- Three thresholds instead of one: `retrieval_drop_floor` discards weak chunks, and
+  `escalate_below` and `confidence_threshold` decide when a tier falls short. See
   [The Guardrail](/configent/docs/escalation-guardrail).
+- A `corrective` block turns on Level 2: a query rewrite and hybrid search before any ticket
+  is offered. See [Corrective Retrieval](/configent/docs/corrective-retrieval).
 - The corpus contains nothing about any user's own project, which is what makes the escalation
   branch load-bearing rather than decorative. "What does the platform do?" is answerable;
   "what is *my* project doing?" structurally is not.
@@ -63,7 +66,7 @@ corpus:
     overlap: 64
 
 agent:
-  mode: pipeline
+  mode: graph
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -71,6 +74,9 @@ agent:
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
   confidence_threshold: 0.6
+  corrective:
+    enabled: true
+    query_rewrites: 3
   # No `tools:` key — see the note below.
 
 evals:
@@ -82,10 +88,10 @@ limits:
   daily_budget_usd: 2.00
 ```
 
-> **No `agent.tools` key, deliberately.** In pipeline mode retrieval is a function call and the
+> **No `agent.tools` key, deliberately.** In graph mode retrieval is a node and the
 > ticket executor is invoked from Python, so no tool definition is ever sent to a model for this
 > client. `agent.tools` is read only by `loop.py`, so listing tools here would be dead config that
-> reads like a capability. See [Retrieval → Retrieval is a function call, not a tool](/configent/docs/retrieval#retrieval-is-a-function-call-not-a-tool).
+> reads like a capability. See [Retrieval → Retrieval is a node, not a tool](/configent/docs/retrieval#retrieval-is-a-node-not-a-tool).
 
 ---
 

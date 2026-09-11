@@ -69,7 +69,7 @@ search_docs.execute()
   └─ wrap top-k hits as search_result blocks
 ```
 
-> **`search()` is shared with the pipeline engine.** [Retrieval](/configent/docs/retrieval) owns it: embedding asymmetry, the k×2 over-fetch, the floor, and the `Hit` shape.
+> **`search()` is shared with the graph engine.** [Retrieval](/configent/docs/retrieval) owns it: embedding asymmetry, the k×2 over-fetch, the floor, and the `Hit` shape.
 
 ### `get_document` (shared)
 
@@ -92,7 +92,7 @@ POST to a separate service — see [Mock Ticket Service](/configent/docs/mock-ti
 for the service, its idempotency contract, and the chaos switches.
 
 ```python
-# Input (drafted by the escalate stage, not by the answering model, and
+# Input (drafted by the escalate node, not by the answering model, and
 #        filed only after the user confirms the draft)
 {"subject": "Cloud Run instance quota increase needed in europe-west1, blocking a deploy",
  "category": "quota_or_billing", "product_area": "cloud_run", "priority": "high"}
@@ -104,14 +104,14 @@ for the service, its idempotency contract, and the chaos switches.
 
 Two things make it unlike every other tool on this page:
 
-**Its `DEFINITION` is never sent to a model.** This client runs the pipeline engine, which
+**Its `DEFINITION` is never sent to a model.** This client runs the graph engine, which
 calls the executor directly from Python — see [Escalation & Ticket](/configent/docs/escalation-ticket). The definition
 stays in the file because the tool is registered like any other and the schema documents
 the contract.
 
-**It is called from the confirm endpoint, not from the turn.** The escalate stage drafts
-and parks the draft on the run; `POST /c/{id}/runs/{run_id}/ticket` invokes this executor
-when the user accepts. Still exactly one call site, so still exactly one place to make
+**It is called from the confirm endpoint, not from the turn.** The escalate node drafts,
+the graph pauses on `interrupt()`, and `POST /c/{id}/runs/{run_id}/ticket` resumes it to
+invoke this executor when the user accepts. Still exactly one call site, so still exactly one place to make
 idempotent.
 
 **It takes `run_id` and `stage_seq`,** the two halves of the `Idempotency-Key`. Both are

@@ -1,69 +1,66 @@
 ---
 title: Escalation & Ticket
-description: The other branch — triage, then a drafted ticket the user confirms before Python files it. Idempotency comes from the run, not from the content.
-order: 13
-group: The Answer Pipeline
+description: Level 3. A drafted ticket, a graph paused on interrupt(), and a POST from Python once the user confirms. Idempotency comes from the run, not the content.
+order: 14
+group: The Support Graph
 ---
 
-When the [guardrail](/configent/docs/escalation-guardrail) escalates, `escalate` runs a structured-output call that does two things: it triages the turn, and — if the turn is a support request — drafts the ticket fields. Filing is a separate step that happens **after the user confirms**, and `ticket` POSTs the draft then.
+When neither level can ground an answer, `escalate` drafts a ticket with a structured-output call and offers it. The graph then pauses in `ticket` on `interrupt()`, and the turn ends. Filing happens **only after the user confirms**, when `confirm_ticket()` resumes the graph and Python POSTs the draft.
 
-The answerable/unanswerable decision was made before any of this started, and none of it can revisit that. What `escalate` adds is a narrower question the guardrail cannot answer on its own: *is this a support request at all?*
+The route to this tier was chosen before any of it started. Nothing here can revisit whether the question was answerable.
 
 ---
 
 ## The flow
 
 ```
-guardrail → escalate + why
+decide_level2 (or decide_level1, with corrective off) → "escalate" + why
   │
-  └─ stage_escalate()          structured output, shared _structured_call()
-       └─ ticket_draft.md      → route: "converse" | "ticket"
+  └─ escalate                          structured output · prompts/<client_id>/ticket_draft.md
+       ├─ _normalise_draft()           subject fallback · category, product_area, priority defaults
+       └─ stream `ticket_proposal`, then the offer as `text`
+            ▼
+     ticket                            interrupt()   ← the graph pauses; the turn ends
             │
-            ├─ "converse"      → reply, and the turn ends. Nothing is filed.
-            │
-            └─ "ticket"        → subject, category, product_area, priority, body
-                 └─ parked on Run.state, streamed as `ticket_proposal`
-                      │
-                      └─ [the user confirms]
-                           └─ POST /api/c/{id}/runs/{run_id}/ticket
-                                └─ stage_ticket()   Idempotency-Key: {run_id}:{stage_seq}
-                                     └─ the service assigns the ticket id
+            └─ [the user confirms]     POST /api/c/{id}/runs/{run_id}/ticket
+                 └─ confirm_ticket()   right client · not already filed · an offer is pending
+                      └─ Command(resume=True)
+                           └─ stage_ticket()      Idempotency-Key: {run_id}:{stage_seq}
+                                ├─ filed  → END · the reply names the ticket
+                                └─ error  → back to `ticket` · pauses again for a retry
 ```
 
-The draft call is given the question and the guardrail's reason string — never a choice about whether the question was answerable. The tool is registered like any other, but its `DEFINITION` is never sent to a model: Python invokes the executor directly.
-
-### Why the route lives here and not in front of retrieval
-
-Retrieval over public documentation returns nothing for `hey`, `thanks` or a bare follow-up, and empty retrieval short-circuits straight to this branch — so before this route existed, every non-question filed a ticket. The conventional fix is an intent classifier ahead of retrieval; [that trade is argued on the pipeline page](/configent/docs/pipeline#why-the-first-stage-is-retrieval-not-an-intent-router), and the short version is that it moves the escalate decision to an earlier model with less evidence. Triage instead rides inside a call that was already being made: two schema fields, no new stage, and nothing added to the latency of a question that can be answered.
-
-`converse` is the one path that produces user-facing text with **no passages in front of the model**, which makes it a hole in the grounding guarantee unless the prompt closes it. `ticket_draft.md` forbids stating any platform fact on that route — no default, limit, error string or role name — and says that if a reply would need one, the turn is not conversational. An unrecognised or missing `route` normalises to `ticket`: the turn was already judged unanswerable, so the safe reading of a malformed reply is that a human should see it.
+The draft call is given the message, the recent conversation and the guardrail's reason string. It is never asked whether to escalate. The ticket tool is registered like any other, but its definition is never sent to a model: Python calls the executor.
 
 ---
 
 ## A worked example
 
-**"Can you raise my Cloud Run instance quota for europe-west1?"** — continuing from the [guardrail](/configent/docs/escalation-guardrail#a-worked-example), which escalated on groundedness `0.05`.
+**"Can you raise my Cloud Run instance quota for europe-west1? It's blocking a deploy."** A real run, continuing from [the guardrail](/configent/docs/escalation-guardrail#a-worked-example).
 
-- `escalate` routes to `ticket` and drafts the fields: `category: quota_or_billing`, `product_area: cloud_run`, `priority: high`, plus a subject and body. The step records the guardrail's reason alongside them.
-- The draft is parked on `Run.state` and streamed as a `ticket_proposal` event. **Nothing has been filed.** The reply says what the ticket would be and offers to open it.
-- The user clicks through. `POST /api/c/gcp-platform-support/runs/{run_id}/ticket` calls `stage_ticket` with `Idempotency-Key: {run_id}:4`; the service returns `PLATFORM-1043`, queue `platform-serverless`, ETA 8 hours, and the confirmation is persisted as its own assistant turn.
+- `escalate` drafts `category: quota_or_billing`, `product_area: cloud_run`, a subject and a body. The step records the Level 2 reason alongside them.
+- The draft is streamed as a `ticket_proposal` event, and the graph pauses. **Nothing has been filed.** The reply says what the ticket would be and offers to open it.
+- The user clicks through. `confirm_ticket()` resumes the graph, and `stage_ticket` POSTs with `Idempotency-Key: {run_id}:7`: six steps came before it.
+- The service returns `PLATFORM-1042`, queue `platform-serverless`, 8-hour ETA, in 18 ms. The confirmation is saved as its own assistant turn.
+- A second click returns `already_filed: true` and the same id. The mock service holds one ticket.
 
-What the user ends up seeing:
+What the user sees:
 
 ```
-Searched the documentation    best match 0.50 — above the escalate floor
-Scored the evidence           groundedness 0.05 — below the 0.60 threshold
-Drafted a ticket for review   quota_or_billing · priority high
+Searched the documentation         5 passages · best match 0.50
+Graded the evidence                confidence 0.05
+Rewrote the question               3 rewrites · "Cloud Run quota europe-west1"
+Searched again: keyword + semantic 5 passages
+Graded the new evidence            confidence 0.05
+Drafted a ticket for review        quota_or_billing
 
   ┌ Draft ticket · high · quota or billing ───────────────┐
   │ Cloud Run instance quota increase in europe-west1     │
   │ [ Open this ticket ]  [ Not now ]                     │
   └───────────────────────────────────────────────────────┘
 
-Filed a ticket                PLATFORM-1043      ← after they click
+Filed a ticket                     PLATFORM-1042      ← after they click
 ```
-
-A greeting stops two lines in: `Not a support request · no ticket`, and the run ends there.
 
 ---
 
@@ -71,38 +68,51 @@ A greeting stops two lines in: `Not a support request · no ticket`, and the run
 
 ### Python files the ticket, the model does not
 
-The ticket tool exists in the registry, and the answering model never sees it.
+The ticket tool exists in the registry, and no model ever sees it.
 
 | | **Direct executor call (built)** | Tool-use round trip |
 |---|---|---|
 | **Call sites to make idempotent** | Exactly one | As many as the model has turns |
-| **Can the model decline to file?** | No — it is not asked | Yes |
+| **Can the model decline to file?** | No, it is not asked | Yes |
 | **Extra round trips** | None | One at minimum, more if it retries |
 | **What the trail records** | One `ticket` step, always | Whatever the model happened to do |
 
+### The pause is `interrupt()`, not a parked draft
+
+The retired pipeline finished the turn, stored the draft on `Run.state`, and had the confirm endpoint read it back. The graph pauses instead.
+
+| | Draft on `Run.state` (retired) | **`interrupt()` in the `ticket` node (built)** |
+|---|---|---|
+| **Where the draft lives** | A JSON column the endpoint reads | The graph's checkpoint |
+| **"Is an offer pending?"** | `ticket_draft` present, `ticket_id` absent | The checkpoint has a pending interrupt |
+| **What confirm does** | Rebuilds the filing code path by hand | `Command(resume=True)`: the graph continues |
+| **Retry after a failed filing** | The draft is still there | The node loops back and pauses again |
+
+- **`ticket` is its own node** because `interrupt()` re-runs its node from the top on resume. Anything placed before it in the same node would run twice.
+- **`confirm_ticket()` still checks the run first**: that it exists, belongs to this client, and has not already filed. A resume with nothing pending would silently do nothing, so the endpoint refuses it with a 404 instead.
+
 ### The user files the ticket, not the turn
 
-A user mid-deploy did not ask for a ticket. One that appears unrequested reads as the assistant giving up, and — with a corpus that cannot answer anything about their project — it is also what filled the queue with greetings and thank-yous. So the turn drafts and offers; a confirmation files.
+A user mid-deploy did not ask for a ticket. One that appears unrequested reads as the assistant giving up, and a corpus of public docs cannot answer anything about their project. So the turn drafts and offers; a confirmation files.
 
-- **The queue is the product.** A platform team only works a queue it trusts. Precision there is a property of what *doesn't* reach it, which no individual component can enforce.
-- **The request body is empty.** The draft stays on the run. A client can accept an offer; it cannot author a ticket by posting a subject and category of its own.
-- **A double-click is now the realistic duplicate.** The run's stored `ticket_id` short-circuits the second confirmation and returns the first ticket — D4's second guard, which used to be belt-and-braces against a crash-and-resume path, is now load-bearing against a person.
-- **What is lost:** an unanswered offer does not survive a page reload — the filed confirmation is its own assistant turn, but a pending one is only a button. And a blocked user pays one extra turn to escalate, which is the trade this makes deliberately.
+- **The queue is the product.** A platform team only works a queue it trusts. Precision there is a property of what *doesn't* reach it.
+- **The request body is empty.** The draft stays in the checkpoint. A client can accept an offer. It cannot author a ticket by posting a subject of its own.
+- **A double-click is the realistic duplicate.** The filed `ticket_id` in state short-circuits a second confirmation.
+- **What is lost:** a pending offer does not survive a page reload in the UI. The filed confirmation is its own assistant turn; an unanswered one is only a button.
 
 ### Idempotency comes from the run, not the content
 
-- **The key is `{run_id}:{stage_seq}`.** Stable across a crash and retry of the *same* run, distinct across every other one.
+- **The key is `{run_id}:{stage_seq}`.** Stable within a run, distinct across every other one.
+- **A retry keeps its seq.** When filing fails and the node runs again straight after itself, `RunRecorder.next_seq()` reuses the seq and replaces the failed step. A request that did land the first time replays instead of duplicating.
 - **Never derived from content.** Two people phrasing a request identically must not collide into one ticket.
-- **A duplicate POST after a crash returns the original.** Same run, same stage, same key — the service hands back the ticket it already made. That path is the reason the key is not content-derived. See [Runs & Durability](/configent/docs/runs-and-durability).
-- **The server assigns the ticket id.** The schema is owned on the other side of a network hop that can fail. The service is a mock we wrote ([Mock Ticket Service](/configent/docs/mock-ticket-service)); the *integration shape* is not mocked.
-- **`run_id` and `stage_seq` are keyword-only with defaults.** The loop engine has no run, so it can still call the tool. Without a `run_id` no key is sent, which is correct — with no run there is nothing to deduplicate against.
+- **The server assigns the ticket id.** The service is a mock we wrote ([Mock Ticket Service](/configent/docs/mock-ticket-service)); the integration shape is not mocked.
 
 ### Failing the ticket does not fail the turn
 
-- **HTTP failures are returned, not raised.** A 5xx comes back `{"error": ..., "retryable": True}`; a 4xx is our bug and is marked non-retryable. The run finishes with a `ticket` step marked `failed` rather than dying.
-- **Retry is deliberately absent.** The executor makes one attempt and reports retryability. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool.
-- **The user is told the truth.** When filing fails, the reply says plainly that nothing was filed and to retry or go direct — not a fabricated ticket id.
-- **An escalation is not a refusal.** The reply explains that the question depends on the user's own project, which a public-documentation corpus cannot cover, and points at the ticket.
+- **HTTP failures are returned, not raised.** A 5xx comes back `{"error": ..., "retryable": True}`; a 4xx is our bug and is marked non-retryable.
+- **The step is marked `failed`, and the offer stays open.** The graph routes back to `ticket` and pauses, so the same button retries the same draft.
+- **Retry with backoff is deliberately absent.** It belongs next to a dead-letter decision, not inside a tool.
+- **The user is told the truth.** A failed filing says plainly that nothing was filed, never a fabricated id.
 
 ---
 
@@ -111,8 +121,9 @@ A user mid-deploy did not ask for a ticket. One that appears unrequested reads a
 | Key | Default | What it does |
 |---|---|---|
 | `TICKET_API_URL` | `http://localhost:9000` | Env var. Where the ticket service lives |
-| `agent.system_prompt_file` | — | `ticket_draft.md` is resolved beside it |
+| `agent.system_prompt_file` | none | `ticket_draft.md` is resolved beside it |
+| `agent.corrective.enabled` | `true` | Off routes a turn that fails Level 1 straight here |
 
 ---
 
-**Next:** [Runs & Durability](/configent/docs/runs-and-durability) — the trail all six stages write to, and what a crash leaves behind.
+**Next:** [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph), why this engine replaced a hand-written one, and what carried over.
