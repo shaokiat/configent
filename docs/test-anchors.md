@@ -120,6 +120,10 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
   event → `POST /runs/{run_id}/ticket` → `ticket`. Still exactly one ticket per run (D4), and
   a second confirmation returns the first ticket. `escalated: true` becomes
   `outcome: "ticket"`, and `ticket_id` is `null` on the `done` event of the proposing turn.
+- **Amended 2026-09-11 for D10:** the steps before the proposal are `retrieve`, `grade`,
+  `rewrite`, `hybrid_retrieve`, `regrade`, `escalate`, and `ticket` arrives after the
+  confirmation. The graph pauses on `interrupt()` between the two; confirming resumes it.
+  Verified live: `PLATFORM-1042`, idempotency key `{run_id}:7`, one ticket after two confirms.
 
 ## UC-12 — Crash and resume (support agent) · planned, W2
 
@@ -128,6 +132,9 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
   `done`; `POST /runs/{run_id}/resume` replays from the checkpoint, skips retrieve,
   score and ticket, and emits the final response. The mock service records **one**
   ticket for that `run_id`.
+- **Amended 2026-09-11 for D10:** still not built. LangGraph writes a checkpoint after every
+  node and `CRASH_AFTER` now names a graph node (`retrieve`, `grade`, …). Resume would call
+  `astream(None, thread)` behind the endpoint described above.
 
 ## UC-13 — Ticket service down (support agent) · planned, W3
 
@@ -152,6 +159,10 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
   the default cloud run cpu again`) must route to `answer`, never `converse`. `converse` is
   the only path that skips scoring, so a platform fact stated there is ungrounded by
   construction — the failure D2 exists to prevent, arriving through the new door.
+- **Amended 2026-09-11 for D10:** triage is the `kind` field on the grade call. `hey`,
+  `thanks` and `what can you do?` leave at Level 1 through a `converse` node, with one model
+  call. The bare follow-up is now a *question*: it goes to Level 2, is rewritten with the
+  conversation in view, and is answered (verified live, three citations). Still zero POSTs.
 
 ---
 

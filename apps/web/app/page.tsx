@@ -38,7 +38,7 @@ const BLURBS: Record<string, { description: string; tags: string[] }> = {
   "gcp-platform-support": {
     description:
       "Answers Cloud Run, GKE and IAM questions from public Google Cloud documentation, with citations. Questions that depend on your own project can't be answered from those documents, so it files a ticket instead.",
-    tags: ["Explicit pipeline", "Two-signal guardrail", "Escalation"],
+    tags: ["Three-tier escalation", "Two-signal guardrail", "Human in the loop"],
   },
   "acme-fab": {
     description:
@@ -75,9 +75,9 @@ function ClientCard({ client, primary }: { client: ClientSummary; primary?: bool
         >
           {client.name.charAt(0)}
         </div>
-        {client.mode === "pipeline" && (
+        {client.mode === "graph" && (
           <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
-            pipeline
+            support graph
           </span>
         )}
       </div>
@@ -130,8 +130,8 @@ function ClientCard({ client, primary }: { client: ClientSummary; primary?: bool
 
 export default async function Home() {
   const clients = await getClients();
-  const pipeline = clients.filter((c) => c.mode === "pipeline");
-  const loop = clients.filter((c) => c.mode !== "pipeline");
+  const supportGraph = clients.filter((c) => c.mode === "graph");
+  const loop = clients.filter((c) => c.mode !== "graph");
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-white flex flex-col">
@@ -178,10 +178,10 @@ export default async function Home() {
           </div>
         ) : (
           <>
-            {/* Primary: the pipeline client(s) this deployment is built around */}
-            {pipeline.length > 0 && (
+            {/* Primary: the support-graph client(s) this deployment is built around */}
+            {supportGraph.length > 0 && (
               <div className="w-full max-w-2xl mb-10 grid grid-cols-1 gap-5">
-                {pipeline.map((client) => (
+                {supportGraph.map((client) => (
                   <ClientCard key={client.id} client={client} primary />
                 ))}
               </div>

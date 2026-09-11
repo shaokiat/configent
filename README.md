@@ -161,15 +161,18 @@ native citations; prompt caching; per-client rate limiting and daily budget
 enforcement; per-span tracing with cost/latency; cross-tenant conversation
 ownership checks; streaming chat UI; CI (ruff + unit tests).
 
-**Support agent (week 1 of 4 complete):** a fixed-stage pipeline for the
-`gcp-platform-support` client — deterministic retrieval, a cheap-model groundedness
-check, and an escalation branch decided in Python; every stage committed to a `runs`
-row and streamed as an SSE `step` event; tickets filed over real HTTP with a
-positional idempotency key. Plan and exit gates:
-[`docs/support-agent-plan.md`](docs/support-agent-plan.md).
+**Support agent:** a three-tier LangGraph graph for the `gcp-platform-support` client
+(D10) — dense retrieval and a cheap-model groundedness grade; corrective retrieval (a query
+rewrite, then Postgres full-text plus pgvector search) when that falls short; and a drafted
+ticket the graph pauses on until the user confirms. Every route is a Python function, every
+node commits a `runs` step and streams an SSE `step` event, and tickets are filed over real
+HTTP with a positional idempotency key. It replaced a hand-written pipeline; the comparison
+and rationale are in
+[From Pipeline to Graph](https://shaokiat.github.io/configent/docs/from-pipeline-to-graph/).
+The original plan and exit gates: [`docs/support-agent-plan.md`](docs/support-agent-plan.md).
 
 **In progress / planned:**
-- Checkpoint/resume for interrupted runs (week 2)
+- Resume for interrupted runs (checkpoints are written after every node; no endpoint yet)
 - Eval harness — golden sets + LLM judge (10 golden rows for the support client,
   no runner or judge yet)
 - Admin console for cost/latency/conversation observability
@@ -179,7 +182,7 @@ positional idempotency key. Plan and exit gates:
 ## Docs
 
 - [Architecture](docs/architecture.md)
-- [Support agent plan](docs/support-agent-plan.md) · [pipeline diagram](docs/support-agent-pipeline.html)
+- [Support agent plan](docs/support-agent-plan.md) · [week-1 pipeline diagram](docs/support-agent-pipeline.html) (both superseded by D10)
 - [Decision log](docs/decisions.md) — including what this deliberately does not build
 - [Full docs site](https://shaokiat.github.io/configent/)
 - [Config reference](https://shaokiat.github.io/configent/docs/config-reference/)

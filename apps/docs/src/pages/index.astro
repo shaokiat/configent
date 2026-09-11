@@ -32,10 +32,10 @@ const decisions = [
   },
   {
     id: 'D5',
-    title: 'Pipeline and loop coexist',
+    title: 'Graph and loop coexist',
     body: `One line of config selects the engine. Clients that suit a free-form agent
-      loop keep it; the support agent gets fixed stages. Both run from the same entry
-      point, so neither is a fork of the other.`,
+      loop keep it; the support agent gets a three-tier graph. Both run from the same
+      entry point, so neither is a fork of the other.`,
   },
   {
     id: 'P2',
@@ -46,10 +46,10 @@ const decisions = [
   },
   {
     id: 'P3',
-    title: 'No agent framework',
-    body: `The loop and the pipeline are both written out. That is what makes the stage
-      boundaries real places to commit state, inject a crash, and count tokens — the
-      things this project is actually about.`,
+    title: 'A framework for mechanism, not decisions',
+    body: `The loop is written out. The support graph uses LangGraph for two things:
+      checkpoints, and the pause before a ticket is filed. Routing, model calls, citations
+      and cost stay plain code, and the move from a hand-written pipeline is documented.`,
   },
 ];
 ---
@@ -115,7 +115,7 @@ const decisions = [
     <div class="section-label">Architecture</div>
     <h2>From config to answer</h2>
     <p class="section-sub">
-      One YAML file and a folder of documents become a running pipeline. Here is what
+      One YAML file and a folder of documents become a running support graph. Here is what
       happens between the question and the reply.
     </p>
 
@@ -153,15 +153,19 @@ const decisions = [
     <span class="y-key">overlap</span>: <span class="y-num">64</span>
 
 <span class="y-key">agent</span>:
-  <span class="y-key">mode</span>: <span class="y-str">pipeline</span>
+  <span class="y-key">mode</span>: <span class="y-str">graph</span>
   <span class="y-key">model</span>: <span class="y-str">claude-haiku-4-5-20251001</span>
   <span class="y-key">system_prompt_file</span>: <span class="y-str">prompts/gcp-platform-support/answer.md</span>
   <span class="y-cmt"># Retrieval below this similarity is discarded before the model sees it.</span>
   <span class="y-key">retrieval_drop_floor</span>: <span class="y-num">0.3</span>
-  <span class="y-cmt"># The best surviving hit being weaker than this forces escalation.</span>
+  <span class="y-cmt"># Level 1 falls short when the best surviving hit is weaker than this.</span>
   <span class="y-key">escalate_below</span>: <span class="y-num">0.45</span>
-  <span class="y-cmt"># The scorer's own groundedness confidence, below which we escalate.</span>
-  <span class="y-key">confidence_threshold</span>: <span class="y-num">0.6</span></code></pre>
+  <span class="y-cmt"># Either level falls short when the grader's groundedness is below this.</span>
+  <span class="y-key">confidence_threshold</span>: <span class="y-num">0.6</span>
+  <span class="y-cmt"># Level 2: rewrite the question and search again before offering a ticket.</span>
+  <span class="y-key">corrective</span>:
+    <span class="y-key">enabled</span>: <span class="y-num">true</span>
+    <span class="y-key">query_rewrites</span>: <span class="y-num">3</span></code></pre>
           </div>
         </div>
       </div>
@@ -175,7 +179,7 @@ const decisions = [
             <li>Parses, chunks, and embeds the corpus with Voyage AI <code>voyage-3</code> into pgvector, scoped by a <code>client_id</code> column</li>
             <li>Validates the threshold relationship — <code>escalate_below</code> must exceed <code>retrieval_drop_floor</code>, or the escalation signal could never fire</li>
             <li>Resolves tool names against the registry and rejects unknown ones immediately</li>
-            <li>Loads one prompt per stage, so the scoring step stays auditable instead of hiding inside a mega-prompt</li>
+            <li>Loads one prompt per model-calling node (answer, grade, rewrite, ticket draft), so the grading step stays auditable instead of hiding inside a mega-prompt</li>
           </ul>
           <p>
             A malformed config fails at startup, not on someone's first question.
@@ -186,14 +190,14 @@ const decisions = [
       <div class="step">
         <div class="step-num">03</div>
         <div class="step-body">
-          <h3>A question runs the stages in order</h3>
+          <h3>A question moves down the tiers only as far as it has to</h3>
           <ol>
-            <li><strong>retrieve</strong> — the question is embedded and matched against that client's chunks. Anything below the drop floor is discarded. Zero surviving hits short-circuits straight to escalation, because there is nothing to score.</li>
-            <li><strong>score</strong> — a cheap model rates how well the surviving passages actually support an answer, and returns a structured groundedness value.</li>
-            <li><strong>the branch</strong> — Python compares both numbers to the configured thresholds and picks a path.</li>
+            <li><strong>retrieve</strong> — the question is embedded and matched against that client's chunks. Anything below the drop floor is discarded.</li>
+            <li><strong>grade</strong> — a cheap model rates how well the surviving passages support an answer, and whether the message is a support question at all. A greeting leaves here with a short reply and no ticket.</li>
+            <li><strong>decide_level1</strong> — Python compares similarity and groundedness to the configured thresholds. Both clear: answer. Otherwise: Level 2.</li>
+            <li><strong>rewrite → hybrid_retrieve → regrade</strong> — Level 2 rewrites the question with the conversation in view, searches semantic and keyword at once, fuses the results by rank, and grades again. <code>decide_level2</code> answers if the new evidence holds.</li>
             <li><strong>answer</strong> — passages go to the model as <code>search_result</code> blocks in top-level user content, so the API attaches citations at generation time. No tool definitions are sent on this call.</li>
-            <li><strong>escalate</strong> — the other path triages first: a greeting, a thank-you or a bare follow-up retrieves nothing and lands here too, and is answered conversationally rather than filed. A real support request gets a structured ticket drafted.</li>
-            <li><strong>ticket</strong> — the draft is shown to the user as an offer. On confirmation it is POSTed to the ticket service, which assigns the id. A queue is only worth reading if what reaches it needed a human.</li>
+            <li><strong>escalate → ticket</strong> — neither level could answer, so a structured ticket is drafted and offered, and the graph pauses. On confirmation it resumes and POSTs to the ticket service, which assigns the id. A queue is only worth reading if what reaches it needed a human.</li>
           </ol>
         </div>
       </div>
@@ -203,14 +207,15 @@ const decisions = [
         <div class="step-body">
           <h3>The trail outlives the request</h3>
           <p>
-            Every stage emits a <code>step</code> event over SSE as it completes, and commits
+            Every node emits a <code>step</code> event over SSE as it completes, and commits
             itself to the run through a session of its own. The UI renders the trail above
-            the reply — the stage, its reasoning, the confidence, the latency.
+            the reply — the node, its reasoning, the confidence, the latency.
           </p>
           <p>
             Because those writes don't share the request's transaction, killing the process
-            mid-run leaves the finished stages intact rather than rolling them back. That is
-            the foundation resume is built on.
+            mid-run leaves the finished nodes intact rather than rolling them back. LangGraph
+            checkpoints every node beside the trail, which is what lets the graph pause on a
+            ticket offer and pick up again in a later request.
           </p>
         </div>
       </div>

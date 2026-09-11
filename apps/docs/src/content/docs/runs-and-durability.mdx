@@ -1,30 +1,49 @@
 ---
 title: Runs & Durability
-description: The Run row, the step trail it holds, and why those writes commit on a session of their own.
+description: The Run row and its step trail, the LangGraph checkpoints beside it, and why the trail's writes commit on a session of their own.
 order: 16
 group: Cross-Cutting
 ---
 
-A pipeline turn creates one `runs` row and appends one step to it per completed stage. That row is the audit trail the UI renders and the record a resumed run will replay from.
+A graph turn creates one `runs` row and appends one step to it per node. That row is the audit trail the UI renders and the join a reloaded conversation follows. LangGraph keeps its own record of the same turn, a checkpoint after every node, keyed by the run id.
 
 ```python
 class Run(Base):
-    id: str
+    id: str                   # also the LangGraph thread_id
     conversation_id: str      # FK → conversations, CASCADE
     client_id: str            # denormalised, so lookups scope without a join
     status: str               # running | completed | failed
     current_stage: str | None
-    steps: list               # JSON — the stage-level audit trail
-    state: dict               # JSON — outputs a resume needs (e.g. ticket_id)
+    steps: list               # JSON, one entry per node
+    state: dict               # unused since D10; kept so pipeline-era rows still load
 ```
 
-`steps` is a JSON column rather than a second table. Nothing at this scale queries steps across runs, and a resume reads exactly one row.
+---
 
-## Why the writes need their own session
+## Three records of one turn
 
-The request-scoped session from `get_db` commits once at the end of a turn and rolls back on any failure. Run state written through it would be erased by exactly the crash it exists to survive.
+| | `runs.steps` | LangGraph checkpoints | `traces` |
+|---|---|---|---|
+| **Granularity** | One entry per node | The full graph state after each node | One row per model or tool call |
+| **Answers** | "Why did this turn escalate?" | "Where does this turn continue from?" | "What did this call cost?" |
+| **Written by** | `RunRecorder`, on `checkpoint_session()` | The checkpointer, on its own psycopg connection | The request session |
+| **Survives a crash** | Yes | Yes | No |
+| **Read by** | The UI and conversation reload | `confirm_ticket()` | Cost roll-ups |
+| **Tables** | `runs` | `checkpoints`, `checkpoint_blobs`, `checkpoint_writes` | `traces` |
 
-So durability writes go through `checkpoint_session()` instead:
+The trail is for people and the checkpoints are for the graph. Keeping them apart means the UI never parses LangGraph's serialized state, and a framework upgrade that changes the checkpoint format cannot break a conversation reload.
+
+- **One connection for all checkpoints.** `AsyncPostgresSaver.from_conn_string()` opens it in the app lifespan and serialises access with a lock. A pool is a known gap for when concurrent turns contend on it.
+- **`setup()` runs on every start.** It creates or migrates the checkpoint tables, so they need no Alembic migration.
+- **Checkpoints are never pruned.** A paused ticket offer has to outlive its request, so the rows cannot be deleted at turn end.
+
+---
+
+## Why the trail's writes need their own session
+
+The request-scoped session from `get_db` commits once at the end of a turn and rolls back on any failure. A step written through it would be erased by exactly the crash it exists to survive.
+
+So the trail goes through `checkpoint_session()` instead:
 
 ```python
 @asynccontextmanager
@@ -38,64 +57,72 @@ async def checkpoint_session() -> AsyncIterator[AsyncSession]:
             raise
 ```
 
-Each call opens its own connection, commits immediately, and closes. The cost is one connection per checkpoint. At the rate a pipeline checkpoints — once per stage — that is cheaper than the alternative, which is losing the audit trail.
+Each call opens its own connection, commits immediately, and closes. That costs one connection per node, which is cheaper than losing the audit trail.
 
-> **The foreign-key trap.** `Run.conversation_id` references `conversations`. An independent session cannot see a row the request session has only *flushed*, so the conversation must be **committed** before the pipeline starts, or the first `Run` insert fails on a parent that isn't visible yet.
+> **The foreign-key trap.** `Run.conversation_id` references `conversations`. An independent session cannot see a row the request session has only *flushed*, so the conversation is **committed** before the graph starts. Otherwise the first `Run` insert fails on a parent that isn't visible yet.
+
+---
 
 ## A step entry
 
-`RunRecorder.step()` builds the entry, appends it, persists the whole list, and returns the same dict as the SSE payload — one shape, one write, no chance of the stream and the record disagreeing.
+A node calls `_step()`, which calls `RunRecorder.step()`. That builds the entry, persists the whole list, and returns the same dict, which `_step()` writes to the stream. One shape, one write, so the stream and the record cannot disagree.
 
 ```json
 {
   "seq": 2,
-  "stage": "score",
+  "stage": "grade",
   "status": "ok",
-  "reasoning": "The passage describes quota limits in general, not this project's.",
+  "level": 1,
+  "reasoning": "The passages cover Cloud Run deployment, runtime errors, CPU/memory limits, autoscaling…",
   "confidence": 0.05,
-  "latency_ms": 812,
-  "ts": "2026-08-30T14:22:07.145128+00:00",
-  "tokens_in": 1203,
-  "tokens_out": 88,
-  "cost_usd": 0.0011
+  "kind": "question",
+  "latency_ms": 4110,
+  "ts": "2026-09-11T05:42:32.418Z",
+  "tokens_in": 1850,
+  "tokens_out": 96,
+  "cost_usd": 0.0024
 }
 ```
 
-Stage-specific fields ride along in the same entry: `n_hits` and `top_similarity` on `retrieve`, `n_citations` on `answer`, `route` plus `category` and `priority` on `escalate`, `ticket_id` and `queue` on `ticket`.
+Token counts in that sample are illustrative. Every entry carries `level`, and a node that called a model adds `tokens_in`, `tokens_out` and `cost_usd`. The rest depends on the node:
 
-> **A run can gain a step after it finishes.** The `ticket` stage no longer runs inside the turn — the escalate stage parks its draft in `Run.state["ticket_draft"]` and the turn completes without filing. If the user confirms, `POST /c/{id}/runs/{run_id}/ticket` rehydrates a `RunRecorder` from the stored row, appends the `ticket` step, and writes `state["ticket_id"]`. So a `completed` run holding a draft and no ticket is a normal resting state, not an interrupted one, and the stored `ticket_id` is what makes a second confirmation a no-op.
+- **`retrieve`:** `n_hits`, `top_similarity`, `sources`
+- **`grade`, `regrade`:** `confidence`, `kind`
+- **`rewrite`:** `queries`, `keywords`
+- **`hybrid_retrieve`:** `n_hits`, `sources`
+- **`answer`:** `n_citations`
+- **`escalate`:** `category`, `product_area`, `priority`
+- **`ticket`:** `ticket_id`, `url`, `queue`, `eta_hours`
 
-## Runs vs. traces
+### A repeated node replaces its entry
 
-Both record what happened. They answer different questions.
+`RunRecorder.next_seq(stage)` returns the last entry's seq when the same node runs again straight after itself. Today that only happens when a ticket is retried after a failed filing. Replacing the entry keeps the trail to one `ticket` step and keeps the idempotency key `{run_id}:{stage_seq}` stable across the retry.
 
-| | `Trace` | `Run.steps` |
-|---|---|---|
-| Granularity | One row per API or tool call | One entry per pipeline stage |
-| Answers | "What did this call cost?" | "Why did this turn escalate?" |
-| Written by | The request session | `checkpoint_session()` |
-| Survives a crash | No | Yes |
+> **A run gains a step after it finishes.** The turn ends with the graph paused in `ticket`, and the run is marked `completed`. If the user confirms, `confirm_ticket()` rebuilds a `RunRecorder` from the row, resumes the graph, and the `ticket` node appends its step. A `completed` run with a pending offer is a normal resting state, not an interrupted one.
 
-The pipeline writes both. Traces stay span-level and roll up into conversation cost totals; steps stay stage-level and drive the UI.
+---
 
 ## Reloading a conversation
 
-The assistant `Message` row carries a `run_id`. Steps live in `runs`, not on the message, so replaying a conversation joins back through that column to show the trail again.
+The assistant `Message` row carries a `run_id`. Steps live in `runs`, not on the message, so replaying a conversation joins back through that column to show the trail again. That join is why the trail survives a page reload rather than existing only for the life of one SSE stream.
 
-That join is why the step trail survives a page reload rather than existing only for the life of one SSE stream.
+---
 
 ## What crashing proves today
 
-`CRASH_AFTER=<stage>` kills the process immediately after a named stage:
+`CRASH_AFTER=<stage>` raises `GraphCrash` right after the named node's step is streamed:
 
 ```python
-def _maybe_crash(stage: str) -> None:
-    if os.getenv("CRASH_AFTER") == stage:
-        raise PipelineCrash(f"CRASH_AFTER={stage}")
+async for event, data in graph.astream(initial, thread, context=deps,
+                                       stream_mode="custom", durability="sync"):
+    yield event, data
+    if event == "step":
+        _maybe_crash(data["stage"])
 ```
 
-A named injection point rather than `kill -9`: the process still dies with uncommitted work and an open SSE connection, so the failure mode is identical — only the timing is chosen, which makes it assertable in a test.
+- **The stream consumer raises it, never a node.** Nodes run as asyncio tasks, and a `SystemExit` raised inside a task is fatal to the event loop rather than to the run.
+- **A named injection point, not `kill -9`.** The turn still dies with uncommitted work and an open SSE connection. Only the timing is chosen, which makes it assertable in a test.
+- **`CRASH_AFTER=grade` leaves `retrieve` and `grade` on the trail,** with the reasoning and confidence intact, and the run at status `running`.
+- **The checkpoint holds `retrieve`, not `grade`.** The step is streamed from inside the grade node, before it returns, so that node's output was never checkpointed.
 
-Running `CRASH_AFTER=score` leaves `retrieve(ok) → score(ok)` durable, with the reasoning and confidence intact. The run sits at status `running` with no way to continue it.
-
-> **Resume isn't built yet.** Week 1 proves the state survives; week 2 adds the endpoint that picks it up, skips the completed stages, and finishes the run. Today a crashed run is a durable record and a dead end.
+> **Resume isn't built.** The pieces exist: `graph.astream(None, thread)` continues from the last checkpoint and re-runs the node that was cut off, and `next_seq()` would keep its step from duplicating. What's missing is the endpoint that checks the run and calls it, and a Resume control in the UI. It is a known gap in D10, cut from the first draft.

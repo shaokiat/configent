@@ -23,6 +23,15 @@ class CorpusConfig(BaseModel):
     chunking: ChunkingConfig = ChunkingConfig()
 
 
+class CorrectiveConfig(BaseModel):
+    """Level 2 of the graph engine: rewrite the question, then hybrid search (D10)."""
+
+    # Off sends a turn Level 1 cannot answer straight to Level 3, a human.
+    enabled: bool = True
+    # Semantic variants the rewrite call produces, each embedded and searched.
+    query_rewrites: int = Field(default=3, ge=1, le=5)
+
+
 class AgentConfig(BaseModel):
     model: str
     system_prompt_file: str
@@ -30,11 +39,11 @@ class AgentConfig(BaseModel):
     effort: str = Field(default="medium")
     tools: list[str] = Field(default_factory=list)
 
-    # "loop" is the free-form manual tool-use loop; "pipeline" is the fixed-stage
-    # support workflow whose escalation branch is Python control flow (D5).
+    # "loop" is the free-form manual tool-use loop; "graph" is the three-tier support
+    # graph whose every route is Python control flow (D5, D10).
     mode: str = Field(default="loop")
 
-    # --- pipeline-only knobs (D2) -------------------------------------------------
+    # --- graph-only knobs (D2, D10) -----------------------------------------------
     # Two *different* floors, and the difference matters:
     #   retrieval_drop_floor  discards weak chunks inside search() — they never reach
     #                         the model at all.
@@ -45,6 +54,7 @@ class AgentConfig(BaseModel):
     retrieval_drop_floor: float = Field(default=0.3, ge=0.0, le=1.0)
     escalate_below: float = Field(default=0.45, ge=0.0, le=1.0)
     confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    corrective: CorrectiveConfig = CorrectiveConfig()
 
     @field_validator("effort")
     @classmethod
@@ -57,14 +67,14 @@ class AgentConfig(BaseModel):
     @field_validator("mode")
     @classmethod
     def mode_must_be_valid(cls, v: str) -> str:
-        valid = {"loop", "pipeline"}
+        valid = {"loop", "graph"}
         if v not in valid:
             raise ValueError(f"agent.mode must be one of {valid}, got {v!r}")
         return v
 
     @model_validator(mode="after")
     def escalation_floor_must_be_reachable(self) -> "AgentConfig":
-        if self.mode == "pipeline" and self.escalate_below <= self.retrieval_drop_floor:
+        if self.mode == "graph" and self.escalate_below <= self.retrieval_drop_floor:
             raise ValueError(
                 f"agent.escalate_below ({self.escalate_below}) must be greater than "
                 f"agent.retrieval_drop_floor ({self.retrieval_drop_floor}) — otherwise the "

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.graph import RunUnavailable, confirm_ticket, run_graph, stream_graph
 from app.agent.limits import (
     BudgetExceeded,
     RateLimitExceeded,
@@ -14,12 +15,6 @@ from app.agent.limits import (
 )
 from app.agent.loop import ConversationNotFoundError, stream_turn
 from app.agent.loop import run as agent_run
-from app.agent.pipeline import (
-    TicketUnavailable,
-    confirm_ticket,
-    run_pipeline,
-    stream_pipeline,
-)
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
@@ -72,6 +67,13 @@ async def _check_conversation_ownership(
         )
 
 
+def _client(client_id: str) -> ClientConfig:
+    try:
+        return get_registry().get(client_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found") from None
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
@@ -93,7 +95,7 @@ async def list_clients():
             "id": cfg.client_id,
             "name": cfg.name,
             # The engine this client runs on. The landing page groups clients by it,
-            # so a pipeline client is never presented as a free-form assistant.
+            # so a graph client is never presented as a free-form assistant.
             "mode": cfg.agent.mode,
             "branding": {
                 "logo": cfg.branding.logo,
@@ -113,31 +115,27 @@ async def chat(
     req: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    registry = get_registry()
-    try:
-        cfg = registry.get(client_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
-
+    cfg = _client(client_id)
     _enforce_rate_limit(client_id, cfg)
     await _enforce_daily_budget(db, cfg)
 
-    if cfg.agent.mode == "pipeline":
+    if cfg.agent.mode == "graph":
+        await _check_conversation_ownership(db, client_id, req.conversation_id)
         try:
-            pipeline_result = await run_pipeline(
+            state = await run_graph(
                 req.message,
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
                 db=db,
             )
-        except ConversationNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from None
         return ChatResponse(
-            conversation_id=pipeline_result.conversation_id,
-            reply=pipeline_result.answer,
-            citations=pipeline_result.citations,
-            segments=pipeline_result.segments,
+            conversation_id=state["conversation_id"],
+            reply=state["answer"],
+            citations=state.get("citations", []),
+            segments=state["segments"],
         )
 
     try:
@@ -166,12 +164,7 @@ async def chat(
 @router.post("/c/{client_id}/chat/stream")
 async def chat_stream(client_id: str, req: ChatRequest):
     """SSE chat endpoint. Event contract: docs/test-anchors.md UC-10."""
-    registry = get_registry()
-    try:
-        cfg = registry.get(client_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
-
+    cfg = _client(client_id)
     _enforce_rate_limit(client_id, cfg)
 
     # Ownership + budget checks run in their own short-lived session, before the
@@ -182,8 +175,8 @@ async def chat_stream(client_id: str, req: ChatRequest):
         await _enforce_daily_budget(preflight_db, cfg)
 
     # One entry point, two engines (D5). `loop` is the free-form manual tool-use loop;
-    # `pipeline` is the fixed-stage support workflow whose escalation branch is Python.
-    engine = stream_pipeline if cfg.agent.mode == "pipeline" else stream_turn
+    # `graph` is the three-tier support graph whose every route is Python (D10).
+    engine = stream_graph if cfg.agent.mode == "graph" else stream_turn
 
     async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session
@@ -211,20 +204,16 @@ async def file_proposed_ticket(
     run_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """File the ticket a pipeline turn proposed, on the user's confirmation (D9).
+    """File the ticket a graph turn proposed, on the user's confirmation (D9).
 
-    The turn drafts and offers; this files. Nothing about the ticket comes from the request
-    body — there isn't one — so a client can confirm a proposal but cannot author one.
+    The turn drafts, offers and pauses; this resumes it. Nothing about the ticket comes from
+    the request body — there isn't one — so a client can confirm a proposal but cannot
+    author one.
     """
-    registry = get_registry()
+    cfg = _client(client_id)
     try:
-        registry.get(client_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found") from None
-
-    try:
-        return await confirm_ticket(run_id=run_id, client_id=client_id, db=db)
-    except TicketUnavailable as exc:
+        return await confirm_ticket(run_id=run_id, client_id=client_id, cfg=cfg, db=db)
+    except RunUnavailable as exc:
         # Also the answer when the run belongs to another client: a 404 leaks nothing
         # about whether that run exists (P8 — tenancy is enforced here, not by the DB).
         raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -232,15 +221,11 @@ async def file_proposed_ticket(
 
 @router.get("/clients/{client_id}/branding")
 async def get_client_branding(client_id: str):
-    registry = get_registry()
-    try:
-        cfg = registry.get(client_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found")
+    cfg = _client(client_id)
     return {
         "id": cfg.client_id,
         "name": cfg.name,
-        # Drives the header badge: a pipeline client advertises its guardrail, not
+        # Drives the header badge: a graph client advertises its guardrail, not
         # the free-form loop's citation behaviour.
         "mode": cfg.agent.mode,
         "primary_color": cfg.branding.primary_color,
@@ -272,7 +257,7 @@ async def get_conversation_history(
     )
     rows = list(result.scalars().all())
 
-    # Pipeline turns carry a run whose `steps` are the audit trail. Loaded in one query
+    # Graph turns carry a run whose `steps` are the audit trail. Loaded in one query
     # and attached by id rather than copied onto the message at write time, so `runs`
     # stays the single source of truth for what the agent actually did.
     run_ids = {m.run_id for m in rows if m.run_id}

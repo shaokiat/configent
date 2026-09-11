@@ -268,6 +268,57 @@ step costs a blocked user one extra turn — an accepted trade, listed as open q
 the brief. Tuning `escalate_below` is explicitly *not* the fix and is sequenced after this
 (W2-8), since a follow-up turn is a conversation-state problem, not a threshold problem.
 
+### D10 — The support agent is a LangGraph graph with three tiers of escalation · LOCKED (decided and built 2026-09-11, #4)
+`agent.mode: graph` replaces `pipeline`. The turn is a LangGraph `StateGraph`:
+
+```
+Level 1 · RAG             retrieve → grade ─┬─ answer | converse
+Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
+Level 3 · human           escalate → ticket (interrupt → user confirms → file)
+```
+
+- **Level 2 is query rewriting plus hybrid search.** One call rewrites the question with the
+  conversation in view (`corrective.query_rewrites` semantic variants, plus exact keywords).
+  Dense search runs per variant, and Postgres full-text search runs on the keywords over a
+  generated `chunks.text_search` column. Reciprocal rank fusion merges them. No new infrastructure.
+- **The framework owns mechanism, not decisions.** Checkpointing (`AsyncPostgresSaver`,
+  `thread_id = run_id`) and the ticket pause (`interrupt()`) come from LangGraph. Every route
+  comes from `decide_level1` / `decide_level2`, plain functions over YAML thresholds.
+- **Model calls go through the Anthropic SDK directly inside nodes**, not LangChain wrappers,
+  so `search_result` citations stream exactly as before.
+- **The SSE contract is unchanged.** Nodes write `step` / `text` / `citation` /
+  `ticket_proposal` through the stream writer, so the UI needed stage labels and nothing else.
+
+**Why:** the tiered shape is easier to explain than a bespoke stage list. And the two things
+LangGraph provides are two things this repo had built by hand: `RunRecorder` + `Run.state` for
+resume, and `confirm_ticket()` reading a parked draft. Level 2 fixes a real gap. Level 1
+retrieval had no rewriting (only "prepend the previous turn") and no keyword matching, so a
+pronoun follow-up or an exact identifier like `iam.serviceAccounts.actAs` could fail.
+
+**What it supersedes:**
+- **D2:** zero hits no longer short-circuits to escalate. The grader still runs so a
+  greeting is recognised, and Python overwrites its confidence with 0. `escalate_below`
+  gates Level 1 only: it is a cosine floor, and the keyword matches Level 2 adds carry no
+  cosine meaning. Level 2 answers on groundedness, still cited.
+- **D3:** checkpoints are written after every node (`durability="sync"`), so a crashed run
+  is resumable in principle, but there is no resume path yet. `runs.steps` stays the audit
+  trail and reload source, and `CRASH_AFTER` still proves the steps survive.
+- **D5:** `loop | graph`.
+- **D9:** triage moves from the draft call to the grade call, still downstream of retrieval
+  and still with passages in view. A follow-up question is now a *question*, answered by
+  Level 2 rather than conversed with. Level 1 therefore embeds the bare message; the old
+  "prepend the previous turn" workaround is gone, and Level 2's rewrite handles follow-ups.
+
+**Consequence:**
+- A second Postgres driver: `psycopg` 3 for the checkpointer, beside asyncpg.
+- A turn Level 1 cannot answer costs two more model calls (rewrite, regrade) and one more
+  embedding call before a ticket offer. The answerable path makes the same calls as before.
+- `interrupt()` re-runs its node from the top on resume, so `ticket` is its own node. A failed
+  filing loops back to the pause, and the retry reuses the step's seq, so the idempotency key
+  holds (D4).
+- Web search is deliberately not in Level 2. Under D1, the questions that reach Level 3
+  depend on the user's own project, which no public page can answer.
+
 ---
 
 ## Part 3 — Known gaps
@@ -285,4 +336,8 @@ what it would take" is a better answer than a half-built version of it.
 | **Daily budget is checked at entry only.** A run that exhausts budget mid-flight completes. | Killing a run to save a cent leaves orphaned state and a filed ticket with no confirmation — worse than the overspend, which is bounded by one run's cost. | Mid-run checks at stage boundaries. |
 | **`client_id` is a trusted path parameter** guarded by application-level ownership checks, not row-level security (P8). | Single trusted deployment, demo scale. | Postgres RLS, so isolation holds even when application code has a bug. |
 | **The rate limiter is in-memory and single-process.** | One API instance. | Redis, or any shared store. |
+| **Checkpoints are never pruned.** Every turn leaves LangGraph checkpoint rows behind. | A few KB per turn at demo volume. A paused ticket offer has to outlive the request, so rows cannot simply be deleted at turn end. | A retention job that deletes threads for completed runs older than N days. |
+| **Two simultaneous confirmations both resume the paused graph.** | Both file with the same `{run_id}:{stage_seq}` key, so the ticket service collapses them into one ticket (D4). Only the duplicate Trace row is visible. | A row lock on the run for the duration of the confirm. |
+| **No resume after a crash.** Checkpoints are written, but nothing reads them back except the ticket confirmation. | The first draft proves the trail survives a crash (D6); resuming is a separate feature with its own UI. | A resume endpoint that calls `astream(None, thread)` after checking the run, and an "interrupted — Resume" control (D3). |
+| **The checkpointer shares one Postgres connection.** | One API instance at demo load; the saver serialises access with a lock. | An `AsyncConnectionPool`, so concurrent turns don't queue and a dropped connection heals. |
 | **The ticket service is a mock in this repo.** | It exercises the real integration shape — HTTP, schema, idempotency key, retries, failure injection — without a vendor account. | A real ticketing API. The client swaps; the retry and idempotency paths don't. |

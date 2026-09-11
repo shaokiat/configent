@@ -111,7 +111,7 @@ async def test_history_unknown_conversation_404s():
 
 
 @pytest.mark.asyncio
-async def test_history_replays_the_step_trail_for_pipeline_turns():
+async def test_history_replays_the_step_trail_for_graph_turns():
     """Reloading a conversation must not lose the audit trail.
 
     The steps live in `runs`, not on the message — a run that crashed before its message
@@ -123,7 +123,7 @@ async def test_history_replays_the_step_trail_for_pipeline_turns():
     conv = Conversation(id="conv-1", client_id="gcp-platform-support")
     steps = [
         {"seq": 1, "stage": "retrieve", "status": "ok"},
-        {"seq": 2, "stage": "score", "status": "ok", "confidence": 0.05},
+        {"seq": 2, "stage": "grade", "status": "ok", "confidence": 0.05},
         {"seq": 3, "stage": "escalate", "status": "ok"},
         {"seq": 4, "stage": "ticket", "status": "ok", "ticket_id": "PLATFORM-1042"},
     ]
@@ -143,5 +143,5 @@ async def test_history_replays_the_step_trail_for_pipeline_turns():
     )
     assistant = [m for m in out["messages"] if m["role"] == "assistant"][0]
     assert [s["stage"] for s in assistant["steps"]] == [
-        "retrieve", "score", "escalate", "ticket",
+        "retrieve", "grade", "escalate", "ticket",
     ]

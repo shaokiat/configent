@@ -1,0 +1,196 @@
+---
+title: From Pipeline to Graph
+description: Why the support agent moved from a hand-written pipeline to a LangGraph graph. Both designs side by side, every decision made in the change, what it cost, and how to recover the old code.
+order: 15
+group: The Support Graph
+---
+
+The support agent ran on a hand-written pipeline, `agent/pipeline.py`, from week 1 until 2026-09-11. It now runs on a LangGraph state graph with a second retrieval tier (decision D10, PR #6). This page keeps both designs on the record: what each one was, why the change was made, what it cost, and where the retired code lives.
+
+The claim did not change. **Escalation is not the model's decision** holds in both designs, and is enforced the same way.
+
+---
+
+## The two shapes
+
+**The pipeline** (week 1, amended by D9):
+
+```
+retrieve → score → should_escalate() ─┬─ answer                            (cited, no tools)
+                                       └─ escalate ─┬─ converse             (no ticket)
+                                                    └─ propose ticket → [user confirms] → file
+```
+
+One async generator, top to bottom. One branch, in Python. Triage rode on the ticket-draft call, after the branch.
+
+**The graph** (D10):
+
+```
+Level 1 · RAG             retrieve → grade ─┬─ answer | converse
+Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
+Level 3 · human           escalate → ticket   (interrupt → user confirms → file)
+```
+
+Nine nodes, two decision functions, one pause.
+
+---
+
+## Side by side
+
+| | Pipeline (retired) | **Graph (built)** |
+|---|---|---|
+| **Engine** | `agent/pipeline.py`, 957 lines, no framework | `agent/graph.py`, 942 lines, LangGraph |
+| **`agent.mode`** | `pipeline` | `graph`. `pipeline` now fails at startup |
+| **Retrieval tiers** | One | Two: dense, then rewrite plus hybrid search |
+| **Routing** | `should_escalate()`, one `if` | `decide_level1` and `decide_level2`, stored on state, read by the edges |
+| **Follow-up questions** | The previous user turn prepended to the query | The bare message at Level 1, rewritten with history at Level 2 |
+| **Greetings** | `route` on the draft call, after the branch | `kind` on the grade call, before Level 2 |
+| **Zero hits** | Scoring skipped, straight to the escalate stage | Still graded for `kind`, confidence forced to 0 |
+| **Keyword search** | None | Postgres full-text over a generated `tsvector` column |
+| **Progress saved** | `runs.steps` and `Run.state`, per stage | `runs.steps` for the trail, a LangGraph checkpoint per node |
+| **The ticket offer** | Draft parked on `Run.state`; the turn completes | The graph pauses on `interrupt()` in the `ticket` node |
+| **Confirming** | `confirm_ticket()` reads the draft and calls the executor | `confirm_ticket()` checks the run, then `Command(resume=True)` |
+| **Retry after a failed filing** | The draft is still on the row | The node loops back and pauses again, reusing its seq |
+| **Resume after a crash** | Planned for week 2, not built | Checkpoints written, endpoint not built |
+| **Streaming** | The generator `yield`s | Nodes write to LangGraph's custom stream; the SSE events are identical |
+| **Model calls** | Anthropic SDK | Anthropic SDK, unchanged |
+| **Calls on an answerable turn** | score, answer | grade, answer |
+| **Calls before a ticket offer** | score (skipped on zero hits), draft | grade, rewrite, regrade, draft |
+| **Dependencies added** | None | `langgraph`, `langgraph-checkpoint-postgres`, `psycopg` |
+| **Tests** | Stages monkeypatched inside the generator | The real compiled graph with an in-memory checkpointer |
+
+---
+
+## Why the pipeline was hand-written
+
+The week-1 position, as the Overview stated it: *"No LangChain or LangGraph. One file covers tool execution, cost, caching, and streaming — a framework would hide exactly the parts worth showing."*
+
+That was right for week 1:
+
+- **The parts worth showing were the calls.** Citations as top-level `search_result` blocks, structured output kept apart from citations, cost per call. Framework model wrappers would have sat between the reader and all of it.
+- **The control flow was a straight line with one branch.** A graph library has nothing to add to `if escalate: … else: …`.
+- **Durability was small to build and worth seeing.** Writing the trail on its own session exposed the rollback problem and the foreign-key trap, both documented in [Runs & Durability](/configent/docs/runs-and-durability).
+
+---
+
+## Why it changed
+
+- **The tiered shape is easier to explain.** RAG, then corrective RAG, then a human is a recognisable escalation ladder. The pipeline's triage inside the draft call was correct, but it needed explaining every time.
+- **The pipeline had rebuilt two framework features by hand.** `Run.state` plus `checkpoint_session()` was a checkpointer. A parked draft plus an endpoint reading it back was an interrupt. Both were about to grow, because week 2 planned resume on top of them.
+- **Retrieval had a real gap.** Nothing rewrote a query beyond prepending one turn, and nothing matched exact terms, so a pronoun follow-up or an identifier like `iam.serviceAccounts.actAs` could miss and go to a human.
+- **A second tier breaks a straight line.** In one generator, Level 2 means nested branches and a triage call that has to move. As nodes and edges, each tier is a few lines of wiring.
+
+What held from the week-1 position: the parts worth showing are still plain code. The framework took the mechanisms, not the calls.
+
+---
+
+## Hand-written vs framework, on the concerns that mattered
+
+| | Hand-written pipeline | **LangGraph graph** |
+|---|---|---|
+| **Reading the whole flow** | One generator, top to bottom | The `_build()` wiring plus one function per node |
+| **Decisions visible in code** | One `if` | Two functions; edges only read their result |
+| **Durable progress** | Built by hand: a session per stage | Framework: a checkpoint per node |
+| **Pausing for a person** | Built by hand: a parked draft and an endpoint | Framework: `interrupt()` and `Command` |
+| **Adding a tier** | More branches in one generator | Nodes and edges |
+| **Model calls, citations, cost** | Visible | Visible, unchanged |
+| **What you have to learn** | Nothing new | A node re-runs from the top on resume; a `SystemExit` in a node kills the event loop; durability modes |
+| **Operational surface** | One Postgres driver | A second driver, and checkpoint tables that grow |
+| **Upgrade risk** | None | The framework's API and its checkpoint format |
+
+---
+
+## The decisions made in the change
+
+All fourteen are recorded under D10 in `docs/decisions.md`.
+
+1. **LangGraph owns mechanism only.** Checkpoints and the pause come from the framework; every route is a plain function that writes `state["route"]`, and the edge only reads it. *Why:* D2's claim is that a model cannot be talked out of an `if` statement. It must not become a claim about a framework edge.
+2. **The Anthropic SDK stays inside the nodes.** No LangChain model wrappers. *Why:* top-level `search_result` blocks and `citations_delta` streaming have to behave exactly as before.
+3. **Level 2 is query rewriting plus hybrid search, not web search.** *Why:* under D1 the questions that reach a human depend on the user's own project, which no public page describes.
+4. **Keyword search is Postgres full-text, fused by reciprocal rank.** *Why:* no new infrastructure, and cosine and `ts_rank_cd` scores are on scales that cannot be added.
+5. **Triage moves from the draft call to the grade call.** *Why:* left where it was, a greeting would pay for a rewrite, a hybrid search and a regrade before being recognised.
+6. **Zero hits are graded, with confidence forced to 0 in Python.** *Why:* the grader's `kind` is needed; its number over no passages is not.
+7. **`escalate_below` gates Level 1 only.** *Why:* the keyword matches Level 2 adds carry no cosine similarity, and a cosine floor would reject them.
+8. **Level 1 drops the prepend-previous-turn heuristic.** *Why:* Level 2 rewrites follow-ups properly, and one mechanism is easier to reason about than two.
+9. **The SSE contract does not change.** *Why:* the web app should need stage labels and nothing else. The custom stream keeps event order exact.
+10. **`runs.steps` stays separate from the checkpoints.** *Why:* the UI and conversation reload must not parse framework state.
+11. **`ticket` is its own node, and a failed filing loops back to the pause.** *Why:* `interrupt()` re-runs its node from the top, and the user needs to retry the same draft. `next_seq()` keeps the idempotency key stable across the retry.
+12. **The pipeline was replaced, not kept beside the graph.** *Why:* D5 kept the loop beside the pipeline because they serve different kinds of client. Two support engines for one client would be two things to test with no second use.
+13. **The first draft cuts resume, a connection pool, and legacy UI labels.** *Why:* checkpoints make resume a small later feature, and one API instance does not contend on one connection.
+14. **The Level 2 golden cases were committed before the graph ran them.** *Why:* D7. The expectations cannot have been fitted to the output.
+
+---
+
+## What carried over unchanged
+
+- **The claim and both signals** (D2), the three thresholds, and the validator that rejects an unreachable floor.
+- **The answering request.** Passages as top-level `search_result` blocks, citations on, no `tools` key, and the test that asserts it on the real request.
+- **The structured-output split.** Grading, rewriting and drafting use `output_config.format`; answering uses citations.
+- **The ticket path** (D4). Python calls the executor, the idempotency key is `{run_id}:{stage_seq}`, and a filed `ticket_id` short-circuits a second confirmation.
+- **The confirm contract** (D9). The same endpoint, an empty request body, and a `ticket_proposal` event that is an offer rather than a record.
+- **The step trail** (D3). `RunRecorder`, `checkpoint_session()`, and the committed conversation that avoids the foreign-key trap.
+- **The crash injector** (D6), moved from the generator to the stream consumer.
+- **The prompts' substance.** `answer.md` is untouched, the calibration bands from `score.md` live on in `grade.md`, and the ticket-field guidance in `ticket_draft.md` is unchanged.
+- **The demo-inputs test table.** No chat message can file a ticket.
+- **The loop engine** and every loop client.
+
+---
+
+## What was removed, and where it went
+
+| Pipeline | Graph |
+|---|---|
+| `stream_pipeline()` | `stream_graph()` |
+| `run_pipeline()` returning `PipelineResult` | `run_graph()` returning the final state |
+| `should_escalate()` | `decide_level1()`, plus `decide_level2()` for the new tier |
+| `stage_score()` and `score.md` | The `grade` node and `grade.md` |
+| `route` and `reply` on the draft call | `kind` and `reply` on the grade call |
+| `_retrieval_query()` | Removed; the Level 2 rewrite does the job |
+| `Run.state["ticket_draft"]` and `["ticket_id"]` | The checkpoint. The column is kept, unused |
+| `confirm_ticket()` reading `Run.state` | `confirm_ticket()` resuming the graph |
+| `PipelineCrash` | `GraphCrash` |
+| `STAGES` | The node names in `_build()` |
+| `mode: pipeline` | `mode: graph` |
+
+---
+
+## What the change cost
+
+- **A ticket offer takes two more model calls and one embedding call.** The quota question cost $0.031 in the live run. The answerable Level 1 path makes the same calls the pipeline made.
+- **A follow-up costs more.** The prepend heuristic was free. In the live run the Level 2 rewrite put a follow-up at $0.039, against $0.026 for the Level 1 answer before it.
+- **Level 2 answers rest on the grader alone.** The deterministic half of the guardrail applies at Level 1 only.
+- **A second Postgres driver, and checkpoint tables that are never pruned.**
+- **Framework rules to know.** An `interrupt()` node re-runs from the top. A `SystemExit` raised in a node is fatal to the event loop, which is why the crash injector moved. `durability="sync"` is what writes a checkpoint before the next node starts.
+- **No code saved.** `graph.py` is about the size `pipeline.py` was, while carrying a whole extra tier.
+
+---
+
+## Recovering the retired design
+
+Nothing was lost; it is in git. The last commit on `main` with the pipeline is `d81a230`, the merge of PR #3.
+
+```bash
+# the engine, its tests, and the scoring prompt
+git show d81a230:apps/api/app/agent/pipeline.py
+git show d81a230:apps/api/tests/test_pipeline.py
+git show d81a230:prompts/gcp-platform-support/score.md
+
+# the docs as they stood
+git show d81a230:apps/docs/src/content/docs/pipeline.mdx
+git show d81a230:apps/docs/src/content/docs/scoring.mdx
+git show d81a230:docs/support-agent-pipeline.html
+
+# how the pipeline evolved
+git log --oneline 647bda6^..d81a230 -- apps/api/app/agent/pipeline.py
+```
+
+| Milestone | Where |
+|---|---|
+| The pipeline, the two-signal guardrail and the step trail (week 1) | PR #1, merged as `753e174`. First commit `647bda6` |
+| The converse outcome and a ticket the user confirms (D9) | PR #3, merged as `d81a230` |
+| The graph, corrective retrieval and the interrupt (D10) | PR #6 |
+| The decision records | `docs/decisions.md`: D2, D3, D4, D5, D9, D10 |
+
+---
+
+**Next:** [Runs & Durability](/configent/docs/runs-and-durability), the trail both designs write, and what a crash leaves behind.

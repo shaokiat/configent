@@ -1,16 +1,15 @@
 ---
-// Architecture flow diagram — fills driven by CSS variables so light/dark theme works.
-// Draws the pipeline engine: fixed stages, the guardrail branch evaluated in Python,
-// and the durable step trail underneath.
+// Architecture diagram for the support graph: three tiers, the two decision points evaluated
+// in Python, and the durable step trail. Fills are CSS variables so light/dark theme works.
 ---
 
 <div class="diagram-wrap">
   <svg
     class="arch-svg"
-    viewBox="0 0 960 580"
+    viewBox="0 0 1000 700"
     xmlns="http://www.w3.org/2000/svg"
     role="img"
-    aria-label="Configent pipeline architecture: a config file feeds the engine, which retrieves passages from pgvector, scores their groundedness, then branches in Python to either answer with citations or escalate. The escalate path triages the turn and, when it is a real support request, drafts a ticket the user confirms before it is POSTed over HTTP. Every stage commits to the run's step trail before the next begins."
+    aria-label="Configent support graph: a config file selects the graph engine. Level 1 retrieves passages from pgvector and grades them; a Python function answers, replies conversationally to a greeting, or falls through. Level 2 rewrites the question, runs keyword and semantic search fused by rank, and regrades; a second Python function answers or falls through. Level 3 drafts a ticket and pauses until the user confirms, then POSTs it to the ticket service. Every node commits a step to the run's trail, and LangGraph checkpoints after every node."
   >
     <defs>
       <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
@@ -29,109 +28,138 @@
     </defs>
 
     <!-- ── Config file (left) ─────────────────────────────────── -->
-    <g class="node node-config" transform="translate(20, 160)">
-      <rect class="bg-surface stroke-accent" width="160" height="178" rx="10" stroke-width="1.5"/>
-      <text x="12" y="30"  class="mono-sm text-faint">client_id:</text>
-      <text x="20" y="45"  class="mono-sm y-key">gcp-platform-support</text>
-      <text x="12" y="66"  class="mono-sm text-faint">agent:</text>
-      <text x="20" y="81"  class="mono-sm y-bool">mode: pipeline</text>
-      <text x="20" y="97"  class="mono-sm text-faint">retrieval_drop_floor:</text>
-      <text x="28" y="112" class="mono-sm y-str">0.30</text>
-      <text x="20" y="128" class="mono-sm text-faint">escalate_below:</text>
-      <text x="28" y="143" class="mono-sm y-str">0.45</text>
-      <text x="80" y="167" text-anchor="middle" class="mono-sm-bold y-key">config.yaml</text>
+    <text x="20" y="220" class="label-xs text-faint">1. Author config</text>
+    <g transform="translate(20, 230)">
+      <rect class="bg-surface stroke-accent" width="170" height="190" rx="10" stroke-width="1.5"/>
+      <text x="12" y="28"  class="mono-sm text-faint">client_id:</text>
+      <text x="20" y="43"  class="mono-sm y-key">gcp-platform-support</text>
+      <text x="12" y="64"  class="mono-sm text-faint">agent:</text>
+      <text x="20" y="79"  class="mono-sm y-bool">mode: graph</text>
+      <text x="20" y="97"  class="mono-sm text-faint">escalate_below:</text>
+      <text x="28" y="112" class="mono-sm y-str">0.45</text>
+      <text x="20" y="130" class="mono-sm text-faint">corrective:</text>
+      <text x="28" y="145" class="mono-sm y-str">enabled: true</text>
+      <text x="85" y="176" text-anchor="middle" class="mono-sm-bold y-key">config.yaml</text>
     </g>
-
-    <!-- Arrow: config → engine -->
-    <line x1="182" y1="250" x2="198" y2="250" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="192" y1="325" x2="208" y2="325" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
 
     <!-- ── Engine outer box ───────────────────────────────────── -->
-    <rect class="bg-engine stroke-dim" x="200" y="30" width="560" height="512" rx="12" stroke-width="1.5" stroke-dasharray="4 3"/>
-    <text x="480" y="54" text-anchor="middle" class="label-xs text-faint letter-wide">CONFIGENT PIPELINE ENGINE</text>
+    <rect class="bg-engine stroke-dim" x="210" y="30" width="600" height="626" rx="12" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="510" y="52" text-anchor="middle" class="label-xs text-faint letter-wide">CONFIGENT SUPPORT GRAPH · LANGGRAPH</text>
 
-    <!-- ── Stage 1: retrieve ──────────────────────────────────── -->
-    <rect class="bg-surface stroke-dim" x="330" y="72" width="300" height="54" rx="8" stroke-width="1"/>
-    <text x="480" y="94"  text-anchor="middle" class="mono-sm-bold y-key">retrieve</text>
-    <text x="480" y="112" text-anchor="middle" class="label-xs text-faint">embed query → pgvector · discard below 0.30</text>
+    <!-- ── Tier labels (right of the centre column) ───────────── -->
+    <text x="696" y="162" class="label-xs text-muted letter-wide">LEVEL 1</text>
+    <text x="696" y="176" class="label-xs text-faint">RAG</text>
+    <text x="696" y="306" class="label-xs text-muted letter-wide">LEVEL 2</text>
+    <text x="696" y="320" class="label-xs text-faint">corrective RAG</text>
+    <text x="696" y="514" class="label-xs text-muted letter-wide">LEVEL 3</text>
+    <text x="696" y="528" class="label-xs text-faint">human</text>
 
-    <line x1="480" y1="126" x2="480" y2="148" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <!-- ── Level 1 ────────────────────────────────────────────── -->
+    <rect class="bg-surface stroke-dim" x="400" y="84" width="280" height="44" rx="8" stroke-width="1"/>
+    <text x="540" y="103" text-anchor="middle" class="mono-sm-bold y-key">retrieve</text>
+    <text x="540" y="120" text-anchor="middle" class="label-xs text-faint">embed → pgvector · drop below 0.30</text>
 
-    <!-- ── Stage 2: score ─────────────────────────────────────── -->
-    <rect class="bg-surface stroke-dim" x="330" y="150" width="300" height="54" rx="8" stroke-width="1"/>
-    <text x="480" y="172" text-anchor="middle" class="mono-sm-bold y-key">score</text>
-    <text x="480" y="190" text-anchor="middle" class="label-xs text-faint">cheap model rates groundedness 0.00–1.00</text>
+    <line x1="540" y1="128" x2="540" y2="142" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <line x1="480" y1="204" x2="480" y2="224" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <rect class="bg-surface stroke-dim" x="400" y="144" width="280" height="44" rx="8" stroke-width="1"/>
+    <text x="540" y="163" text-anchor="middle" class="mono-sm-bold y-key">grade</text>
+    <text x="540" y="180" text-anchor="middle" class="label-xs text-faint">cheap model · groundedness + kind</text>
 
-    <!-- ── The guardrail: a branch in Python ──────────────────── -->
-    <rect class="bg-surface stroke-accent" x="290" y="226" width="380" height="58" rx="8" stroke-width="1.5" filter="url(#glow)"/>
-    <text x="480" y="248" text-anchor="middle" class="label-sm text-primary" font-weight="600">Guardrail · evaluated in Python</text>
-    <text x="480" y="268" text-anchor="middle" class="mono-xs text-accent">similarity &lt; 0.45  OR  groundedness &lt; 0.60  →  escalate</text>
+    <line x1="540" y1="188" x2="540" y2="202" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <!-- Branch: left to answer -->
-    <polyline points="400,284 400,300 336,300 336,318" fill="none" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <text x="352" y="314" class="label-xs text-green">pass</text>
-    <!-- Branch: right to escalate -->
-    <polyline points="560,284 560,300 626,300 626,318" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
-    <text x="576" y="314" text-anchor="end" class="label-xs text-amber">fail</text>
+    <rect class="bg-surface stroke-accent" x="380" y="204" width="320" height="48" rx="8" stroke-width="1.5" filter="url(#glow)"/>
+    <text x="540" y="224" text-anchor="middle" class="label-sm text-primary" font-weight="600">decide_level1 · plain Python</text>
+    <text x="540" y="242" text-anchor="middle" class="mono-xs text-accent">similarity ≥ 0.45 and groundedness ≥ 0.60</text>
 
-    <!-- ── Branch A: answer ───────────────────────────────────── -->
-    <rect class="bg-raised stroke-dim" x="222" y="320" width="228" height="72" rx="8" stroke-width="1"/>
-    <text x="336" y="342" text-anchor="middle" class="mono-sm-bold y-key">answer</text>
-    <text x="336" y="360" text-anchor="middle" class="label-xs text-faint">search_result blocks as</text>
-    <text x="336" y="374" text-anchor="middle" class="label-xs text-faint">top-level user content</text>
-    <text x="336" y="386" text-anchor="middle" class="label-xs text-faint">no tools sent to this call</text>
+    <!-- greeting → converse -->
+    <line x1="700" y1="228" x2="712" y2="228" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <rect class="bg-raised stroke-dim" x="714" y="206" width="86" height="44" rx="8" stroke-width="1"/>
+    <text x="757" y="226" text-anchor="middle" class="mono-sm-bold y-key">converse</text>
+    <text x="757" y="242" text-anchor="middle" class="label-xs text-faint">no ticket</text>
+    <text x="757" y="266" text-anchor="middle" class="label-xs text-muted">greeting</text>
 
-    <!-- ── Branch B: escalate → ticket ────────────────────────── -->
-    <rect class="bg-raised stroke-dim" x="512" y="320" width="228" height="52" rx="8" stroke-width="1"/>
-    <text x="626" y="342" text-anchor="middle" class="mono-sm-bold y-str">escalate</text>
-    <text x="626" y="360" text-anchor="middle" class="label-xs text-faint">triage, then draft a ticket</text>
+    <!-- pass → answer -->
+    <polyline points="380,228 301,228 301,298" fill="none" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="340" y="222" text-anchor="middle" class="label-xs text-green">pass</text>
 
-    <line x1="626" y1="372" x2="626" y2="392" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+    <!-- falls short → Level 2 -->
+    <line x1="540" y1="252" x2="540" y2="290" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+    <text x="548" y="276" class="label-xs text-amber">falls short</text>
 
-    <rect class="bg-raised stroke-dim" x="512" y="394" width="228" height="52" rx="8" stroke-width="1"/>
-    <text x="626" y="416" text-anchor="middle" class="mono-sm-bold y-str">ticket</text>
-    <text x="626" y="434" text-anchor="middle" class="label-xs text-faint">POST on confirm · Idempotency-Key</text>
+    <!-- ── Level 2 ────────────────────────────────────────────── -->
+    <rect class="bg-surface stroke-dim" x="400" y="292" width="280" height="44" rx="8" stroke-width="1"/>
+    <text x="540" y="311" text-anchor="middle" class="mono-sm-bold y-key">rewrite</text>
+    <text x="540" y="328" text-anchor="middle" class="label-xs text-faint">semantic variants + exact keywords</text>
 
-    <!-- ── Outputs ────────────────────────────────────────────── -->
-    <line x1="336" y1="392" x2="336" y2="462" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <rect class="bg-output stroke-green" x="222" y="464" width="228" height="26" rx="6" stroke-width="1"/>
-    <text x="336" y="481" text-anchor="middle" class="label-sm text-green" font-weight="500">Cited answer</text>
+    <line x1="540" y1="336" x2="540" y2="350" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <line x1="626" y1="446" x2="626" y2="462" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
-    <rect class="bg-surface stroke-amber" x="512" y="464" width="228" height="26" rx="6" stroke-width="1"/>
-    <text x="626" y="481" text-anchor="middle" class="label-sm text-amber" font-weight="500">Filed ticket · after user confirms</text>
+    <rect class="bg-surface stroke-dim" x="400" y="352" width="280" height="44" rx="8" stroke-width="1"/>
+    <text x="540" y="371" text-anchor="middle" class="mono-sm-bold y-key">hybrid_retrieve</text>
+    <text x="540" y="388" text-anchor="middle" class="label-xs text-faint">pgvector + Postgres full-text · rank fusion</text>
+
+    <line x1="540" y1="396" x2="540" y2="410" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+
+    <rect class="bg-surface stroke-accent" x="380" y="412" width="320" height="48" rx="8" stroke-width="1.5" filter="url(#glow)"/>
+    <text x="540" y="432" text-anchor="middle" class="label-sm text-primary" font-weight="600">regrade → decide_level2 · plain Python</text>
+    <text x="540" y="450" text-anchor="middle" class="mono-xs text-accent">groundedness ≥ 0.60</text>
+
+    <!-- pass → answer -->
+    <polyline points="380,436 301,436 301,374" fill="none" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="340" y="430" text-anchor="middle" class="label-xs text-green">pass</text>
+
+    <!-- falls short → Level 3 -->
+    <line x1="540" y1="460" x2="540" y2="498" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+    <text x="548" y="484" class="label-xs text-amber">falls short</text>
+
+    <!-- ── answer (shared by both levels) ─────────────────────── -->
+    <rect class="bg-output stroke-green" x="226" y="300" width="150" height="72" rx="8" stroke-width="1"/>
+    <text x="301" y="320" text-anchor="middle" class="mono-sm-bold y-key">answer</text>
+    <text x="301" y="338" text-anchor="middle" class="label-xs text-green">cited, streamed</text>
+    <text x="301" y="352" text-anchor="middle" class="label-xs text-faint">search_result blocks</text>
+    <text x="301" y="366" text-anchor="middle" class="label-xs text-faint">no tools in the request</text>
+
+    <!-- ── Level 3 ────────────────────────────────────────────── -->
+    <rect class="bg-raised stroke-dim" x="400" y="500" width="280" height="44" rx="8" stroke-width="1"/>
+    <text x="540" y="519" text-anchor="middle" class="mono-sm-bold y-str">escalate</text>
+    <text x="540" y="536" text-anchor="middle" class="label-xs text-faint">draft the ticket · offer it</text>
+
+    <line x1="540" y1="544" x2="540" y2="558" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+
+    <rect class="bg-surface stroke-amber" x="400" y="560" width="280" height="44" rx="8" stroke-width="1"/>
+    <text x="540" y="579" text-anchor="middle" class="mono-sm-bold y-str">ticket</text>
+    <text x="540" y="596" text-anchor="middle" class="label-xs text-faint">interrupt() · files after the user confirms</text>
 
     <!-- ── Durable step trail ─────────────────────────────────── -->
-    <rect class="bg-raised stroke-dim" x="222" y="502" width="518" height="28" rx="6" stroke-width="1" stroke-dasharray="3 2"/>
-    <text x="481" y="520" text-anchor="middle" class="label-xs text-muted">
-      Run.steps · each stage commits on its own session before the next one starts
+    <rect class="bg-raised stroke-dim" x="226" y="618" width="568" height="26" rx="6" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="510" y="635" text-anchor="middle" class="label-xs text-muted">
+      Run.steps · one entry per node, committed before the next · a LangGraph checkpoint after every node
     </text>
 
-    <!-- ── Corpus input (top right) ───────────────────────────── -->
-    <g transform="translate(790, 72)">
+    <!-- ── Corpus (top right) ─────────────────────────────────── -->
+    <g transform="translate(830, 84)">
       <rect class="bg-surface stroke-dim" width="150" height="82" rx="8" stroke-width="1"/>
       <text x="75" y="26" text-anchor="middle" class="label-sm text-muted">Corpus</text>
       <text x="75" y="44" text-anchor="middle" class="mono-xs text-faint">Google Cloud docs</text>
-      <text x="75" y="60" text-anchor="middle" class="mono-xs text-faint">chunk → embed</text>
-      <text x="75" y="75" text-anchor="middle" class="label-xs text-faint">pgvector · per client_id</text>
+      <text x="75" y="60" text-anchor="middle" class="mono-xs text-faint">vectors + tsvector</text>
+      <text x="75" y="75" text-anchor="middle" class="label-xs text-faint">Postgres · per client_id</text>
     </g>
-    <line x1="788" y1="113" x2="634" y2="105" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <line x1="828" y1="106" x2="684" y2="106" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
+    <polyline points="905,168 905,374 684,374" fill="none" class="stroke-dim-line" stroke-width="1.5" marker-end="url(#arrow-dim)"/>
 
-    <!-- ── Ticket service (right) ─────────────────────────────── -->
-    <g transform="translate(790, 388)">
+    <!-- ── Ticket service (bottom right) ──────────────────────── -->
+    <g transform="translate(830, 550)">
       <rect class="bg-surface stroke-amber" width="150" height="64" rx="8" stroke-width="1"/>
       <text x="75" y="24" text-anchor="middle" class="label-sm text-muted">Ticket service</text>
       <text x="75" y="42" text-anchor="middle" class="mono-xs text-faint">separate process</text>
       <text x="75" y="57" text-anchor="middle" class="label-xs text-faint">assigns the ticket id</text>
     </g>
-    <line x1="744" y1="420" x2="786" y2="420" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+    <line x1="680" y1="582" x2="826" y2="582" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
 
-    <!-- ── Step labels ────────────────────────────────────────── -->
-    <text x="20"  y="150" class="label-xs text-faint">1. Author config</text>
-    <text x="206" y="66"  class="label-xs text-faint">2. Stages run in a fixed order</text>
-    <text x="206" y="222" class="label-xs text-accent">3. The branch is code, not a model choice</text>
-    <text x="206" y="562" class="label-xs text-faint">4. Nothing is lost if the process dies mid-run</text>
+    <!-- ── Caption ────────────────────────────────────────────── -->
+    <text x="210" y="684" class="label-xs text-accent">
+      Every route is a Python function · LangGraph owns checkpoints and the pause · nothing is filed until the user confirms
+    </text>
   </svg>
 </div>
 
@@ -160,7 +188,6 @@
 
   /* ── Stroke classes ──────────────────────────────────────────── */
   .stroke-accent      { stroke: #6366f1; }
-  .stroke-accent-soft { stroke: #6366f1; }
   .stroke-dim         { stroke: var(--svg-stroke); }
   .stroke-green       { stroke: var(--svg-green-text); }
   .stroke-amber       { stroke: #f59e0b; }
@@ -173,7 +200,6 @@
   .text-primary { fill: var(--svg-text); }
   .text-muted   { fill: var(--svg-text-muted); }
   .text-faint   { fill: var(--svg-text-faint); }
-  .text-dim     { fill: var(--svg-text-dim); }
   .text-accent  { fill: #6366f1; }
   .text-green   { fill: var(--svg-green-text); }
   .text-amber   { fill: #f59e0b; }
