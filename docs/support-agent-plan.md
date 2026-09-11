@@ -1,5 +1,10 @@
 # Support Agent: four-week implementation plan
 
+> **Superseded 2026-09-11.** The pipeline this plan builds was replaced by the three-tier
+> LangGraph support graph (D10, PR #6). The plan stays as the record of how the week-1 design
+> was reasoned. For what runs today, see [`decisions.md`](decisions.md) D10 and the docs page
+> *From Pipeline to Graph*.
+
 **Status:** week 1 complete (gates G1.1–G1.4 verified 2026-08-30) · **Drafted:** 2026-08-30 ·
 **Resequenced 2026-08-31:** measurement moved ahead of durability — see *Why this order changed*.
 

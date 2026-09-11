@@ -1,0 +1,224 @@
+---
+title: One Question, End to End
+description: The support graph in one pass. Three tiers of escalation, every route a Python function, and the claim each boundary exists to support.
+order: 8
+group: The Support Graph
+---
+
+import ArchDiagram from '@/components/ArchDiagram.astro';
+
+This is the hub for the graph engine. It follows one question from HTTP to answer, names the nodes on the way, and hands each one to the page that owns it.
+
+The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations. When the first search cannot ground an answer, it searches again a different way. When that fails too, it offers a drafted ticket the user confirms. The engine is `agent/graph.py`, built on LangGraph.
+
+## At a glance
+
+```
+          User question
+                │
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 1 · RAG                ├──────────────────▶│ Cited answer   │
+│ search the docs, grade them  │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 2 · Corrective RAG     ├──────────────────▶│ Cited answer   │
+│ rewrite, search again        │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐   user says yes   ┌────────────────┐
+│ Level 3 · Human              ├──────────────────▶│ Ticket filed   │
+│ draft a ticket, offer it     │                   └────────────────┘
+└──────────────────────────────┘
+```
+
+A question moves down a level only when the one above falls short, and Python decides each move. A greeting never moves down: it gets a short reply at Level 1 and no ticket.
+
+The detailed diagram adds every node, both decision points, and the step trail:
+
+<ArchDiagram />
+
+---
+
+## The claim the design has to support
+
+**Escalation is not the model's decision.**
+
+Every boundary below follows from that sentence. A free-form tool-use loop cannot make the claim. Put the ticket tool in the model's tool list and the model chooses when to file, so "why did it escalate?" has no answer better than "the prompt said so."
+
+So this client runs a second engine. `agent.mode: graph` is a LangGraph state graph, and every route through it is chosen by a plain Python function:
+
+```python
+def decide_level1(*, top_similarity, score, n_hits, cfg) -> tuple[str, str]: ...
+def decide_level2(*, score, n_hits, cfg) -> tuple[str, str]: ...
+```
+
+Four properties fall out of the structure rather than out of prompting:
+
+- **Retrieval always happens.** It is a node, not a tool the model may skip, so there is always something to grade.
+- **The answering model is starved of tools.** It is sent no tool definitions, so it cannot escalate, and it cannot decline to answer by escalating instead.
+- **Nothing is filed until the user says yes.** The graph pauses on the offer. A confirmation resumes it.
+- **Every node commits its step before the next starts,** so a crash leaves the finished nodes on the record.
+
+> **The loop still exists.** `agent.mode: loop` is the default engine, used by the dormant clients in `config/disabled/`. Both engines emit the same SSE event contract, so the frontend renders either without knowing which ran. See [Agent Loop](/configent/docs/agent-loop).
+
+---
+
+## Three tiers
+
+| Tier | Nodes | Leaves the graph when | Otherwise |
+|---|---|---|---|
+| **Level 1 · RAG** | `retrieve` → `grade` | Both signals clear: `answer`. A greeting: `converse` | Level 2 |
+| **Level 2 · corrective RAG** | `rewrite` → `hybrid_retrieve` → `regrade` | Groundedness clears: `answer` | Level 3 |
+| **Level 3 · human** | `escalate` → `ticket` | The user confirms, and the ticket is filed | The offer waits |
+
+Most questions never leave Level 1. Level 2 is a second search of a different shape, and it runs once. Level 3 is the only tier that ends with a person.
+
+---
+
+## The nodes
+
+`app/routers/clients.py` dispatches on `agent.mode` to `stream_graph()`, which runs these:
+
+| Node | Model call | Owns | Page |
+|---|---|---|---|
+| `retrieve` | none | Embed, search pgvector, drop weak hits. Emits **signal 1** | [Retrieval](/configent/docs/retrieval) |
+| `grade`, `regrade` | structured output | Rate groundedness (**signal 2**) and triage the turn. One function, two nodes | [Grading](/configent/docs/grading) |
+| *the routes* | none | `decide_level1` and `decide_level2`, called inside the grade node | [The Guardrail](/configent/docs/escalation-guardrail) |
+| `converse` | none | Send the grader's reply to a greeting. No passages, no ticket | [Grading](/configent/docs/grading#converse-is-the-one-ungrounded-path) |
+| `rewrite`, `hybrid_retrieve` | structured output, then none | Reformulate the question, then search dense and keyword and fuse by rank | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
+| `answer` | citations | Answer from whichever tier's passages cleared, with no tools in the request | [Answering](/configent/docs/answering) |
+| `escalate` → `ticket` | structured output, then none | Draft the ticket, pause on `interrupt()`, POST from Python once the user confirms | [Escalation & Ticket](/configent/docs/escalation-ticket) |
+| the step trail | none | One durable entry per node, committed before the next starts | [Runs & Durability](/configent/docs/runs-and-durability) |
+
+Read them in that order and you have read the engine.
+
+---
+
+## Four questions, four paths
+
+A real run against the demo stack (Haiku 4.5, Voyage, Postgres, the mock ticket service) on 2026-09-11:
+
+| Message | Path | Outcome | Cost |
+|---|---|---|---|
+| "My Cloud Run container fails to start — what does the PORT error mean?" | `retrieve` 0.62 → `grade` 0.95 → `answer` | Answer, 2 citations | $0.026 |
+| "hi" | `retrieve` 0 hits → `grade` kind=conversation → `converse` | Converse, no ticket | $0.006 |
+| "so is that the same as the health check timing out?" (a follow-up) | `retrieve` 0.36 → `grade` 0.15 → `rewrite` → `hybrid_retrieve` → `regrade` 0.95 → `answer` | Answer at Level 2, 3 citations | $0.039 |
+| "Can you raise my Cloud Run instance quota for europe-west1?" | `retrieve` 0.50 → `grade` 0.05 → Level 2 → `regrade` 0.05 → `escalate` | Ticket offer, filed as `PLATFORM-1042` on confirm | $0.031 |
+
+---
+
+## What LangGraph owns, and what it doesn't
+
+LangGraph provides the mechanism. Every decision stays in this repo's Python.
+
+| Concern | LangGraph | This repo |
+|---|---|---|
+| **Which node runs next** | Follows the edge the state names | `decide_level1` and `decide_level2` write `state["route"]` |
+| **Saving progress** | A checkpoint after every node (`durability="sync"`) | Nothing |
+| **Waiting for the user** | `interrupt()` pauses, `Command(resume=True)` continues | `confirm_ticket()` checks the run before it resumes |
+| **Streaming** | A custom stream writer | Nodes write the same SSE tuples as before |
+| **Model calls** | Nothing | The Anthropic SDK, called directly |
+| **The trail the UI shows** | Nothing | `RunRecorder` writes `runs.steps` |
+
+- **Why a framework now.** The two things LangGraph gives this graph are the two things the retired pipeline built by hand: resumable state (`RunRecorder` plus `Run.state`) and a confirm endpoint reading a parked draft. The full comparison, and every decision in the change: [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph).
+- **Why not LangChain model wrappers.** Top-level `search_result` blocks and `citations_delta` streaming have to behave exactly as they do in the loop. Calling the SDK inside the node guarantees that.
+- **Why the edges are not model-chosen.** A model picking the next node is the loop engine with extra steps. The edge function only reads a string Python already wrote.
+
+---
+
+## Why the first stage is retrieval, not an intent router
+
+The conventional support-bot shape puts classification first. An NLU router (Dialogflow, Rasa, or an LLM doing the same job) reads the turn, assigns an intent such as `greeting`, `faq` or `handoff_request`, and dispatches to a flow. The LLM-era variant drops the router and hands one conversational model a set of tools, letting it decide when to search and when to escalate.
+
+Both are reasonable. Neither is used here, and the reasons are worth stating.
+
+### A router in front is a model in front of the guardrail
+
+A router upstream of retrieval does not remove the escalate/answer decision from a model. It relocates it: earlier, to a different model, with less evidence. A mis-route skips retrieval and grading altogether, so the two signals the guardrail is built from are never produced. The failure is silent, because a router reports an intent, not low confidence.
+
+The decide functions run *after* retrieval, so they decide with evidence. A router has the question text. The guardrail has the question text **and** what the corpus returned for it: "the deployment docs came back at 0.50 similarity and the grader rates them 0.05 for supporting *this* question." Similarity alone would have answered that one wrong.
+
+### Retrieval-first gets a second chance; a router doesn't
+
+A weak first retrieval is not final. Level 2 rewrites the question with the conversation in view and searches again before any human is involved. A router commits to a flow before any evidence exists, so it has nothing to correct.
+
+### It taxes the path that matters
+
+A router is a model call on every turn, including the ordinary documented questions that make up most traffic. It buys nothing on those, which were always going to retrieve, and it adds latency and cost to the interaction the product is judged on.
+
+The counterpoint is real: retrieval-first embeds and searches a turn like `hey`, which a router would skip. An embedding call and a pgvector query cost a fraction of the classifier call that would avoid them.
+
+### A taxonomy is a maintained object
+
+Intents drift from how people type. Somebody owns the label set, the training examples, and the arbitration when two intents overlap. Two thresholds in a YAML file, swept offline against a golden set, are a smaller thing to own and a falsifiable one.
+
+### When a router *is* the right answer
+
+When routing selects between genuinely different flows: password reset, order status, refund, cancellation, each with its own tools and policies. Classification does real work there, because text is the only evidence available before committing to a branch. This agent has two destinations, the documentation or a human, and the evidence already decides between them.
+
+### What this costs, and where the fix goes
+
+A graph whose first move is always retrieval has nowhere obvious to put a turn that is not a question. `hey` and `thanks` retrieve nothing, and in the first build every one of them filed a ticket.
+
+The fix keeps the ordering. The grade call returns a `kind` field alongside its confidence, and it runs after retrieval with the passages in view. A greeting costs one grade call and leaves at Level 1: $0.006 and 3.6 s in the live run. See [Grading → Triage rides on the grade call](/configent/docs/grading#triage-rides-on-the-grade-call).
+
+---
+
+## The two API constraints that set the boundaries
+
+Both were verified against the Messages API before the build. Between them they explain why the nodes are cut where they are.
+
+- **`search_result` blocks are valid as top-level user content.** They do not have to arrive inside a `tool_result`, so retrieval can be a node while citations keep working exactly as they do in the loop.
+- **Citations and `output_config.format` cannot be combined.** The API returns 400. The split falls along node lines: `grade`, `rewrite` and `escalate` take structured output, and `answer` takes citations.
+
+> **The final response is assembled, not generated.** No single model call can return citations and a schema, so Python builds the response from the checkpointed state. The contract is constructed rather than hoped for.
+
+---
+
+## Errors
+
+On failure `stream_graph` emits an `error` event instead of `done` and marks the run `failed`. The HTTP status went out long before anything could fail, so the SSE channel is the only way to tell the client. A generator that simply stops looks like a finished turn from the browser's side. Event contract: [SSE Streaming](/configent/docs/sse-streaming).
+
+`GraphCrash` is the one exception the graph deliberately does not catch. `CRASH_AFTER=grade` kills the turn after the grade step is streamed, to prove the step trail survives. See [Runs & Durability](/configent/docs/runs-and-durability#what-crashing-proves-today).
+
+---
+
+## What is config and what is code
+
+The whole client is one YAML file:
+
+```yaml
+client_id: gcp-platform-support
+agent:
+  mode: graph
+  model: claude-haiku-4-5-20251001
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+  corrective:
+    enabled: true
+    query_rewrites: 3
+```
+
+Config decides *which* engine, *which* model, *where* the thresholds sit, and whether Level 2 runs. Code decides the graph's shape and who picks each route. Adding a client is a YAML file, a corpus and a prompt directory, with no Python. See [Adding a New Use Case](/configent/docs/adding-a-use-case).
+
+> **A graph client carries no `agent.tools` key.** Retrieval is a node and the ticket executor is invoked from Python, so no tool definition is ever sent. `agent.tools` is read only by `loop.py`. See [Retrieval → Retrieval is a node, not a tool](/configent/docs/retrieval#retrieval-is-a-node-not-a-tool).
+
+---
+
+## Trade-offs I would raise myself
+
+- **Level 2 costs a question that ends with a human two more model calls.** A rewrite, a regrade and one embedding call run before the ticket offer: $0.031 for the quota question. The answerable Level 1 path makes the same calls it always did.
+- **Still no multi-hop.** Level 2 is one more search, not a loop. The loop engine exists for clients that need the other trade.
+- **Level 2 answers rest on the grader alone.** The cosine floor gates Level 1 only, because keyword matches carry no similarity. The answer is still cited from the passages.
+- **The grader is a model judging a model's inputs.** It is cheap and narrow, which is why it works. It is a second model call, not a proof.
+- **No resume after a crash.** Checkpoints are written after every node, but nothing reads them back except the ticket confirmation.
+- **The escalation copy assumes a project-specific question.** An out-of-scope product like Cloud SQL gets the same "depends on your own project" wording as a quota request.
+
+---
+
+**Next:** [Retrieval](/configent/docs/retrieval), the first node and the first of the two guardrail signals.

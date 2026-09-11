@@ -16,10 +16,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     </h1>
 
     <p class="subline">
-      Configent runs a support agent as an explicit pipeline. It answers from your
-      documentation with citations, and offers a drafted ticket when a question depends on
-      something the documentation cannot know — a branch in Python, not a choice the
-      model makes. Nothing is filed until the person asking says so.
+      Configent runs a support agent as a three-tier graph. It answers from your
+      documentation with citations, searches again when the first attempt falls short, and
+      offers a drafted ticket when the documentation cannot know the answer. Every route is
+      Python, not a choice the model makes. Nothing is filed until the person asking says so.
     </p>
 
     <div class="callout">
@@ -63,14 +63,17 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   <span class="y-key">source</span><span class="y-colon">:</span> <span class="y-str">corpora/gcp-platform-support/</span>
 
 <span class="y-key">agent</span><span class="y-colon">:</span>
-  <span class="y-key">mode</span><span class="y-colon">:</span> <span class="y-str">pipeline</span>
+  <span class="y-key">mode</span><span class="y-colon">:</span> <span class="y-str">graph</span>
   <span class="y-key">model</span><span class="y-colon">:</span> <span class="y-str">claude-haiku-4-5-20251001</span>
   <span class="y-cmt"># discard weak retrieval</span>
   <span class="y-key">retrieval_drop_floor</span><span class="y-colon">:</span> <span class="y-num">0.3</span>
-  <span class="y-cmt"># escalate on weak retrieval</span>
+  <span class="y-cmt"># level 1 falls short on weak retrieval</span>
   <span class="y-key">escalate_below</span><span class="y-colon">:</span> <span class="y-num">0.45</span>
-  <span class="y-cmt"># escalate on weak grounding</span>
-  <span class="y-key">confidence_threshold</span><span class="y-colon">:</span> <span class="y-num">0.6</span></code></pre>
+  <span class="y-cmt"># either level falls short on weak grounding</span>
+  <span class="y-key">confidence_threshold</span><span class="y-colon">:</span> <span class="y-num">0.6</span>
+  <span class="y-cmt"># search again before offering a ticket</span>
+  <span class="y-key">corrective</span><span class="y-colon">:</span>
+    <span class="y-key">enabled</span><span class="y-colon">:</span> <span class="y-num">true</span></code></pre>
     </div>
 
   </div>

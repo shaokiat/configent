@@ -8,7 +8,8 @@ group: Overview
 <div class="lead">
   Configent is a multi-tenant RAG assistant platform where a client is a YAML file, not a codebase.
   The reference client is a Google Cloud support agent that answers from documentation with
-  citations, and offers a drafted ticket when it can't.
+  citations, searches again when the first attempt falls short, and offers a drafted ticket
+  when it still can't.
 </div>
 
 ---
@@ -19,8 +20,36 @@ Four requirements, and every design decision below traces back to one of them.
 
 1. **Answer only from the corpus, with citations.** An uncited claim is a failure, not a style choice.
 2. **Know when it cannot answer.** The interesting half of a support agent is the refusal, and that decision has to be explainable after the fact.
-3. **Serve many clients from one deployment.** Adding a tenant is a config file, a corpus, and a prompt — no Python.
+3. **Serve many clients from one deployment.** Adding a tenant is a config file, a corpus and a prompt, with no Python.
 4. **Leave a record.** Every turn has to be auditable, and the record has to survive the process dying mid-turn.
+
+---
+
+## The support agent at a glance
+
+```
+          User question
+                │
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 1 · RAG                ├──────────────────▶│ Cited answer   │
+│ search the docs, grade them  │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐      grounded     ┌────────────────┐
+│ Level 2 · Corrective RAG     ├──────────────────▶│ Cited answer   │
+│ rewrite, search again        │                   └────────────────┘
+└───────────────┬──────────────┘
+                │ falls short
+                ▼
+┌──────────────────────────────┐   user says yes   ┌────────────────┐
+│ Level 3 · Human              ├──────────────────▶│ Ticket filed   │
+│ draft a ticket, offer it     │                   └────────────────┘
+└──────────────────────────────┘
+```
+
+Each level answers if it can and hands down only what it can't. A Python function chooses every arrow; the model chooses none. The walkthrough is [The Support Graph](/configent/docs/support-graph).
 
 ---
 
@@ -31,16 +60,17 @@ Next.js (chat UI)          apps/web
       │  SSE
 FastAPI                    apps/api
       ├─ config registry    one YAML per client, validated at startup
-      ├─ engine             loop  ─or─  pipeline   (agent.mode)
-      │     ├─ retrieval    Voyage embed → pgvector cosine, scoped by client_id
-      │     ├─ Anthropic    Messages API — citations, structured output
+      ├─ engine             loop  ─or─  graph   (agent.mode)
+      │     ├─ retrieval    Voyage embed → pgvector cosine, + Postgres full-text at Level 2
+      │     ├─ Anthropic    Messages API: citations, structured output
+      │     ├─ LangGraph    graph engine only: checkpoints and the ticket pause
       │     └─ tools        plain dict registry
-      └─ Postgres           conversations · messages · chunks+embeddings · runs · traces
+      └─ Postgres           conversations · messages · chunks · runs · checkpoints · traces
                                   │  HTTP
                             mock ticket service   apps/mockticket
 ```
 
-One Postgres holds the relational data *and* the vectors. One process serves every tenant. The only external calls are Anthropic, Voyage, and the ticket service.
+One Postgres holds the relational data, the vectors, the full-text index and the graph checkpoints. One process serves every tenant. The only external calls are Anthropic, Voyage and the ticket service.
 
 ---
 
@@ -48,16 +78,17 @@ One Postgres holds the relational data *and* the vectors. One process serves eve
 
 `agent.mode` picks which engine serves a client. Both emit the same SSE events, so the frontend never knows which ran.
 
-| | `loop` | `pipeline` |
+| | `loop` | `graph` |
 |---|---|---|
-| Control flow | Model picks tools until it stops | Fixed stages, one branch |
-| Escalation decided by | The model | An `if` statement in Python |
+| Control flow | The model picks tools until it stops | Three tiers of nodes, routed by Python functions |
+| Escalation decided by | The model | `decide_level1` and `decide_level2` |
+| Runtime | Hand-written, one file | LangGraph, for checkpoints and the pause only |
 | Good for | Open-ended work | A decision you have to justify |
-| Walkthrough | [Agent Loop](/configent/docs/agent-loop) | [The Answer Pipeline](/configent/docs/pipeline) |
+| Walkthrough | [Agent Loop](/configent/docs/agent-loop) | [The Support Graph](/configent/docs/support-graph) |
 
-The support agent runs `pipeline` because its whole claim is that escalation is not the model's decision — and a model holding the ticket tool cannot make that claim.
+The support agent runs `graph` because its whole claim is that escalation is not the model's decision, and a model holding the ticket tool cannot make that claim.
 
-**[The Answer Pipeline](/configent/docs/pipeline) is the section to read next.** Its hub page follows one question end to end; the six pages under it own one component each.
+**[The Support Graph](/configent/docs/support-graph) is the section to read next.** Its hub page follows one question end to end, and each page under it owns one component.
 
 ---
 
@@ -65,12 +96,12 @@ The support agent runs `pipeline` because its whole claim is that escalation is 
 
 | Layer | Choice | Why this one |
 |---|---|---|
-| LLM | Anthropic Claude (Haiku 4.5) | Native citations and structured output are both first-class; Haiku is cheap enough to spend a second call on scoring |
-| Embeddings | Voyage `voyage-3` | Anthropic has no embeddings API, so a third party is required either way. Voyage exposes `input_type` query/document — [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
-| Vector store | pgvector | Already inside the Postgres we need. A dedicated vector DB would be a [second service for no gain at this scale](/configent/docs/ingestion-pipeline#voyage-ai-vs-pgvector) |
+| LLM | Anthropic Claude (Haiku 4.5) | Native citations and structured output are both first-class; Haiku is cheap enough to spend extra calls on grading and rewriting |
+| Embeddings | Voyage `voyage-3` | Anthropic has no embeddings API, so a third party is required either way. Voyage exposes `input_type` query/document, a [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
+| Vector and keyword search | pgvector + Postgres full-text | Already inside the Postgres we need. A dedicated search service would be a [second system for no gain at this scale](/configent/docs/ingestion-pipeline#voyage-ai-vs-pgvector) |
 | Backend | FastAPI + async SQLAlchemy | Native `async` all the way down, which is what makes concurrent tool calls and SSE cheap |
-| Agent runtime | Hand-rolled | No LangChain or LangGraph. [One file](/configent/docs/agent-loop) covers tool execution, cost, caching, and streaming — a framework would hide exactly the parts worth showing |
-| Transport | SSE | One-way server push over plain HTTP. WebSockets buy nothing when only the server talks — [details](/configent/docs/sse-streaming) |
+| Agent runtime | Hand-written loop; LangGraph for the support graph | The loop stays [one readable file](/configent/docs/agent-loop). The graph uses LangGraph for exactly two mechanisms and keeps model calls and routing in plain code. [Why the switch](/configent/docs/from-pipeline-to-graph) |
+| Transport | SSE | One-way server push over plain HTTP. WebSockets buy nothing when only the server talks. [Details](/configent/docs/sse-streaming) |
 | Frontend | Next.js + Tailwind | Client-agnostic; branding comes from the API, not the build |
 
 ---
@@ -81,13 +112,15 @@ The questions worth asking about this project, and the page that answers each.
 
 | Question | Page |
 |---|---|
-| How does one question actually flow through it? | [One Question, End to End](/configent/docs/pipeline) |
-| Why is retrieval a function call instead of a tool? | [Retrieval](/configent/docs/retrieval) |
-| Why score groundedness separately instead of one big prompt? | [Scoring](/configent/docs/scoring) |
+| How does one question actually flow through it? | [One Question, End to End](/configent/docs/support-graph) |
+| Why is retrieval a node instead of a tool? | [Retrieval](/configent/docs/retrieval) |
+| Why grade groundedness separately, and how are greetings kept out of the queue? | [Grading](/configent/docs/grading) |
 | Why two escalation signals rather than one? | [The Guardrail](/configent/docs/escalation-guardrail) |
+| Why search a second time before involving a human, and why not the web? | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
 | How do you stop the model from escalating on its own? | [Answering](/configent/docs/answering) |
-| What happens if the process dies mid-turn? | [Runs & Durability](/configent/docs/runs-and-durability) |
 | How do you avoid filing the same ticket twice? | [Escalation & Ticket](/configent/docs/escalation-ticket) |
+| Why adopt LangGraph after building without it? | [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph) |
+| What happens if the process dies mid-turn? | [Runs & Durability](/configent/docs/runs-and-durability) |
 | How is one tenant's corpus kept out of another's? | [Multi-Tenancy](/configent/docs/multi-tenancy) |
 | Why `voyage-3`, and why not a dedicated vector DB? | [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed) |
 | How does a long conversation not get linearly more expensive? | [Prompt Caching](/configent/docs/prompt-caching) |
@@ -99,19 +132,23 @@ The questions worth asking about this project, and the page that answers each.
 
 The terms the rest of the docs use without re-defining.
 
-- **Client / tenant:** one assistant — corpus, prompt, tools, branding, limits — defined by one YAML file in `config/`.
+- **Client / tenant:** one assistant (corpus, prompt, tools, branding, limits) defined by one YAML file in `config/`.
 - **Chunk:** a passage of a document (512 tokens for the support agent), embedded and stored as a row in pgvector. Retrieval returns chunks, not documents, so a citation can point at a paragraph.
-- **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. Ranges 0–1; the support agent discards anything below `0.3`.
-- **Groundedness:** a separate cheap-model score for whether the retrieved passages actually support an answer. Similarity says "close"; groundedness says "sufficient".
-- **Stage:** one step of the pipeline engine — `retrieve`, `score`, `answer`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
+- **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. Ranges 0 to 1; the support agent discards anything below `0.3`.
+- **Groundedness:** a cheap-model score for whether the retrieved passages actually support an answer. Similarity says "close"; groundedness says "sufficient".
+- **Node:** one unit of the graph engine: `retrieve`, `grade`, `converse`, `rewrite`, `hybrid_retrieve`, `regrade`, `answer`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
+- **Level / tier:** Level 1 is RAG, Level 2 is corrective RAG, Level 3 is a human. A turn only moves down when the level above falls short.
 - **The two signals:** retrieval similarity (is anything in the corpus close?) and groundedness (is it enough?). One catches a corpus with nothing relevant; the other catches a corpus with something close but wrong.
-- **The branch:** the single `if` statement that decides answer-or-escalate. Everything else is a stage; only this decides.
-- **Outcome:** how a turn ends — `answer` (cited, from the corpus), `converse` (a greeting, a thank-you, a meta-question or a follow-up handled from context; no ticket), or `ticket` (a real support request the corpus cannot answer; a ticket is drafted, offered, and filed on the user's confirmation). Three-way, because "not answerable from the docs" and "escalate" are not the same thing.
-- **Triage:** the `route` field on the escalate stage's structured output, which separates those last two. It rides inside a call that already happens rather than sitting in front of retrieval as an intent classifier.
+- **The routes:** `decide_level1` and `decide_level2`, the plain functions that choose every edge. Nodes do work; only these decide.
+- **Corrective retrieval:** Level 2. A rewrite of the question with the conversation in view, then hybrid search.
+- **Hybrid search:** dense vector search per query variant plus Postgres full-text search on exact keywords, fused by reciprocal rank.
+- **Outcome:** how a turn ends: `answer` (cited, from the corpus), `converse` (a greeting, a thank-you or a meta-question; no ticket), or `ticket` (a real support request neither level could answer; a ticket is drafted, offered, and filed on the user's confirmation).
+- **Triage:** the `kind` field on the grade call, which separates `converse` from everything else. It runs after retrieval, with the passages in view, rather than as an intent classifier in front.
 - **Tool starvation:** the answering call is sent no tool definitions at all, so escalation is unreachable from inside the model. A guarantee, not a prompt instruction.
-- **Run:** one pipeline turn, and the durable step trail it leaves in Postgres.
-- **Tool:** a function the model can ask the backend to call. The pipeline's answering call is sent none.
+- **Run:** one graph turn, and the durable step trail it leaves in Postgres.
+- **Checkpoint:** LangGraph's saved graph state after a node, keyed by the run id. What lets a turn pause on a ticket offer and continue in a later request.
+- **Tool:** a function the model can ask the backend to call. The graph's answering call is sent none.
 
 ---
 
-**Start here:** [One Question, End to End](/configent/docs/pipeline) for the design, or [Quickstart](/configent/docs/getting-started) to run it locally.
+**Start here:** [One Question, End to End](/configent/docs/support-graph) for the design, or [Quickstart](/configent/docs/getting-started) to run it locally.

@@ -114,9 +114,10 @@ For the full SSE event contract and frontend consumption, see [SSE Streaming](/c
 
 ## `POST /api/c/{client_id}/runs/{run_id}/ticket`
 
-Files the ticket a pipeline turn proposed, on the user's confirmation. Pipeline clients only.
+Files the ticket a graph turn proposed, on the user's confirmation. Graph clients only. The
+turn ended with the graph paused on `interrupt()`, and this request resumes it.
 
-**No request body.** The draft lives on the run, put there by the `escalate` stage; the
+**No request body.** The draft lives in the run's checkpoint, put there by the `escalate` node; the
 request supplies a run id and nothing else. That is the point: a client can accept an offer
 but cannot author a ticket, so no caller can post a subject and category of its own choosing
 into the platform team's queue.

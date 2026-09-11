@@ -140,6 +140,26 @@ async def test_a_real_escalation_proposes_and_waits(h):
 
 
 @pytest.mark.asyncio
+async def test_asking_for_a_ticket_proposes_one_instead_of_claiming_it(h):
+    """Seen live: the grader called this conversation, and the converse reply said
+    "opening a ticket now" with nothing filed."""
+    history = [
+        {"role": "user", "content": "my Cloud Run service won't start"},
+        {"role": "assistant", "content": "That depends on your project — I can't see it."},
+    ]
+    events = await h.turn(
+        "ok can you open a ticket with the platform team",
+        history=history, grade=grade(0.0, kind="handoff"),
+        draft={"subject": "Cloud Run service fails to start", "product_area": "cloud_run"},
+    )
+    assert outcome_of(events) == "ticket"
+    assert h.hybrid_requests == []  # no second search for an answer they didn't ask for
+    assert len(named(events, "ticket_proposal")) == 1
+    assert h.ticket_calls == []
+    assert "cloud run service won't start" in dict(h.calls)["draft"].lower()
+
+
+@pytest.mark.asyncio
 async def test_the_user_is_asked_before_anything_is_filed(h):
     events = await h.turn(
         "our IAM binding looks right but we still get permission denied",
