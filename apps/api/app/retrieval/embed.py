@@ -61,6 +61,11 @@ async def embed(texts: list[str]) -> list[list[float]]:
 
 async def embed_query(query: str) -> list[float]:
     """Embed a single query string with the query input_type for better retrieval."""
-    client = _get_client()
-    embeddings = await _embed_with_retry(client, [query], "query")
-    return embeddings[0]
+    return (await embed_queries([query]))[0]
+
+
+async def embed_queries(queries: list[str]) -> list[list[float]]:
+    """Embed several queries in one call — Level 2 embeds all its rewrites together."""
+    if not queries:
+        return []
+    return await _embed_with_retry(_get_client(), queries, "query")

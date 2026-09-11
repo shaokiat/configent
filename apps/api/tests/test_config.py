@@ -72,18 +72,54 @@ def test_gcp_platform_support_config_loads():
     assert cfg.corpus.source == "corpora/gcp-platform-support/"
 
 
-def test_pipeline_clients_declare_no_tools():
-    """A pipeline client must not list tools.
+def test_graph_clients_declare_no_tools():
+    """A graph client must not list tools.
 
-    `agent.tools` is read only by loop.py, so anything listed on a pipeline client is
-    dead config that reads like a capability. Retrieval is a function call and the
-    ticket executor is invoked from Python.
+    `agent.tools` is read only by loop.py, so anything listed on a graph client is dead
+    config that reads like a capability. Retrieval is a node and the ticket executor is
+    invoked from Python.
     """
     from app.config.registry import get_registry
 
     for cfg in get_registry().all():
-        if cfg.agent.mode == "pipeline":
+        if cfg.agent.mode == "graph":
             assert cfg.agent.tools == [], (
-                f"{cfg.client_id} runs the pipeline engine but lists "
+                f"{cfg.client_id} runs the graph engine but lists "
                 f"{cfg.agent.tools} — those definitions are never sent to a model"
             )
+
+
+def test_gcp_platform_support_runs_the_graph_with_corrective_retrieval():
+    from app.config.registry import get_registry
+
+    agent = get_registry().get("gcp-platform-support").agent
+    assert agent.mode == "graph"
+    assert agent.corrective.enabled is True
+    assert agent.corrective.query_rewrites == 3
+
+
+def _agent(**overrides):
+    from app.config.schema import AgentConfig
+
+    return AgentConfig(model="m", system_prompt_file="p.md", **overrides)
+
+
+def test_corrective_defaults_on():
+    assert _agent(mode="graph").corrective.enabled is True
+
+
+def test_query_rewrites_is_bounded():
+    with pytest.raises(ValueError):
+        _agent(mode="graph", corrective={"query_rewrites": 9})
+
+
+def test_escalation_floor_below_drop_floor_is_rejected_for_graph_clients():
+    """A floor that can never fire is a silently disabled guardrail, so it fails loudly."""
+    with pytest.raises(ValueError, match="can never fire"):
+        _agent(mode="graph", retrieval_drop_floor=0.5, escalate_below=0.4)
+
+
+def test_the_retired_pipeline_mode_fails_loudly():
+    """A config still saying `pipeline` must not quietly fall back to another engine."""
+    with pytest.raises(ValueError, match="graph"):
+        _agent(mode="pipeline")
