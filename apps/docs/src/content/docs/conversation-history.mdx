@@ -1,11 +1,11 @@
 ---
 title: Conversation History
-description: How conversations are created, how message history is loaded and sent to the model, and how turns are persisted.
+description: How conversations are created, how prior messages reach each model call, and how a turn is persisted.
 order: 19
 group: Cross-Cutting
 ---
 
-Every turn loads the full prior message history from Postgres, appends it to the API request, and persists new messages after the loop completes.
+Every turn loads the conversation's prior messages from Postgres. The answering call receives all of them; the grade, rewrite and draft calls receive the last six as a transcript. The graph's turn is written to the database after the graph stops.
 
 ---
 
@@ -13,69 +13,85 @@ Every turn loads the full prior message history from Postgres, appends it to the
 
 ```
 conversations
-  id          UUID PK
-  client_id   VARCHAR(64)   — scopes the conversation to one client
-  started_at  DATETIME
-  total_cost  FLOAT         — accumulated USD across all turns
-  total_tokens INT
+  id            UUID PK
+  client_id     VARCHAR(64)   scopes the conversation to one client
+  started_at    DATETIME
+  total_cost    FLOAT         accumulated USD across all turns
+  total_tokens  INT
 
 messages
   id              INTEGER PK autoincrement
   conversation_id UUID FK → conversations.id (CASCADE DELETE)
-  role            VARCHAR(32)   — "user" | "assistant"
-  content         JSON          — raw Anthropic content block list
-  citations       JSON          — { segments: [...] } on final assistant messages
+  role            VARCHAR(32)   "user" | "assistant"
+  content         JSON          the message text
+  citations       JSON          { segments: [...] } on assistant messages
+  run_id          VARCHAR(64)   the graph run that produced an assistant message
   created_at      DATETIME
 ```
 
-The DB stores messages in raw Anthropic wire format, preserving `tool_use` and `tool_result` blocks verbatim. No lossy serialization.
+`run_id` is the join from a reply back to its step trail in `runs`.
 
 ---
 
 ## Creating a conversation
 
-On the first turn, pass `conversation_id: null`. The API creates a new `Conversation` row and returns the UUID in the `done` SSE event:
+On the first turn, pass `conversation_id: null`. The API creates a `Conversation` row and returns its id in the `run` and `done` SSE events:
 
 ```json
-// POST /api/c/acme-fab/chat/stream
-{ "message": "What is the seal replacement interval?", "conversation_id": null }
+// POST /api/c/gcp-platform-support/chat/stream
+{ "message": "What does the PORT error mean?", "conversation_id": null }
 
 // done event
-{ "conversation_id": "3f2a1b4c-...", "input_tokens": 1240, ... }
+{ "conversation_id": "3f2a1b4c-...", "run_id": "9c1e...", "outcome": "answer", ... }
 ```
 
-Include the returned `conversation_id` on every subsequent request to continue the conversation.
+Include the returned `conversation_id` on every later request to continue the conversation.
+
+> **The conversation row commits before the graph runs.** The step trail is written on its own
+> session (D3) and references the conversation, so the parent must already be visible to that
+> session. A turn that then fails leaves an empty conversation, not corrupted history.
 
 ---
 
 ## Loading history
 
-At the start of each turn, `_prepare_conversation()` loads all prior messages ordered by `id` and prepends them to the request:
+`prepare_conversation()` in `agent/common.py` loads every prior message, ordered by `id`:
 
 ```python
-history = SELECT messages WHERE conversation_id = ? ORDER BY id
-messages = history + [{"role": "user", "content": new_user_message}]
+history = SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id
 ```
 
-The loop sends the full history on every turn. No sliding window or summarization. As conversations grow, prompt caching absorbs the cost of resending historical messages. See [Prompt Caching](/configent/docs/prompt-caching).
+| Call | What it sees of the history |
+|---|---|
+| `answer` | Every prior message, then the passages and the question |
+| `grade`, `rewrite`, `escalate` | The last 6 text turns, pasted into the user message as a transcript |
+
+There is no sliding window or summarization. The history is not cached; see [Prompt Caching](/configent/docs/prompt-caching).
 
 ---
 
 ## Persisting a turn
 
-After the agent loop completes, `_persist_turn()` writes everything added after `history + user message`:
+After the graph stops, `stream_graph()` adds two rows and commits once:
 
-- Intermediate assistant messages with `tool_use` blocks
-- Intermediate user messages with `tool_result` blocks
-- The final assistant message (gets a `citations` field with the frontend-friendly `segments` list)
+- **The user message**, as sent.
+- **The assistant reply**, with its `segments` and the `run_id`.
 
-On any exception, the session rolls back. The conversation history retains all messages from prior turns.
+A confirmed ticket adds a third. `confirm_ticket()` writes the confirmation as its own assistant message, so reloading the conversation shows it and not just the offer.
+
+On any exception the request session rolls back and the stream ends with `error`. The step trail survives, because it was never written on that session.
+
+---
+
+## Reloading a conversation
+
+`GET /api/c/{client_id}/conversations/{conversation_id}` returns each user message's text and each assistant message's segments. An assistant message with a `run_id` also carries that run's steps, loaded from `runs` in one query, so the trail renders on reload exactly as it did live.
 
 ---
 
 ## Multi-client isolation
 
-`conversation_id` is a global UUID, but every history query scopes to `client_id` via the `Conversation` row's foreign key. A conversation created under `acme-fab` cannot continue as `meridian-insurance`. The router validates `client_id` against the config registry on every request.
+`conversation_id` is a global UUID, but every load checks the `Conversation` row's `client_id`. A conversation created under one client returns 404 when requested under another. The streaming endpoint runs that check before the response starts, so the rejection is a plain HTTP 404 rather than an `error` event.
 
 ---
 
@@ -84,21 +100,15 @@ On any exception, the session rolls back. The conversation history retains all m
 ```
 POST /api/c/:client_id/chat/stream
         │
-        ├─ _prepare_conversation(db, client_id, conversation_id)
-        │       if None   → INSERT conversation, return []
-        │       if set    → SELECT messages ORDER BY id, return history
+        ├─ ownership + budget check          own short-lived session, before streaming
         │
-        ├─ INSERT user message
-        │
-        ├─ agent loop (1–8 iterations)
-        │       each call: [system] + [tools] + history + [new user msg] + [tool turns]
-        │       tool turns accumulate in-memory; not persisted until commit
-        │
-        ├─ _persist_turn(db, conversation_id, history_len, result)
-        │       INSERT assistant + tool_result messages
-        │       final assistant message gets citations attached
-        │
-        └─ db.commit() → yield done event
+        └─ stream_graph()
+              ├─ prepare_conversation()       new → INSERT + commit · else SELECT history
+              ├─ RunRecorder.start()          INSERT runs row
+              ├─ graph.astream(...)           nodes stream steps, text, citations
+              ├─ INSERT user + assistant messages
+              ├─ update_conversation_totals()
+              └─ db.commit() → yield done
 ```
 
 ---
@@ -106,7 +116,7 @@ POST /api/c/:client_id/chat/stream
 ## Querying history directly
 
 ```sql
-SELECT role, created_at, jsonb_pretty(content::jsonb)
+SELECT role, created_at, content, run_id
 FROM messages
 WHERE conversation_id = '3f2a1b4c-...'
 ORDER BY id;

@@ -1,44 +1,33 @@
 ---
 title: Example Configs
-description: Live client configs from the repo, plus aspirational examples showing the planned config surface.
+description: The live client config from the repo, and what each part of it is doing.
 order: 7
 # group: Getting Started  # hidden from sidebar — reachable by link
 ---
 
 <div class="lead">
-  This page has two sections. <strong>Live configs</strong> are the actual YAML files running in the project today —
-  copy these and they will work. <strong>Planned examples</strong> show the target config surface once
-  per-source ingestion, webhook tools, and additional shared tools are implemented.
+  The repo ships one client, <strong>Cloud Platform Support</strong>. This page shows its config
+  and what each part is for. To build your own, follow
+  <a href="/configent/docs/adding-a-use-case">Adding a New Use Case</a>.
 </div>
-
----
-
-## Live configs
-
-Only **Cloud Platform Support** is loaded by the demo — it is the one config directly in `config/`.
-Acme Fab Equipment and Meridian Insurance are complete, working clients whose configs sit in
-`config/disabled/`, which the registry does not read; move a file back up to `config/` and restart
-the API to bring one online.
 
 ---
 
 ## Cloud Platform Support
 
-**Use case:** A deployment and infrastructure support agent, and the client the current build is
-organised around. **DeployBot** answers Cloud Run, GKE and IAM questions from public Google Cloud
-documentation with citations, and offers a drafted ticket when a question depends on the user's
-own project — quota, billing, IAM policy, cluster state. Nothing is filed until the user
-confirms, and a turn that is not a support request at all — a greeting, a thank-you, a
-follow-up — is answered conversationally and files nothing. This is the assistant powering the
-[demo](/configent/demo).
+**Use case:** A deployment and infrastructure support agent. **DeployBot** answers Cloud Run, GKE
+and IAM questions from public Google Cloud documentation with citations, and offers a drafted
+ticket when a question depends on the user's own project — quota, billing, IAM policy, cluster
+state. Nothing is filed until the user confirms, and a turn that is not a support request at
+all, such as a greeting or a thank-you, is answered conversationally and files nothing. This is
+the assistant powering the [demo](/configent/demo).
 
 **Corpus:** A curated snapshot of public Google Cloud documentation (CC BY 4.0, attributed per
-file) in `corpora/gcp-platform-support/` — 10 files across Cloud Run, GKE, and IAM.
+file) in `corpora/gcp-platform-support/`: 10 files across Cloud Run, GKE, and IAM.
 
 **What's notable:**
-- The only client running `mode: graph`. Every route, from answer to a second search to a
-  human, is a Python function, not a tool the model may call. See
-  [The Support Graph](/configent/docs/support-graph).
+- Every route, from answer to a second search to a human, is a Python function, not a tool the
+  model may call. See [The Support Graph](/configent/docs/support-graph).
 - Three thresholds instead of one: `retrieval_drop_floor` discards weak chunks, and
   `escalate_below` and `confidence_threshold` decide when a tier falls short. See
   [The Guardrail](/configent/docs/escalation-guardrail).
@@ -47,7 +36,7 @@ file) in `corpora/gcp-platform-support/` — 10 files across Cloud Run, GKE, and
 - The corpus contains nothing about any user's own project, which is what makes the escalation
   branch load-bearing rather than decorative. "What does the platform do?" is answerable;
   "what is *my* project doing?" structurally is not.
-- `create_escalation_ticket` makes a real HTTP POST to a
+- The ticket client, `app/tickets.py`, makes a real HTTP POST to a
   [separate service](/configent/docs/mock-ticket-service), which assigns the ticket id.
 
 ```yaml
@@ -66,18 +55,15 @@ corpus:
     overlap: 64
 
 agent:
-  mode: graph
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
-  effort: low
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
   confidence_threshold: 0.6
   corrective:
     enabled: true
     query_rewrites: 3
-  # No `tools:` key — see the note below.
 
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
@@ -88,311 +74,16 @@ limits:
   daily_budget_usd: 2.00
 ```
 
-> **No `agent.tools` key, deliberately.** In graph mode retrieval is a node and the
-> ticket executor is invoked from Python, so no tool definition is ever sent to a model for this
-> client. `agent.tools` is read only by `loop.py`, so listing tools here would be dead config that
-> reads like a capability. See [Retrieval → Retrieval is a node, not a tool](/configent/docs/retrieval#retrieval-is-a-node-not-a-tool).
+> **No `tools`, `mode` or `effort` keys.** Retrieval is a node and the ticket client is called
+> from Python, so no tool definition is ever sent to a model for this client. The schema
+> rejects all three keys: they belonged to the retired loop engine. See
+> [Retrieval → Retrieval is a node, not a tool](/configent/docs/retrieval#retrieval-is-a-node-not-a-tool).
 
 ---
 
-## Acme Fab Equipment
+## Earlier clients
 
-**Use case:** Field service and procurement assistant for industrial fabrication equipment.
-Engineers and technicians ask about maintenance procedures, error codes, and spare part specifications.
-The `pricing_lookup` tool handles real-time quote requests without leaving the chat.
-
-**Corpus:** Product manuals, spare parts catalog, maintenance runbooks — all PDFs dropped into `corpora/acme-fab/`.
-
-**What's notable:**
-- Three tools active: `search_docs` for retrieval, `get_document` when a technician needs a full procedure section, and `pricing_lookup` for part quotes
-- `model: claude-haiku-4-5-20251001` — fast and cheap is the right call for factual lookup over a focused corpus
-- `daily_budget_usd: 2.00` is a conservative guard for a low-volume internal tool
-
-```yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
-
-branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: AcmeAssist
-
-corpus:
-  source: corpora/acme-fab/
-  chunking:
-    chunk_size: 800
-    overlap: 100
-
-agent:
-  model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
-    - pricing_lookup
-
-evals:
-  golden_set: evals/acme-fab/golden.jsonl
-  judge_model: claude-sonnet-4-6
-
-limits:
-  rate_limit_per_minute: 20
-  daily_budget_usd: 2.00
-```
-
-**What the `pricing_lookup` tool does:**
-Given a part number and quantity, it returns unit price, volume discount eligibility, discounted total,
-and lead time. The system prompt instructs the agent to confirm the part number via `search_docs` first so it can verify the correct SKU before quoting.
-
-**Things to try in the demo:**
-- "What's the maintenance interval for the PX-900 chamber seals?"
-- "Price me 12 units of the chamber seal kit"
-- "The LT-200 is throwing error E07 — what does that mean?"
-
----
-
-## Meridian Insurance
-
-**Use case:** Customer-facing policy assistant for a home insurance product (HomeShield Plus).
-Policyholders ask about coverage, excess amounts, and claim procedures. The `coverage_check` tool
-returns a deterministic, auditable verdict for specific claim scenarios — no hallucinated policy clauses.
-
-**Corpus:** Policy wording document, product disclosure statement, claims guide — all PDFs in `corpora/meridian-insurance/`.
-
-**What's notable:**
-- `coverage_check` is a client-specific tool with hardcoded policy logic, intentionally separate from the LLM
-  to ensure regulatory consistency. The system prompt instructs the agent to always cross-reference verdicts against
-  `search_docs` so the user gets both a structured result and a cited policy clause.
-- The config includes `get_document` so the agent can surface the full section when a user wants to read the exact policy wording
-- Same chunking defaults as acme-fab — 800/100 works well for dense legal documents
-- `model: claude-haiku-4-5-20251001` — like the other shipped clients, a fast, cheap model handles grounded Q&A well
-
-```yaml
-client_id: meridian-insurance
-name: "Meridian Insurance"
-
-branding:
-  logo: assets/meridian-insurance/logo.svg
-  primary_color: "#1A6B3C"
-  assistant_name: MeridianAssist
-
-corpus:
-  source: corpora/meridian-insurance/
-  chunking:
-    chunk_size: 800
-    overlap: 100
-
-agent:
-  model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/meridian-insurance.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
-    - coverage_check
-
-evals:
-  golden_set: evals/meridian-insurance/golden.jsonl
-  judge_model: claude-sonnet-4-6
-
-limits:
-  rate_limit_per_minute: 20
-  daily_budget_usd: 2.00
-```
-
-**What the `coverage_check` tool does:**
-Takes a named scenario key (`burst_pipe_sudden`, `gradual_seepage`, `unlisted_jewellery_over_5000`)
-and returns a structured verdict: `covered`, `excess_usd`, the relevant `clause`, and a plain-language summary.
-The three scenarios are enough to demo the core claim pattern (covered / excluded / sub-limit).
-
-**Things to try in the demo:**
-- "My pipe burst overnight — am I covered?"
-- "I had a slow leak under the sink for the past month, will that be covered?"
-- "I have a ring worth $8,000 that I didn't list separately on my policy"
-
----
-
-## Adding a new client
-
-Adding a new assistant is a no-code operation: drop documents into a corpus folder, write a system
-prompt, write one YAML config, and ingest. The engine validates the config at startup and raises
-an error immediately if any key is wrong or any tool name is unknown.
-
-The **[Adding a New Use Case](/configent/docs/adding-a-use-case)** guide walks the full recipe —
-using the Acme Fab Equipment bot above as the worked example — including the one decision that
-matters: whether your assistant can run on the shared tools alone, or needs a client-specific tool.
-
----
-
-## Planned examples
-
-> **Not yet runnable.** These configs use features not yet implemented: per-source ingestion types (`pdf`, `url`, `text`), generic shared *webhook* tools
-> that call live endpoints (`create_support_ticket`, `get_product_pricing`,
-> `send_email_notification`), and the `temperature` key. See the implementation gaps below each example.
-
----
-
-### Product documentation assistant
-
-**Use case:** Customers or internal teams ask questions about a product. The assistant retrieves
-answers from manuals, FAQs, and release notes. It files support tickets for unresolved issues.
-
-**Requires:** per-source ingestion (`type: url`), `create_support_ticket` shared tool, `temperature` key.
-
-```yaml
-# ⚠ Not yet runnable — see implementation gaps above
-client_id: product-docs
-name: "Product Documentation Assistant"
-
-branding:
-  logo: assets/product-docs/logo.svg
-  primary_color: "#0ea5e9"
-  assistant_name: DocsAssist
-
-corpus:
-  sources:
-    - type: pdf
-      path: docs/user-manual.pdf
-    - type: pdf
-      path: docs/release-notes.pdf
-    - type: url
-      url: https://docs.example.com/api-reference
-  chunking:
-    chunk_size: 512
-    overlap: 64
-
-agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/product-docs.md
-  max_tokens: 4096
-  effort: medium
-  temperature: 0.2
-  tools:
-    - name: search_docs
-      enabled: true
-    - name: create_support_ticket
-      enabled: true
-      endpoint: https://api.example.com/support/tickets
-      auth_header: Bearer <your-api-token>
-
-limits:
-  rate_limit_per_minute: 30
-  daily_budget_usd: 5.00
-```
-
----
-
-### Agentic research workflow
-
-**Use case:** An internal research assistant that synthesises across reports, papers, and internal
-analysis to answer multi-hop questions. Designed for strategy teams preparing client deliverables.
-
-**Requires:** `temperature` key, higher `chunk_size` support (already works — no gap there).
-The main gap is there's no `top_k` config key; retrieval depth is hardcoded to `k=5` default in the tool.
-
-```yaml
-# ⚠ Partially runnable — temperature key not yet supported
-client_id: research-assistant
-name: "Internal Research Assistant"
-
-branding:
-  logo: assets/research/logo.svg
-  primary_color: "#8b5cf6"
-  assistant_name: ResearchAssist
-
-corpus:
-  source: corpora/research/
-  chunking:
-    chunk_size: 768
-    overlap: 128
-
-agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/research-assistant.md
-  max_tokens: 8192
-  effort: high
-  temperature: 0.15
-  tools:
-    - search_docs
-    - get_document
-
-limits:
-  rate_limit_per_minute: 10
-  daily_budget_usd: 10.00
-```
-
----
-
-### Support bot with live webhooks
-
-**Use case:** A generic support bot whose tools call live endpoints. Today every business-system
-tool is per-client Python: `pricing_lookup` is acme-fab specific with a hardcoded catalog, and
-`create_escalation_ticket` posts to a mock ticket service whose URL is baked into the module.
-This planned version replaces both patterns with **generic shared webhook tools** pointed at real
-endpoints from YAML, with no per-client code.
-
-**Requires:** `create_support_ticket` and `get_product_pricing` as generic shared webhook tools,
-plus per-source ingestion and the `temperature` key.
-
-```yaml
-# ⚠ Not yet runnable — webhook tools not yet implemented
-client_id: support-bot
-name: "Support Assistant"
-
-branding:
-  logo: assets/support-bot/logo.svg
-  primary_color: "#10b981"
-  assistant_name: SupportAssist
-
-corpus:
-  sources:
-    - type: pdf
-      path: docs/product-faq.pdf
-    - type: text
-      content: |
-        Pricing: Starter $29/mo · Business $99/mo · Enterprise: custom
-        Refund policy: 30-day full refund on all plans.
-  chunking:
-    chunk_size: 384
-    overlap: 48
-
-agent:
-  model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/support-bot.md
-  max_tokens: 2048
-  effort: low
-  temperature: 0.4
-  tools:
-    - name: search_docs
-      enabled: true
-    - name: create_support_ticket
-      enabled: true
-      endpoint: https://api.example.com/tickets
-      auth_header: Bearer <your-api-token>
-    - name: get_product_pricing
-      enabled: true
-      endpoint: https://api.example.com/pricing
-
-limits:
-  rate_limit_per_minute: 60
-  daily_budget_usd: 20.00
-```
-
----
-
-## Implementation gaps to close
-
-To make the planned examples runnable, the following changes are needed:
-
-| Gap | Where to change |
-|-----|-----------------|
-| Per-source ingestion (`type: pdf/url/text`) | Replace `CorpusConfig.source: str` with `sources: list[SourceConfig]` in `schema.py`; update `ingest.py` to dispatch by type; add URL fetching with `httpx` + `BeautifulSoup` |
-| `temperature` key | Add `temperature: float = 0.3` to `AgentConfig` in `schema.py`; pass to `_request_kwargs` in `loop.py` |
-| Tool config objects (`{name, enabled, endpoint}`) | Replace `tools: list[str]` with `list[ToolConfig]` in `AgentConfig`; update registry to pass `endpoint`/`auth_header` to executors |
-| `create_support_ticket` as a generic shared webhook tool | The closest shipped thing is `apps/api/app/tools/gcp_platform/create_escalation_ticket.py`, which POSTs to a mock ticket service at a URL fixed in the module. The gap is a generic, shared version whose `endpoint` comes from config |
-| `get_product_pricing` shared tool | Add `apps/api/app/tools/shared/get_product_pricing.py` as a generic HTTP tool; register in `tools/registry.py` |
-| `send_email_notification` shared tool | Add `apps/api/app/tools/shared/send_email_notification.py`; register in `tools/registry.py` |
-| `top_k` per-client config | Add to `CorpusConfig`; thread through to `search.py` |
+**Acme Fab Equipment** and **Meridian Insurance** ran on the free-form loop engine, each with its
+own tool (`pricing_lookup`, `coverage_check`). Neither was loaded by the demo, and both were
+removed with the loop in D11. Their configs, corpora and prompts are recoverable from git:
+see [Retiring the Loop](/configent/docs/retiring-the-loop#recovering-the-retired-design).

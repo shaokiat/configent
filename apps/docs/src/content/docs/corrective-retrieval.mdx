@@ -91,7 +91,7 @@ The textbook corrective tier reaches for the web. For this corpus it would add l
 ### One pass
 
 - **No loop from `regrade` back to `rewrite`.** Level 2 runs once, so its cost is bounded and its trail has a fixed shape.
-- **Multi-hop is still the loop engine's job.** A question that needs a search to inform the next search wants a model holding a tool.
+- **No multi-hop.** A question that needs one search to inform the next wants a model holding a tool. The engine that did that was [retired](/configent/docs/retiring-the-loop).
 
 ---
 

@@ -20,14 +20,12 @@ group: Getting Started
 | `name` | `string` | ✓ | Human-readable client name. Used in logs and the UI header. |
 
 ```yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
 ```
 
-> This page uses **Acme Fab Equipment** as its running example: a documents-plus-one-tool client on
-> the free-form [agent loop](/configent/docs/agent-loop), which exercises every key on this page.
-> The demo deployment serves Cloud Platform Support alone, so Acme's config currently sits in
-> `config/disabled/` — a directory the registry does not read. Write your own config to `config/`.
+> This page uses **Cloud Platform Support**, the client the repo ships, as its running example.
+> Its file is `config/gcp-platform-support.yaml`.
 
 ---
 
@@ -37,15 +35,20 @@ Controls UI presentation for this client.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `branding.logo` | `string` | ✓ | Path to the client logo, relative to the repo root (e.g. `assets/acme-fab/logo.svg`). |
-| `branding.primary_color` | `string` | ✓ | Hex colour used for the chat UI accent (e.g. `"#1B4F8A"`). |
-| `branding.assistant_name` | `string` | ✓ | Name displayed in the chat header and used in the system prompt. |
+| `branding.logo` | `string` | ✓ | Path to the client logo, relative to the repo root. |
+| `branding.primary_color` | `string` | ✓ | Hex colour used for the chat UI accent. |
+| `branding.assistant_name` | `string` | ✓ | Name displayed in the chat header. |
+| `branding.tagline` | `string` | | Empty-state copy. Unset, the UI falls back to a generic line. |
+| `branding.suggested_questions` | `list[string]` | | Up to 5 starter questions shown on an empty chat. |
 
 ```yaml
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: AcmeAssist
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
+  suggested_questions:
+    - "My Cloud Run container fails to start — what does the PORT error mean?"
+    - "Can you raise my Cloud Run instance quota for europe-west1?"
 ```
 
 ---
@@ -62,10 +65,10 @@ Configures the document source and chunking settings.
 
 ```yaml
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/gcp-platform-support/
   chunking:
-    chunk_size: 800   # the default — whole procedure steps survive intact
-    overlap: 100
+    chunk_size: 512
+    overlap: 64
 ```
 
 **Supported file types:** `.pdf`, `.md` / `.markdown`, `.html` / `.htm`.
@@ -79,37 +82,35 @@ This requires a `VOYAGE_API_KEY` environment variable. The model is not configur
 
 ## `agent`
 
-Controls the engine, LLM, system prompt, and tool list for this client's agent.
+Controls the model, prompts and guardrail thresholds of this client's [support graph](/configent/docs/support-graph).
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `agent.mode` | `string` | `"loop"` | Which engine serves this client. `"loop"` is the free-form tool-use loop; `"graph"` is the three-tier support graph whose every route is a Python function. `"pipeline"`, the retired engine, is rejected at startup. See [The Support Graph](/configent/docs/support-graph). |
-| `agent.model` | `string` | — | Claude model ID (e.g. `claude-haiku-4-5-20251001`, what all shipped clients use). |
-| `agent.system_prompt_file` | `string` | — | Path to the system prompt file, relative to the repo root (e.g. `prompts/acme-fab.md`). Loaded at runtime, not inlined. |
-| `agent.max_tokens` | `int` | `4096` | Maximum output tokens per API call. |
-| `agent.effort` | `string` | `"medium"` | Claude extended-thinking effort level. One of `"low"`, `"medium"`, `"high"`, `"max"`. **Only applied on Sonnet 4+ and Opus 4+** — it is silently skipped for Haiku models (which all shipped clients use), so it is effectively inert today. See note below. |
-| `agent.tools` | `list[string]` | `[]` | Ordered list of tool names to register for this client. Only tools listed here are available to the agent. Unknown names fail at startup. **Read by `loop.py` only.** Omit it in `graph` mode, where retrieval is a node and the ticket executor is invoked from Python. |
-| `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. Applied by the graph's `retrieve` node and the dense half of Level 2; the loop's `search_docs` tool uses `search()`'s own `0.3` default instead. |
-| `agent.escalate_below` | `float` | `0.45` | Similarity below which the best surviving chunk **fails Level 1**. Graph mode only; Level 2 has no cosine floor. |
-| `agent.confidence_threshold` | `float` | `0.6` | Groundedness score below which a level **falls short**. Graph mode only; applies at both levels. |
-| `agent.corrective.enabled` | `bool` | `true` | Whether a turn that fails Level 1 gets [corrective retrieval](/configent/docs/corrective-retrieval) or goes straight to a ticket offer. Graph mode only. |
-| `agent.corrective.query_rewrites` | `int` | `3` | Query variants the Level 2 rewrite returns, each embedded and searched. Between 1 and 5. Graph mode only. |
+| `agent.model` | `string` | — | Claude model ID. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `claude-haiku-4-5-20251001`. |
+| `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
+| `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |
+| `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. Applied by `retrieve` and the dense half of Level 2. |
+| `agent.escalate_below` | `float` | `0.45` | Similarity below which the best surviving chunk **fails Level 1**. Level 2 has no cosine floor. |
+| `agent.confidence_threshold` | `float` | `0.6` | Groundedness score below which a level **falls short**. Applies at both levels. |
+| `agent.corrective.enabled` | `bool` | `true` | Whether a turn that fails Level 1 gets [corrective retrieval](/configent/docs/corrective-retrieval) or goes straight to a ticket offer. |
+| `agent.corrective.query_rewrites` | `int` | `3` | Query variants the Level 2 rewrite returns, each embedded and searched. Between 1 and 5. |
 
 ```yaml
 agent:
-  mode: graph
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
-  effort: low
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
   confidence_threshold: 0.6
   corrective:
     enabled: true
     query_rewrites: 3
-  # No `tools:` key: graph mode never sends tool definitions.
 ```
+
+> **Unknown keys fail at load.** `AgentConfig` forbids extra keys. `mode`, `tools` and `effort`
+> belonged to the [retired loop engine](/configent/docs/retiring-the-loop), and a config that
+> still sets one is rejected rather than silently ignored.
 
 > **Falling short of a threshold does not file a ticket.** At Level 1 it sends the turn to
 > Level 2, or to a conversational reply if the grader called it a greeting. At Level 2 it
@@ -118,39 +119,32 @@ agent:
 
 > **`escalate_below` must exceed `retrieval_drop_floor`.** They act on the same number at
 > different points: the drop floor discards, the escalate floor routes. If the escalate
-> floor were the lower of the two, it could never fire — every surviving hit is at or above
-> the drop floor by construction. The config validator rejects that relationship at
+> floor were the lower of the two, it could never fire, because every surviving hit is at or
+> above the drop floor by construction. The config validator rejects that relationship at
 > startup. See [The Guardrail](/configent/docs/escalation-guardrail).
 
-> **Graph mode expects four prompt files.** `agent.system_prompt_file` points at
-> `answer.md`; `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it in the same
-> directory.
+> **One pass, no iteration cap.** A turn runs at most seven nodes: Level 1, Level 2, the
+> ticket offer and the ticket itself.
 
-> **`effort` and Haiku:** extended thinking is only supported on Sonnet 4+ and Opus 4+. The loop
-> (`loop.py`) checks the model name and only sends `effort`/`thinking` when the model is *not* Haiku.
-> Every shipped client runs Haiku, so the loop accepts and validates the `effort` key but never sends it to the API. Switch a client to a Sonnet or Opus model and `effort` takes effect.
+---
 
-> **Prompt caching:** The system prompt is always cached at the turn breakpoint using
-> Anthropic's ephemeral cache. This is unconditional — no config needed. The loop sorts tool definitions alphabetically before each request to ensure a stable cache prefix.
+## Model pricing
 
-> **Max iterations:** The agent loop runs for a maximum of **8 iterations** regardless of config.
-> If the loop hasn't completed in 8 tool-call cycles it raises an error. Graph mode has no
-> iteration cap: it runs one pass, at most seven nodes per turn.
+```yaml
+# config/pricing/claude.yaml — USD per million tokens
+claude-haiku-4-5-20251001:
+  input: 1.00
+  output: 5.00
+  cache_write: 1.25   # the 5-minute TTL
+  cache_read: 0.10
+```
 
-### Available tools
+Every `cost_usd` in the system comes from this table: the step trail, the `done` event, the conversation total and the daily budget check. It is one file for the deployment, keyed by the exact model id a client config uses.
 
-| Tool name | Scope | Description |
-|-----------|-------|-------------|
-| `search_docs` | Shared | Semantic search over the client's pgvector namespace. Returns `search_result` blocks with citations enabled. Accepts `query` (required) and `k` (default 5, max 8). |
-| `get_document` | Shared | Retrieves full document text by `document_id` (as returned by `search_docs`). Use when a chunk doesn't contain enough context. |
-| `create_escalation_ticket` | `gcp-platform-support` | POSTs a ticket to the [mock ticket service](/configent/docs/mock-ticket-service) over HTTP with an idempotency key; the service assigns the id. In graph mode its definition is never sent to a model: Python calls the executor directly. |
-| `pricing_lookup` | `acme-fab` | Returns unit price, volume discount, and lead time for an Acme part number and quantity. |
-| `coverage_check` | `meridian-insurance` | Returns a structured coverage verdict for a named claim scenario against the HomeShield Plus policy. |
-
-`search_docs` and `get_document` are shared and can be added to any client. `create_escalation_ticket`,
-`pricing_lookup`, and `coverage_check` are client-specific — they contain hardcoded ticketing,
-catalog, or policy data specific to those clients. Adding a new client-specific tool requires adding
-a file under `apps/api/app/tools/<client_id>/` and registering it in `apps/api/app/tools/registry.py`.
+- **Checked in and dated.** Anthropic publishes prices on its [pricing page](https://platform.claude.com/docs/en/about-claude/pricing); no API returns them.
+- **Copy every column.** Cache rates are listed per model; don't derive them from a multiplier.
+- **An unpriced model fails startup.** The registry calls `price_for(agent.model)` for every client at load.
+- **An estimate, not the bill.** Billed cost comes from the Admin API cost report. See [Decisions → Known gaps](https://github.com/shaokiat/configent/blob/main/docs/decisions.md#part-3--known-gaps).
 
 ---
 
@@ -161,11 +155,11 @@ Controls per-client rate limiting and cost guardrails.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `limits.rate_limit_per_minute` | `int` | `20` | Maximum requests per minute for this client. |
-| `limits.daily_budget_usd` | `float` | `2.00` | Maximum spend in USD per day. Requests are rejected once the budget is exhausted. |
+| `limits.daily_budget_usd` | `float` | `2.00` | Maximum spend in USD per day, at the rates in `config/pricing/claude.yaml`. Requests are rejected once the budget is exhausted. |
 
 ```yaml
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```
 
@@ -173,16 +167,16 @@ limits:
 
 ## `evals` (optional)
 
-Configures automated evaluation against a golden Q&A set. Omit if not using evals.
+Configures automated evaluation against a golden set. Omit if not using evals.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `evals.golden_set` | `string` | — | Path to a `.jsonl` file of `{question, expected_answer}` pairs, relative to the repo root. |
+| `evals.golden_set` | `string` | — | Path to a `.jsonl` golden set, relative to the repo root. |
 | `evals.judge_model` | `string` | `claude-sonnet-4-6` | Claude model used as the LLM judge for eval scoring. |
 
 ```yaml
 evals:
-  golden_set: evals/acme-fab/golden.jsonl
+  golden_set: evals/gcp-platform-support/golden.jsonl
   judge_model: claude-sonnet-4-6
 ```
 
@@ -190,42 +184,43 @@ evals:
 
 ## Complete example
 
-This is the actual `acme-fab` client config from the repo (`config/disabled/acme-fab.yaml`):
+The shipped `config/gcp-platform-support.yaml`, with comments and the tagline trimmed:
 
 ```yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
 
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: "AcmeAssist"
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
   suggested_questions:
-    - "What's the preventive maintenance schedule for the PX-900?"
-    - "How much does the chamber seal kit cost and when does it need replacing?"
-    - "What safety precautions apply when venting the PX-900 chamber?"
+    - "My Cloud Run container fails to start — what does the PORT error mean?"
+    - "Why won't my GKE node pool scale down after I deleted the workload?"
+    - "Can you raise my Cloud Run instance quota for europe-west1?"
 
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/gcp-platform-support/
   chunking:
-    chunk_size: 800
-    overlap: 100
+    chunk_size: 512
+    overlap: 64
 
 agent:
   model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
-    - pricing_lookup
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+  corrective:
+    enabled: true
+    query_rewrites: 3
 
 evals:
-  golden_set: evals/acme-fab/golden.jsonl
+  golden_set: evals/gcp-platform-support/golden.jsonl
   judge_model: claude-sonnet-4-6
 
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```

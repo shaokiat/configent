@@ -18,19 +18,19 @@ answer(state)
   │
   ├─ answer_request_kwargs()
   │     search_result blocks (passages first) + the question (last)
-  │     system prompt, cached · history · no `tools` key
+  │     system prompt (cache breakpoint) · history · no `tools` key
   ▼
 Messages API (streaming, citations enabled)
   │  text_delta      ──▶ stream writer ──▶ SSE `text`
   │  citations_delta ──▶ stream writer ──▶ SSE `citation`, as it arrives
   ▼
-_collect_segments(response)             shared with loop.py
+collect_segments(response)              agent/common.py
   └─▶ state: answer · citations · segments · outcome="answer"
 ```
 
 There is no `tools` key in the request. Not an empty list: the key never appears, and neither does the ticket tool's name. A test asserts both on the real request.
 
-`_collect_segments()` is the loop engine's own function, so the renderer and the stored format do not depend on which engine ran.
+`collect_segments()` lives in `agent/common.py`, beside the conversation and cost helpers, so the stored `segments` format has one owner.
 
 ---
 
@@ -39,7 +39,7 @@ There is no `tools` key in the request. Not an empty list: the key never appears
 **"My Cloud Run container fails to start — what does the PORT error mean?"** A real run.
 
 - Level 1 passed it on similarity `0.62` and groundedness `0.95`, with five passages.
-- The request goes out as five `search_result` blocks followed by the question, plus a cached system prompt. No tools.
+- The request goes out as five `search_result` blocks followed by the question, plus the system prompt. No tools.
 - The reply streams as `text` events, and a `citation` event each time the model attributes a claim. Two arrived.
 - The step records `level: 1`, `n_citations: 2`, and the guardrail's sentence as its reasoning. The node took 2.5 s; the whole turn cost $0.026.
 
@@ -64,10 +64,10 @@ Prompting a model not to do something it can do is a request. Removing the capab
 
 ### The request itself
 
-- **`search_result` blocks go in as top-level user content.** They do not have to arrive inside a `tool_result`, so retrieval can be a node while citations work exactly as they do in the loop.
+- **`search_result` blocks go in as top-level user content.** They do not have to arrive inside a `tool_result`, so retrieval can be a node with no tool involved.
 - **Passages first, question last.** The evidence is context; the question is the instruction.
 - **Citations are enabled on every passage.** The API requires them on all search results in a request or none.
-- **The system prompt is cached.** One `cache_control` breakpoint on a block that does not change between turns. See [Prompt Caching](/configent/docs/prompt-caching).
+- **The system prompt carries a cache breakpoint.** It is inert on Haiku 4.5, whose minimum cacheable prefix is longer than `answer.md`. See [Prompt Caching](/configent/docs/prompt-caching).
 - **Deltas go through LangGraph's stream writer.** The node writes `("text", …)` and `("citation", …)` tuples, and `stream_graph()` forwards them unchanged. See [SSE Streaming](/configent/docs/sse-streaming#how-graph-nodes-stream).
 - **The response is assembled, not generated.** Citations and `output_config.format` cannot be combined, so Python builds the final response from state.
 - **This node never sees empty retrieval.** Both decide functions require at least one passage before they route here.

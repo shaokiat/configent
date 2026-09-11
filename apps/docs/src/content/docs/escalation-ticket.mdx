@@ -30,7 +30,7 @@ decide_level2 (or decide_level1, with corrective off) → "escalate" + why
                                 └─ error  → back to `ticket` · pauses again for a retry
 ```
 
-The draft call is given the message, the recent conversation and the guardrail's reason string. It is never asked whether to escalate. The ticket tool is registered like any other, but its definition is never sent to a model: Python calls the executor.
+The draft call is given the message, the recent conversation and the guardrail's reason string. It is never asked whether to escalate. There is no ticket tool: Python calls the ticket client, `app/tickets.py`, directly.
 
 ---
 
@@ -68,9 +68,9 @@ Filed a ticket                     PLATFORM-1042      ← after they click
 
 ### Python files the ticket, the model does not
 
-The ticket tool exists in the registry, and no model ever sees it.
+The ticket client has no tool definition at all, so no model can see it.
 
-| | **Direct executor call (built)** | Tool-use round trip |
+| | **Direct call from Python (built)** | Tool-use round trip |
 |---|---|---|
 | **Call sites to make idempotent** | Exactly one | As many as the model has turns |
 | **Can the model decline to file?** | No, it is not asked | Yes |

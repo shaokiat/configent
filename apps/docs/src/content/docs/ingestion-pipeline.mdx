@@ -124,19 +124,21 @@ Only changed files are re-processed and re-embedded on subsequent runs.
 
 ```bash
 cd apps/api
-python -m app.cli ingest --client acme-fab
+uv run python -m app.cli --client gcp-platform-support
 ```
 
 `--force` re-ingests all documents regardless of content hash:
 
 ```bash
-python -m app.cli ingest --client acme-fab --force
+uv run python -m app.cli --client gcp-platform-support --force
 ```
+
+The CLI has one command, so it takes no `ingest` subcommand.
 
 Sample output:
 
 ```
-Ingesting corpus for acme-fab...
+Ingesting corpus for gcp-platform-support...
 ┌─────────────────────────────────┬───────┐
 │ Metric                          │ Count │
 ├─────────────────────────────────┼───────┤

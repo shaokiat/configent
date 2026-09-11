@@ -5,7 +5,7 @@ order: 9
 group: The Support Graph
 ---
 
-`retrieve` is Level 1's first node and makes no model call. It embeds the message, runs a cosine scan over the client's chunks, and discards anything below the drop floor. The node lives in `agent/graph.py`; the search is `search()` in `retrieval/search.py`, shared with the loop engine's `search_docs` tool.
+`retrieve` is Level 1's first node and makes no model call. It embeds the message, runs a cosine scan over the client's chunks, and discards anything below the drop floor. The node lives in `agent/graph.py`; the search is `search()` in `retrieval/search.py`.
 
 The best surviving similarity is **signal 1** of the [guardrail](/configent/docs/escalation-guardrail).
 
@@ -24,7 +24,7 @@ retrieve(state)
 
 The node writes two things to state: the surviving hits, and `top_similarity`, which is `0.0` when nothing survived. Hits are stored as plain dicts (title, source URI, text, similarity) because the checkpointer saves state as JSON.
 
-`search()` has two other callers. The loop engine reaches it through `search_docs`, and Level 2 reuses its `_dense()` half inside `hybrid_search()`. See [Corrective Retrieval](/configent/docs/corrective-retrieval).
+Level 2 reuses the `_dense()` half of `search()` inside `hybrid_search()`. See [Corrective Retrieval](/configent/docs/corrective-retrieval).
 
 ---
 
@@ -52,7 +52,7 @@ Two turns from one conversation, with drop floor `0.3` and escalate below `0.45`
 
 Agentic retrieval is for decisions with more than one right answer. This one has one: the model always needs context, so letting it choose adds failure modes without adding capability.
 
-| | **Node (this graph)** | Tool call ([loop engine](/configent/docs/agent-loop)) |
+| | **Node (this graph)** | Tool call ([the retired loop](/configent/docs/retiring-the-loop)) |
 |---|---|---|
 | **Deciding to search** | Nothing to decide; it always happens | The model may skip it or mistime it |
 | **Answering from memory** | Impossible, grounding precedes the model | Models sometimes reply from parameters |

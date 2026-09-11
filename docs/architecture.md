@@ -1,11 +1,11 @@
 # Configent: Architecture
 
-A config-driven, multi-tenant RAG + agent platform. One codebase serves a branded,
-client-specific assistant per tenant, defined entirely by a YAML config file and a
-document corpus — no per-client code.
+A config-driven, multi-tenant RAG platform. One codebase serves a branded, client-specific
+support assistant per tenant, defined entirely by a YAML config file, a document corpus and
+a prompt directory — no per-client code.
 
-**Stack:** Next.js frontend, FastAPI backend, Anthropic Claude (Sonnet), Postgres +
-pgvector, Voyage AI embeddings.
+**Stack:** Next.js frontend, FastAPI backend, LangGraph, Anthropic Claude (Haiku 4.5),
+Postgres + pgvector, Voyage AI embeddings.
 
 ---
 
@@ -13,17 +13,18 @@ pgvector, Voyage AI embeddings.
 
 Given a client config file and a folder of documents, the system produces:
 
-1. A branded chat assistant (logo, colors, name, tone) at a client-specific route.
-2. A RAG pipeline over that client's document corpus, with citations in every answer.
-3. An agent loop with client-specific tools (a mock pricing API for one client, a
-   coverage checker for another, a support-ticket filer for a third).
+1. A branded chat assistant (logo, colors, name) at a client-specific route.
+2. A three-tier support graph over that client's corpus: a cited answer from retrieval, a
+   second corrective search when that falls short, and a drafted ticket the user confirms
+   when both do.
+3. Every route decided by a Python function over config thresholds, never by a model, with
+   a durable step trail per turn.
 4. Per-client rate limiting and a daily spend budget, enforced server-side.
-5. Per-span tracing (model calls and tool calls) with tokens, cache reads, cost, and
-   latency, rolled up into a running conversation total.
+5. Per-span tracing (model calls and ticket filings) with tokens, cache reads, cost priced
+   per model, and latency, rolled up into a running conversation total.
 
-Adding a new client requires no code changes for a documents-only assistant: drop
-documents in a folder, write one YAML file and one system prompt, run the ingestion
-command.
+Adding a new client requires no code changes: drop documents in a folder, write one YAML file
+and four prompts, run the ingestion command.
 
 ## 2. System architecture
 
@@ -32,24 +33,24 @@ command.
  │ Browser  │────────────▶│   Next.js   │────────▶│    FastAPI     │
  │          │             │  frontend   │         │    backend     │
  │ - Chat UI│   SSE       │             │         │                │
- │ - Client │◀────────────│ - Chat UI   │         │ - Agent loop   │
+ │ - Client │◀────────────│ - Chat UI   │         │ - Support graph│
  │  switcher│  streaming  │ - Branding  │         │ - RAG retrieval│
- └──────────┘             └─────────────┘         │ - Tool runtime │
+ └──────────┘             └─────────────┘         │ - Ticket client│
                                                    │ - Tracing      │
                                                    │ - Rate/budget  │
                                                    └───────┬────────┘
                                                            │
-                          ┌─────────────────┬──────────────┴───────────┐
-                          ▼                 ▼                          ▼
-                  ┌──────────────┐  ┌───────────────┐        ┌─────────────────┐
-                  │ Anthropic API│  │  Postgres +   │        │ Voyage AI       │
-                  │              │  │   pgvector    │        │ embeddings      │
-                  │ - Agent LLM  │  │               │        │                 │
-                  │ - Tool use   │  │ - Chunks +    │        │ - Used by       │
-                  │ - Citations  │  │   embeddings  │        │   ingestion +   │
-                  └──────────────┘  │ - Conversations│       │   query embed   │
-                                    │ - Traces      │        └─────────────────┘
-                                    └───────────────┘
+                 ┌──────────────────┬──────────────────┬───┴──────────────┐
+                 ▼                  ▼                  ▼                  ▼
+         ┌──────────────┐  ┌────────────────┐  ┌───────────────┐  ┌──────────────┐
+         │ Anthropic API│  │  Postgres +    │  │ Voyage AI     │  │ Ticket       │
+         │              │  │   pgvector     │  │ embeddings    │  │ service      │
+         │ - Grade      │  │                │  │               │  │ (mock, HTTP) │
+         │ - Rewrite    │  │ - Chunks       │  │ - Ingestion + │  └──────────────┘
+         │ - Draft      │  │ - Conversations│  │   query embed │
+         │ - Cited answer│ │ - Runs, traces │  └───────────────┘
+         └──────────────┘  │ - Checkpoints  │
+                           └────────────────┘
 
         Offline pipeline (CLI, run per client):
         corpora/<client>/ ──▶ ingest ──▶ chunk ──▶ embed ──▶ pgvector (scoped by client_id)
@@ -57,142 +58,130 @@ command.
 
 ### Request flow for one chat turn
 
-1. Browser sends the message plus `client_id` (from the URL path) to the FastAPI
-   backend, along with a `conversation_id` if continuing a thread.
-2. Backend loads the client config (system prompt, enabled tools, branding) and, if a
-   `conversation_id` is present, verifies it belongs to that client before loading its
-   history — a mismatch returns 404 rather than exposing another tenant's thread.
-3. The request is checked against that client's rate limit and daily budget; either
-   guard trips a 429 with a friendly JSON body before any model call is made.
-4. The agent loop calls the Anthropic API with the client's tool definitions,
-   streaming. The model issues tool calls (`search_docs`, `get_document`,
-   client-specific tools).
-5. `search_docs` runs vector search scoped to that client's rows in pgvector and
-   returns the chunks as `search_result` content blocks with citations enabled.
-   `get_document` resolves a document's full text from its `corpus://` source URI,
-   scoped to the same client.
-6. The final answer streams back to the browser via SSE. Citation deltas arrive
-   alongside text deltas and the frontend renders them as inline source popovers.
-7. Every model call and tool call is recorded as a trace row (tokens, cache reads,
-   computed cost, latency). The conversation's running `total_cost` and
-   `total_tokens` are updated, and the turn's cost is sent in the `done` SSE event.
+1. Browser sends the message plus `client_id` (from the URL path) to the FastAPI backend,
+   along with a `conversation_id` if continuing a thread.
+2. Backend loads the client config and, if a `conversation_id` is present, verifies it
+   belongs to that client — a mismatch returns 404 rather than exposing another tenant's
+   thread.
+3. The request is checked against that client's rate limit and daily budget; either guard
+   trips a 429 with a friendly JSON body before any model call is made.
+4. `retrieve` runs vector search scoped to that client's rows, and `grade` rates whether the
+   passages support an answer. A Python function routes the turn: answer, converse, search
+   again, or draft a ticket.
+5. An answer is streamed from the Anthropic API with the passages as `search_result` content
+   blocks and citations enabled, and with no tool definitions in the request.
+6. Steps, text deltas and citation deltas stream back to the browser via SSE. A ticket offer
+   arrives as a `ticket_proposal` event; the graph pauses until the user confirms.
+7. Every model call is recorded as a trace row (tokens, cache reads, cost, latency), each
+   node commits a step to the run, and the conversation's running totals are updated.
 
 ## 3. The client config schema
 
-One file fully defines a client. Validated with Pydantic at startup; a bad config
-fails loudly with a clear, field-named error, never at request time.
+One file fully defines a client. Validated with Pydantic at load; a bad config fails loudly
+with a clear, field-named error, never at request time.
 
 ```yaml
-# config/acme-fab.yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+# config/gcp-platform-support.yaml
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: "AcmeAssist"
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
 corpus:
-  source: corpora/acme-fab/          # local dir in dev, gs:// URI in prod
+  source: corpora/gcp-platform-support/
   chunking:
-    chunk_size: 800                  # tokens
-    overlap: 100
+    chunk_size: 512                  # tokens
+    overlap: 64
 agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs                    # shared, always on
-    - get_document                   # shared, always on
-    - pricing_lookup                 # client-specific, defined in tools/acme_fab/
+  model: claude-haiku-4-5-20251001   # must have a row in config/pricing/claude.yaml
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+  corrective:
+    enabled: true
+    query_rewrites: 3
 evals:
-  golden_set: evals/acme-fab/golden.jsonl
+  golden_set: evals/gcp-platform-support/golden.jsonl
   judge_model: claude-sonnet-4-6
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```
 
-Startup validation rejects: a malformed `client_id`, duplicate `client_id` values
-across files, an invalid `effort` value, and any tool name under `agent.tools` that
-is not registered — the last of these means a typo in a tool name can never reach a
-live request.
+Load-time validation rejects: a malformed `client_id`, duplicate `client_id` values across
+files, an `escalate_below` at or under `retrieval_drop_floor` (a guardrail that could never
+fire), any unknown `agent` key, and a model with no price.
 
-## 4. Agent loop design
+## 4. The support graph
 
-The loop is a manual, hand-rolled tool-use loop against the Anthropic API rather than
-a framework's built-in tool runner — the parts that matter for this project (cost
-tracking, tracing, streaming, limits) all live in the loop, and it is short enough to
-read end to end.
+The turn is a LangGraph `StateGraph` in `apps/api/app/agent/graph.py`:
 
-Shape:
+```
+Level 1 · RAG             retrieve → grade ─┬─ answer | converse
+Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
+Level 3 · human           escalate → ticket   (interrupt → user confirms → file)
+```
 
-- Call the model with the system prompt, tool definitions, and message history,
-  streaming.
-- If the model calls one or more tools, execute all of them and return every result
-  in a single follow-up message (parallel tool calls are supported — the model may
-  request several before it needs the results back).
-- Append the model's full response content (not just the text) back into history, or
-  tool-use blocks are lost on the next turn.
-- Repeat until the model stops requesting tools, or a hard iteration cap is hit (a
-  clean error, not a hang).
-- Per-tool execution has a timeout so a hung tool cannot hang the whole stream.
+- **Python decides every route.** `decide_level1` and `decide_level2` are plain functions
+  over config thresholds; the node stores the route and the edge only reads it.
+- **LangGraph owns mechanism only:** a Postgres checkpoint after every node, and the
+  `interrupt()` pause while a ticket offer waits for the user.
+- **The answering call is sent no tools,** so escalation is unreachable from inside the model.
+- **Model calls use the Anthropic SDK directly** inside nodes, so citations stream exactly as
+  the API documents them.
+- **Every node commits a step** to the `runs` row on its own session before the next starts,
+  so a crash leaves the finished steps on the record.
 
-Tool definitions are resolved per client from a single registry (name → definition +
-executor); a client only ever sees the tool definitions listed in its own YAML, so it
-cannot call a tool it does not know exists.
+A free-form tool-use loop shipped beside the graph until D11; see `docs/decisions.md`.
 
 ## 5. Citations
 
-Citations are attached by the Anthropic API at generation time, not extracted or
-regexed out of the answer afterward. When `search_docs` returns retrieved chunks,
-they're returned as `search_result` content blocks (each with a `source` URI, a
-`title`, and the passage text) with citations enabled. The model's answer comes back
-as text blocks that can each carry a `citations` array of
-`search_result_location` objects — source, title, and the exact `cited_text`, which
-must appear verbatim in the source document. That verbatim requirement is what makes
-a hallucinated citation detectable: if the cited text isn't actually in the source,
-the citation is invalid.
+Citations are attached by the Anthropic API at generation time, not extracted or regexed out
+of the answer afterward. The `answer` node passes retrieved chunks as `search_result` content
+blocks (each with a `source` URI, a `title`, and the passage text) with citations enabled.
+The model's answer comes back as text blocks that can each carry a `citations` array — source,
+title, and the exact `cited_text`, which must appear verbatim in the source document. That
+verbatim requirement is what makes a hallucinated citation detectable.
 
-While streaming, citation data arrives as `citations_delta` events alongside the text
-deltas, and the frontend renders them as inline, expandable source popovers.
+While streaming, citation data arrives as `citations_delta` events alongside the text deltas,
+and the frontend renders them as inline, expandable source popovers.
 
-The system prompt still instructs the model to ground every claim in retrieved
-sources and to say "I don't know" when retrieval comes back empty or irrelevant — the
-API guarantees citation *validity*, not citation *presence*.
+The graph never calls the answering model with zero passages: both route functions require
+at least one before they choose `answer`.
 
 ## 6. Prompt caching
 
-The per-client system prompt is marked with a cache breakpoint
-(`cache_control: {"type": "ephemeral"}`), so the (typically 1,500+ token) prompt and
-the tool definitions are read from cache on every call after the first, at a fraction
-of the input-token price. A second breakpoint sits on the last content block of the
-latest turn, so conversation history accumulates in cache incrementally across a
-multi-turn conversation — by turn 3 or 4, most of the input tokens are cache reads
-rather than fresh input.
+The answering call's system prompt carries a cache breakpoint
+(`cache_control: {"type": "ephemeral"}`), but it is inert today: Claude Haiku 4.5 never
+caches a prefix under 4,096 tokens, and the prompt is about 750. The grade, rewrite and
+draft calls set no breakpoint, and conversation history is not cached.
 
-Caching is a strict prefix match over `tools` then `system` then `messages`: any
-change earlier in that prefix invalidates everything after it, so tool definitions
-are serialized in a fixed order per client and nothing volatile (timestamps, request
-IDs) is interpolated into the system prompt.
+The breakpoint starts writing if the client moves to a model with a lower minimum (1,024
+tokens on Sonnet 4.6), or the prompt grows past Haiku's. Nothing volatile is interpolated
+into the system prompt, so the prefix would be stable when it does.
 
 ## 7. Data model (Postgres)
 
 ```
 clients        config snapshot, status (denormalized from YAML at load time)
-documents      client_id, source_uri, title, content_hash, ingested_at
-chunks         document_id, client_id, text, embedding vector(1024), metadata jsonb
+documents      client_id, source_uri, title, content_hash, full_text, ingested_at
+chunks         document_id, client_id, text, embedding vector(1024), text_search tsvector
 conversations  client_id, started_at, total_cost, total_tokens
-messages       conversation_id, role, content jsonb, citations jsonb
+messages       conversation_id, role, content jsonb, citations jsonb, run_id
+runs           conversation_id, client_id, status, current_stage, steps jsonb
 traces         conversation_id, span_type, tool_name, input, output,
                tokens_in, tokens_out, cache_read_tokens, cost_usd, latency_ms
 eval_runs      client_id, git_sha, scores jsonb, ran_at (schema exists; not yet written)
+(LangGraph)    checkpoint tables, keyed by thread_id = run id
 ```
 
-Multi-tenancy is a `client_id` column on every table, enforced at the retrieval and
-query layer — every search and every conversation load is filtered by `client_id`.
-Row-level security is not implemented at the database layer today; `client_id` is a
-trusted path parameter, filtered by the application rather than enforced by the
-database.
+Multi-tenancy is a `client_id` column on every table, enforced at the retrieval and query
+layer — every search, conversation load and run confirmation is filtered by `client_id`.
+Row-level security is not implemented at the database layer today; `client_id` is a trusted
+path parameter, filtered by the application rather than enforced by the database.
 
 ## 8. Repo structure
 
@@ -200,19 +189,20 @@ database.
 configent/
 ├── apps/
 │   ├── web/                  # Next.js: chat UI, client switcher
-│   └── api/                  # FastAPI: agent loop, RAG, tools, tracing, limits
-│       └── app/
-│           ├── agent/        # loop, streaming, citations, limits
-│           ├── retrieval/    # pgvector search, embed()
-│           ├── tools/        # registry, shared/, acme_fab/, meridian/, gcp_platform/
-│           ├── tracing/      # trace persistence
-│           └── config/       # Pydantic schema, registry
-├── config/                   # gcp-platform-support.yaml (+ disabled/ — configs the registry does not load)
+│   ├── api/                  # FastAPI: support graph, RAG, tracing, limits
+│   │   └── app/
+│   │       ├── agent/        # graph, common (cost, conversations), limits
+│   │       ├── retrieval/    # pgvector + full-text search, embed()
+│   │       ├── config/       # Pydantic schema, registry, pricing
+│   │       └── tickets.py    # the ticket service client
+│   ├── mockticket/           # the mock ticket service
+│   └── docs/                 # docs site source
+├── config/                   # one YAML per client, plus pricing/claude.yaml
 ├── corpora/                  # source docs per client (small; committed)
-├── prompts/                  # per-client system prompts
-├── evals/                    # sentinels.yaml + golden sets (gcp-platform-support)
-├── docs/                     # this file, config reference, docs site source
-├── infra/                    # Dockerfiles, docker-compose (local pg), CI
+├── prompts/                  # per-client prompt directories
+├── evals/                    # sentinels.yaml + golden sets
+├── docs/                     # this file, decisions, plan, test anchors
+├── infra/                    # docker-compose
 └── README.md
 ```
 
@@ -221,33 +211,36 @@ configent/
 | Decision | Choice | Why |
 |----------|--------|-----|
 | Multi-tenancy | Single deployment, config-switched | Zero code changes to add a client; one service serves every tenant |
-| Vector store | pgvector | One database for everything; no extra service to run or explain |
-| Agent framework | None; raw Anthropic API manual loop | Cost tracking, limits, and streaming all live in code that's short enough to read in full |
+| Vector store | pgvector + Postgres full-text | One database for everything; no extra service to run or explain |
+| Agent runtime | LangGraph for mechanism, Python for decisions | Checkpoints and the ticket pause come from the framework; every route is a function you can read |
+| Escalation | Routed by code; answering call sent no tools | A model cannot be talked out of an `if` statement |
 | Citations | `search_result` blocks + API citations | Citations are guaranteed-valid (verbatim match required) instead of prompt-based quoting |
-| Model | `claude-sonnet-4-6` | Current Sonnet generation; effort tuned low/medium for chat latency |
-| Tracing | Homegrown Postgres `traces` table | The same data feeds cost display and (eventually) eval scoring; no extra service to run |
+| Model | `claude-haiku-4-5-20251001` | Cheap enough to spend extra calls on grading and rewriting |
+| Cost | Priced per model from a dated YAML table | No API returns prices; an unpriced model fails startup |
+| Tracing | Homegrown Postgres `traces` table | The same data feeds cost display and the daily budget; no extra service to run |
 | Limits | Per-client rate limit + daily budget, enforced server-side | Config fields are meaningless if nothing reads them; both return a friendly 429 |
+
+Full reasoning for each: `docs/decisions.md`.
 
 ## 10. Status
 
 **Built:**
-- Config-driven multi-tenancy with fail-at-startup validation
-- RAG retrieval (pgvector) scoped by `client_id`, with a similarity floor
-- Manual agent loop: parallel tool calls, iteration cap, per-tool timeout
+- Config-driven multi-tenancy with fail-at-load validation
+- The three-tier support graph with a durable step trail and a confirm-before-filing pause
+- RAG retrieval (pgvector) scoped by `client_id`, with a similarity floor, and hybrid search
+  at Level 2
 - Native citations via `search_result` blocks
-- Prompt caching (system prompt + incremental turn breakpoints)
-- SSE streaming chat UI with live citation popovers, cost/latency/cache footer
-- Cross-tenant conversation ownership enforcement (mismatched `client_id` → 404)
-- `get_document` resolves full document text from a `corpus://` source URI
-- Per-client rate limiting and daily budget enforcement (429s), backed by trace
-  persistence (per-span tokens/cache/cost/latency) and running conversation totals
-- CI running ruff + unit tests (63 passing) on push/PR
+- SSE streaming chat UI with the step trail, citation popovers and a ticket confirm card
+- Cross-tenant conversation and run ownership enforcement (mismatched `client_id` → 404)
+- Per-client rate limiting and daily budget enforcement (429s), backed by trace persistence
+  with cost priced per model
+- CI running ruff + unit tests on push/PR
 
 **In progress / roadmap:**
-- Eval harness (golden-set runner + LLM judge) — only 6 golden rows exist today, for
-  one client, with no runner or judge wired up yet
+- Resume for interrupted runs (checkpoints are written; no endpoint yet)
+- Eval harness (golden-set runner + LLM judge) — golden rows exist for the support client,
+  with no runner or judge wired up yet
 - Admin console / API for cost and conversation observability
 - Live deployment (no hosted URL yet)
-- PDF ingestion (corpora are markdown-only today)
-- Auth and database-enforced tenant isolation (`client_id` is currently a trusted
-  path parameter, app-filtered but not backed by row-level security)
+- Auth and database-enforced tenant isolation (`client_id` is currently a trusted path
+  parameter, app-filtered but not backed by row-level security)

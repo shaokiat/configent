@@ -1,127 +1,79 @@
 ---
 title: Prompt Caching
-description: Two-layer caching strategy that cuts token costs as conversations grow longer.
+description: Where the support graph asks for prompt caching, why nothing is cached on Haiku 4.5 today, and what it would take to change that.
 order: 20
 group: Cross-Cutting
 ---
 
-Each API call re-sends the full prompt: system prompt + conversation history + the new message. Without caching, a 2,000-token system prompt across 10 turns costs $0.06 in input tokens alone — billed identically every single turn.
+**Nothing is cached today.** The answering call marks its system prompt with a cache breakpoint, but Claude Haiku 4.5 never caches a prefix shorter than 4,096 tokens, and `answer.md` is about 750. The request succeeds with no error; `cache_creation_input_tokens` stays `0`.
+
+---
 
 ## How Anthropic's cache control works
 
-Adding `cache_control: {"type": "ephemeral"}` to a content block tells Anthropic to store the computed KV states for that prefix for 5 minutes. On the next request, if the prompt up to that marker is identical, Anthropic skips recomputing those tokens. This is Anthropic-specific — OpenAI caches automatically for long prompts, Gemini has its own context caching API.
+Adding `cache_control: {"type": "ephemeral"}` to a content block asks Anthropic to store the computed prefix up to that block for 5 minutes. On the next request, if the prompt up to that marker is byte-identical, those tokens are read from cache instead of recomputed.
 
-**Can be cached — content identical across calls:**
-- System prompt
-- Tool definitions
-- Historical conversation turns
+- **Prefix match.** The prefix runs `tools → system → messages`. One changed token before the marker invalidates it.
+- **Write, then read.** A write bills at 1.25× the input rate, a read at 0.1×. See the rates in `config/pricing/claude.yaml`.
+- **A minimum length, per model.** A shorter prefix is silently not cached.
 
-**Cannot be cached — content that changes per request:**
-- The new user message
-- Tool results
+| Model | Minimum cacheable prefix |
+|---|---:|
+| Claude Opus 5 | 512 tokens |
+| Claude Sonnet 4.6 | 1,024 tokens |
+| Claude Haiku 4.5 | 4,096 tokens |
 
-The cache is a prefix match. One changed token anywhere before the marker invalidates the entire cached prefix.
+The minimum is not monotonic across generations: the cheapest model has one of the highest.
 
 ---
 
-## Layer 1 — System prompt
+## The one breakpoint
 
 ```python
-"system": [{
-    "type": "text",
-    "text": system_prompt,
-    "cache_control": {"type": "ephemeral"},
-}]
+# graph.py · answer_request_kwargs()
+"system": [
+    {"type": "text", "text": _prompt(cfg, "answer"), "cache_control": {"type": "ephemeral"}}
+],
+"messages": history + [{"role": "user", "content": search_results + [question]}],
 ```
 
-First call writes to cache (billed at 1.25× input price); every subsequent call within the 5-minute TTL reads from cache at 10× cheaper than fresh input.
+- **It covers the system prompt only.** The request carries no tools, so the cached prefix would be `answer.md` and nothing else.
+- **The grade, rewrite and draft calls set no breakpoint.** Their prompts are 250 to 950 words, all under Haiku's minimum.
+- **History has no breakpoint.** Each turn resends the conversation at the full input rate.
 
-The system prompt never changes during a session, so after the first write it stays in cache for the lifetime of any active conversation.
+---
 
-| | Cost for 2,000-token prompt over 10 turns |
+## When it would pay
+
+| Change | Effect |
 |---|---|
-| No caching | 2,000 × 10 × $3.00/MTok = **$0.060** |
-| With caching | 1 write + 9 reads = **$0.013** |
+| Switch `agent.model` to Sonnet 4.6 or Opus 5 | `answer.md` clears the 1,024- or 512-token minimum, and the existing breakpoint starts writing |
+| Grow a Haiku system prompt past 4,096 tokens | The same, on the current model |
+| Add a breakpoint on the last history message | Long conversations read their history from cache; the passages and question stay uncached |
+
+For scale: a 5,000-token system prompt over 10 turns on Haiku 4.5 costs **$0.050** uncached and **$0.011** cached (one write at 1.25×, nine reads at 0.1×). At today's ~750-token prompt and short support conversations, the saving would be a fraction of a cent per turn.
 
 ---
 
-## Layer 2 — Conversation history (turn breakpoint)
+## Verifying it
 
-```python
-# loop.py _with_turn_breakpoint()
-def _with_turn_breakpoint(messages: list[dict]) -> list[dict]:
-    last = dict(messages[-1])
-    content = last["content"]
-    if isinstance(content, str):
-        content = [{"type": "text", "text": content}]
-    blocks = list(content)
-    if isinstance(blocks[-1], dict):
-        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
-    last["content"] = blocks
-    return messages[:-1] + [last]
-```
-
-The cache is a prefix match — it stores everything from the start of the prompt up to the breakpoint. Placing the breakpoint on the last message means the entire history accumulates in cache incrementally:
-
-| Turn | Breakpoint on | Cached for next call |
-|---|---|---|
-| 1 | `user_1` | `system + user_1` |
-| 2 | `user_2` | `system + user_1 + asst_1 + user_2` |
-| 3 | `user_3` | `system + user_1 + asst_1 + user_2 + asst_2 + user_3` |
-
-By turn 3, only the new assistant output is billed at full price.
-
-**Why it returns a new list:** a single turn can involve multiple API calls — once to get the tool call, again to send back the tool result. Both iterations call `_with_turn_breakpoint` on the same shared `messages` list. The last line — `return messages[:-1] + [last]` — slices all but the last message, then appends a new dict copy of it with the marker added. The original `messages` list is never modified, so each iteration starts clean and produces exactly one breakpoint. If the marker were written directly into `messages`, it would accumulate one per iteration and exceed Anthropic's 4-breakpoint limit by iteration 5.
-
----
-
-## 4-breakpoint budget
-
-This strategy uses 2 of the 4 allowed breakpoints per request:
-
-1. System prompt
-2. Last message in history
-
----
-
-## Tool definitions are sorted
-
-```python
-def _sorted_tool_defs(tool_names: list[str]) -> list[dict]:
-    return sorted(get_tool_definitions(tool_names), key=lambda d: d["name"])
-```
-
-The cache prefix covers `tools → system → messages`. If tool definitions serialize in a different order each call, the prefix never matches and every call is a cache write. Sorting alphabetically by name gives a stable prefix regardless of YAML order.
-
----
-
-## Reading the logs
-
-```
-anthropic call client=acme-fab input=312 output=487 cache_creation=2048 cache_read=0
-anthropic call client=acme-fab input=89  output=12  cache_creation=0    cache_read=2048
-anthropic call client=acme-fab input=312 output=651 cache_creation=2523 cache_read=2048
-```
-
-Call 1: system prompt written to cache (`cache_creation=2048`).  
-Call 2 (tool result, same turn): system prompt served from cache (`cache_read=2048`).  
-Call 3 (next turn): history grew, new write for the expanded prefix; system prompt still from cache.
-
-After the first turn, `cache_creation_input_tokens` should be 0 for the system prompt block on every subsequent call.
-
----
-
-## `done` event payload
+The `done` event and every model step report the two cache counters:
 
 ```json
 {
-  "input_tokens": 89,
-  "output_tokens": 651,
-  "cache_creation_input_tokens": 2523,
-  "cache_read_input_tokens": 2048,
-  "cost_usd": 0.000312,
-  "latency_ms": 1840
+  "input_tokens": 3120,
+  "output_tokens": 412,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "cost_usd": 0.00518
 }
 ```
 
-Rendered as a cost + latency badge on each assistant message in the UI.
+- **Both `0` on every turn:** the prefix is under the model's minimum, or something in it changes per request.
+- **A write on turn 1, reads after:** caching works. The chat UI shows a "cached" badge whenever `cache_read_input_tokens` is above zero.
+
+---
+
+## What the retired loop did
+
+The loop set two breakpoints per call: the system prompt, behind a tool list sorted by name so its serialization never changed, and the last content block of the latest message, re-applied to a copy on every call so markers never accumulated past the four-breakpoint limit. Both went with the loop in D11. See [Retiring the Loop](/configent/docs/retiring-the-loop).

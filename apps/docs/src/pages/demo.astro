@@ -18,11 +18,10 @@ corpus:
     overlap: 64
 
 agent:
-  mode: graph
+  # Must have a row in config/pricing/claude.yaml, or startup fails.
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
-  effort: low
   # Retrieval below this similarity is discarded before the model sees it.
   retrieval_drop_floor: 0.3
   # Level 1: the best surviving hit being weaker than this fails the tier.
@@ -33,7 +32,7 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
-  # No tools key: retrieval is a node and the ticket executor is invoked from
+  # No tools key: retrieval is a node and the ticket client is called from
   # Python, so no tool definition is ever sent to a model.
 
 limits:
