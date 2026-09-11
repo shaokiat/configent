@@ -6,14 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.graph import (
-    RunUnavailable,
-    confirm_ticket,
-    resumable_run,
-    run_graph,
-    stream_graph,
-    stream_resume,
-)
+from app.agent.graph import RunUnavailable, confirm_ticket, run_graph, stream_graph
 from app.agent.limits import (
     BudgetExceeded,
     RateLimitExceeded,
@@ -81,18 +74,6 @@ def _client(client_id: str) -> ClientConfig:
         raise HTTPException(status_code=404, detail=f"Client {client_id!r} not found") from None
 
 
-def _sse(events) -> StreamingResponse:
-    async def body():
-        async for name, data in events():
-            yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
-
-    return StreamingResponse(
-        body(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
@@ -139,21 +120,22 @@ async def chat(
     await _enforce_daily_budget(db, cfg)
 
     if cfg.agent.mode == "graph":
+        await _check_conversation_ownership(db, client_id, req.conversation_id)
         try:
-            result = await run_graph(
+            state = await run_graph(
                 req.message,
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
                 db=db,
             )
-        except ConversationNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from None
         return ChatResponse(
-            conversation_id=result.conversation_id,
-            reply=result.answer,
-            citations=result.citations,
-            segments=result.segments,
+            conversation_id=state["conversation_id"],
+            reply=state["answer"],
+            citations=state.get("citations", []),
+            segments=state["segments"],
         )
 
     try:
@@ -196,20 +178,24 @@ async def chat_stream(client_id: str, req: ChatRequest):
     # `graph` is the three-tier support graph whose every route is Python (D10).
     engine = stream_graph if cfg.agent.mode == "graph" else stream_turn
 
-    async def events():
+    async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session
         # can be torn down before a StreamingResponse body starts executing.
         async with AsyncSessionLocal() as db:
-            async for event in engine(
+            async for name, data in engine(
                 req.message,
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
                 db=db,
             ):
-                yield event
+                yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
 
-    return _sse(events)
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/c/{client_id}/runs/{run_id}/ticket")
@@ -231,26 +217,6 @@ async def file_proposed_ticket(
         # Also the answer when the run belongs to another client: a 404 leaks nothing
         # about whether that run exists (P8 — tenancy is enforced here, not by the DB).
         raise HTTPException(status_code=404, detail=str(exc)) from None
-
-
-@router.post("/c/{client_id}/runs/{run_id}/resume")
-async def resume_run(client_id: str, run_id: str):
-    """Continue a run that died mid-turn from its last checkpoint, streaming the same SSE
-    events as a turn (D3). Explicit, never automatic: the interruption and the recovery
-    read as two events."""
-    cfg = _client(client_id)
-    async with AsyncSessionLocal() as preflight_db:
-        try:
-            run = await resumable_run(preflight_db, run_id, client_id)
-        except RunUnavailable as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
-
-    async def events():
-        async with AsyncSessionLocal() as db:
-            async for event in stream_resume(run, cfg=cfg, client_id=client_id, db=db):
-                yield event
-
-    return _sse(events)
 
 
 @router.get("/clients/{client_id}/branding")

@@ -1,4 +1,4 @@
-"""The support graph: the two decisions, the three tiers, and what survives a crash.
+"""The support graph: the two decisions and the three tiers, end to end.
 
 The gate that matters most is still that the answering model receives no tool definitions
 at all (D2). The one this engine adds is that a greeting leaves at Level 1 — if it reached
@@ -10,15 +10,7 @@ import pytest
 
 from app.agent import graph
 from app.config.registry import get_registry
-from tests.graph_fakes import (
-    Harness,
-    grade,
-    hit,
-    named,
-    outcome_of,
-    stages_of,
-    text_of,
-)
+from tests.graph_fakes import Harness, grade, hit, named, outcome_of, stages_of, text_of
 
 
 @pytest.fixture
@@ -92,8 +84,6 @@ def test_corrective_off_goes_straight_to_a_human(cfg):
 
 
 def test_level_two_answers_on_groundedness_without_a_cosine_floor(cfg):
-    """Keyword matches carry no cosine similarity; gating them on one would reject what
-    Level 2 exists to find."""
     route, _ = graph.decide_level2(score=grade(0.85), n_hits=2, cfg=cfg)
     assert route == "answer"
 
@@ -128,15 +118,6 @@ def test_answer_request_puts_search_results_in_the_user_message(cfg):
     assert len(blocks) == 2
     assert all(b["citations"] == {"enabled": True} for b in blocks)
     assert content[-1]["type"] == "text"
-
-
-def test_level_one_query_includes_the_previous_user_turn():
-    history = [
-        {"role": "user", "content": "Why won't my node pool scale down?"},
-        {"role": "assistant", "content": "..."},
-    ]
-    query = graph._retrieval_query("And what about GKE Autopilot?", history)
-    assert "node pool" in query and "Autopilot" in query
 
 
 # ── Level 3 copy ────────────────────────────────────────────────────────────────────
@@ -181,25 +162,31 @@ def test_crash_injector_only_fires_on_the_named_stage(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_rerun_node_replaces_its_step_and_keeps_its_seq():
-    """A node re-run on resume must not duplicate its step, and must keep its seq — the
-    ticket's idempotency key is built from it (D4)."""
+async def test_a_crash_leaves_the_completed_steps_durable(h, monkeypatch):
+    monkeypatch.setenv("CRASH_AFTER", "grade")
+    with pytest.raises(graph.GraphCrash):
+        await h.turn("What's the default CPU?", hits=[hit(0.8)], grade=grade(0.9))
+    assert [s["stage"] for s in h.runs["run-1"].steps] == ["retrieve", "grade"]
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_stage_replaces_its_step_and_keeps_its_seq():
+    """A ticket retried after a failed filing must not duplicate its step, and must keep
+    its seq — the idempotency key is built from it (D4)."""
     recorder = graph.RunRecorder("run-1", "conv-1", "gcp-platform-support")
 
     async def _no_commit(**_k):
         pass
 
     recorder._persist = _no_commit
-    await recorder.step("retrieve", started=time.monotonic())
-    await recorder.step("grade", started=time.monotonic(), confidence=0.1)
-    assert recorder.next_seq("grade") == 2
-    await recorder.step("grade", started=time.monotonic(), confidence=0.2)
-    assert [s["stage"] for s in recorder.steps] == ["retrieve", "grade"]
-    assert recorder.steps[-1]["confidence"] == 0.2
-    assert recorder.next_seq("answer") == 3
+    await recorder.step("escalate", started=time.monotonic())
+    await recorder.step("ticket", started=time.monotonic(), status="failed")
+    assert recorder.next_seq("ticket") == 2
+    await recorder.step("ticket", started=time.monotonic())
+    assert [(s["stage"], s["status"]) for s in recorder.steps] == [("escalate", "ok"), ("ticket", "ok")]
 
 
-# ── Level 1, end to end ─────────────────────────────────────────────────────────────
+# ── end to end ──────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -216,7 +203,7 @@ async def test_a_documented_question_answers_at_level_one(h):
     assert "1 vCPU" in text_of(events)
     # D2, on the real request: the answering call carried no tools.
     assert "tools" not in h.answer_requests[0]
-    assert named(events, "step")[-1]["level"] == 1
+    assert named(events, "done")[0]["cost_usd"] > 0
 
 
 @pytest.mark.asyncio
@@ -237,9 +224,6 @@ async def test_the_grader_cannot_claim_confidence_over_zero_passages(h):
     grade_step = named(events, "step")[1]
     assert grade_step["stage"] == "grade" and grade_step["confidence"] == 0.0
     assert "rewrite" in stages_of(events)
-
-
-# ── Level 2, end to end ─────────────────────────────────────────────────────────────
 
 
 _ACTAS = hit(
@@ -269,8 +253,7 @@ async def test_level_two_recovers_what_level_one_missed(h):
         "retrieve", "grade", "rewrite", "hybrid_retrieve", "regrade", "answer",
     ]
     assert named(events, "step")[-1]["level"] == 2
-    # Dense search runs the original question plus each rewrite; keyword search gets the
-    # exact identifier.
+    # Dense search runs the question plus each rewrite; keyword search gets the identifier.
     assert h.hybrid_requests[0]["queries"][0].startswith("deploy says")
     assert h.hybrid_requests[0]["keywords"] == "iam.serviceAccounts.actAs"
     # The answer is grounded in the Level 2 passages, not the Level 1 ones.
@@ -299,8 +282,7 @@ async def test_a_follow_up_is_rewritten_with_the_conversation_in_view(h):
         history=history, grade=grade(0.0), l2_hits=[hit(0.5)], regrade=grade(0.8),
     )
     assert outcome_of(events) == "answer"
-    rewrite_input = dict(h.calls)["rewrite"]
-    assert "fail to start on PORT" in rewrite_input
+    assert "fail to start on PORT" in dict(h.calls)["rewrite"]
 
 
 @pytest.mark.asyncio
@@ -329,9 +311,6 @@ async def test_corrective_off_skips_level_two(monkeypatch, cfg):
     assert "rewrite" not in h.call_names()
 
 
-# ── failure and recovery ────────────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_stream_emits_error_instead_of_done_when_a_stage_throws(h, monkeypatch):
     """A generator that simply stops looks like a finished turn from the browser's side."""
@@ -345,64 +324,6 @@ async def test_stream_emits_error_instead_of_done_when_a_stage_throws(h, monkeyp
     assert names[-1] == "error" and "done" not in names
     assert "internal error" in events[-1][1]["message"].lower()
     assert h.runs["run-1"].status == "failed"
-
-
-@pytest.mark.asyncio
-async def test_a_crashed_run_resumes_from_its_checkpoint(h, monkeypatch):
-    """CRASH_AFTER=grade kills the turn after the grade step is streamed. Resume re-runs
-    only what was not checkpointed, keeps one grade step, and finishes the turn."""
-    monkeypatch.setenv("CRASH_AFTER", "grade")
-    with pytest.raises(graph.GraphCrash):
-        await h.turn("What's the default CPU?", hits=[hit(0.8)], grade=grade(0.9))
-    assert h.runs["run-1"].steps[-1]["stage"] == "grade"
-
-    monkeypatch.delenv("CRASH_AFTER")
-    events = await h.resume("run-1")
-    assert outcome_of(events) == "answer"
-    # retrieve was checkpointed before the crash, so it did not run again; grade was not.
-    assert h.search_requests == 1
-    assert h.call_names() == ["grade"]
-    assert [s["stage"] for s in h.runs["run-1"].steps] == ["retrieve", "grade", "answer"]
-    assert h.runs["run-1"].status == "completed"
-    # The turn is persisted on resume: the question and the answer.
-    assert [m.role for m in h.db.added if type(m).__name__ == "Message"] == ["user", "assistant"]
-
-
-@pytest.mark.asyncio
-async def test_a_finished_run_is_not_resumable(h):
-    await h.turn("What's the default CPU?", hits=[hit(0.8)], grade=grade(0.9))
-    with pytest.raises(graph.RunUnavailable):
-        await h.resume("run-1")
-
-
-@pytest.mark.asyncio
-async def test_a_run_paused_on_a_ticket_offer_is_not_resumable(h):
-    """That pause belongs to the user: only confirming the ticket continues it."""
-    await h.turn("raise my quota", grade=grade(0.0), regrade=grade(0.0))
-    with pytest.raises(graph.RunUnavailable):
-        await h.resume("run-1")
-
-
-@pytest.mark.asyncio
-async def test_the_resume_endpoint_404s_before_streaming(monkeypatch):
-    from contextlib import asynccontextmanager
-
-    from fastapi import HTTPException
-
-    from app.routers import clients
-
-    @asynccontextmanager
-    async def _session():
-        yield None
-
-    async def _refuse(*_a, **_k):
-        raise graph.RunUnavailable("nothing to resume")
-
-    monkeypatch.setattr(clients, "AsyncSessionLocal", _session)
-    monkeypatch.setattr(clients, "resumable_run", _refuse)
-    with pytest.raises(HTTPException) as exc:
-        await clients.resume_run(client_id="gcp-platform-support", run_id="run-1")
-    assert exc.value.status_code == 404
 
 
 def test_the_graph_has_no_checkpointer_until_one_is_installed(monkeypatch):

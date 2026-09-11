@@ -97,18 +97,16 @@ def rrf_merge(ranked_lists: list[list[Hit]], k: int) -> list[Hit]:
     """Fuse several rankings by reciprocal rank: each list adds 1 / (60 + rank) per chunk.
 
     Rank-based on purpose. Cosine similarities and `ts_rank_cd` scores are on unrelated
-    scales, so adding them would be meaningless; positions are comparable. A chunk keeps
-    the best cosine similarity any list saw for it.
+    scales, so adding them would be meaningless; positions are comparable.
     """
     scores: dict[int, float] = {}
-    best: dict[int, Hit] = {}
+    hits_by_id: dict[int, Hit] = {}
     for hits in ranked_lists:
         for position, hit in enumerate(hits):
             scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + 1 / (_RRF_K + position + 1)
-            if hit.chunk_id not in best or hit.similarity > best[hit.chunk_id].similarity:
-                best[hit.chunk_id] = hit
+            hits_by_id.setdefault(hit.chunk_id, hit)
     ordered = sorted(scores, key=lambda chunk_id: scores[chunk_id], reverse=True)
-    return [best[chunk_id] for chunk_id in ordered[:k]]
+    return [hits_by_id[chunk_id] for chunk_id in ordered[:k]]
 
 
 async def hybrid_search(

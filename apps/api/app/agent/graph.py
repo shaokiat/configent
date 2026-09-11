@@ -1,33 +1,19 @@
 """The support graph: three tiers of escalation, each route chosen in Python (D10).
 
-    Level 1 · RAG             retrieve → grade ─┬─ answer     (cited, no tools)
-                                                ├─ converse   (no ticket)
-                                                └─ ▼
+    Level 1 · RAG             retrieve → grade ─┬─ answer | converse
     Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
-                                                                   └─ ▼
     Level 3 · human           escalate → ticket   (interrupt: the user confirms, then it files)
 
-LangGraph owns two things that were hand-built before it: a checkpoint after every node, so
-a crashed run resumes where it stopped, and the pause while a proposed ticket waits for the
-user (`interrupt()`). It does not own a single decision. `decide_level1` and `decide_level2`
-are plain functions comparing state against YAML thresholds; the node stores the route and
-the edge only reads it. A model cannot be talked out of an `if` statement (D2).
+LangGraph owns two mechanisms: a checkpoint after every node, and the pause while a proposed
+ticket waits for the user (`interrupt()`). It owns no decisions. `decide_level1` and
+`decide_level2` are plain functions over YAML thresholds; the node stores the route and the
+edge only reads it. The answering model is never sent a tool, so it cannot escalate (D2).
 
-Properties that fall out of the structure rather than out of prompting:
-
-1. Retrieval always happens. It is a node, not a tool the model may skip.
-2. The answering model is never sent a tool definition, so it cannot escalate (D2).
-3. Nothing is filed until the user confirms, and a ticket is filed once (D4, D9).
-4. A greeting leaves at Level 1. Triage is a field on the grade call, which sees the
-   passages, so there is still no intent router in front of retrieval (D9).
-
-Two API constraints still shape the node boundaries: `search_result` blocks are valid as
-top-level user content, and citations cannot be combined with `output_config.format`. So
-`grade`, `rewrite` and `escalate` take structured output, and `answer` takes citations.
+Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` and
+`escalate` take structured output and `answer` takes citations.
 """
 import json
 import logging
-import operator
 import os
 import time
 from collections.abc import AsyncIterator
@@ -35,8 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Annotated, Any, TypedDict
+from typing import Any, TypedDict
 
 import anthropic
 from langgraph.config import get_stream_writer
@@ -48,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.loop import (
     UsageTotals,
     _attr_or_key,
+    _collect_segments,
     _excerpt,
     _model_trace,
     _prepare_conversation,
@@ -65,45 +51,19 @@ logger = logging.getLogger("configent.graph")
 _REPO_ROOT = Path(__file__).parents[4]
 _TICKET_TOOL = "create_escalation_ticket"
 
-# Node names, in order. Also the vocabulary of the SSE `step` events and CRASH_AFTER.
-STAGES = (
-    "retrieve", "grade", "converse", "rewrite", "hybrid_retrieve", "regrade",
-    "answer", "escalate", "ticket",
-)
-
 
 class GraphCrash(SystemExit):
     """Raised by the CRASH_AFTER fault injector (D6). SystemExit so no `except Exception`
-    swallows it — a swallowed crash proves nothing about resume."""
+    swallows it."""
 
 
 class RunUnavailable(Exception):
-    """No such run for this client, or nothing to do with it — unknown id, another
-    client's run, a turn that proposed no ticket, a run with nothing left to resume.
-    Surfaces as a 404 that reveals nothing about which."""
-
-
-@dataclass
-class TurnResult:
-    """What the non-streaming endpoint returns. Assembled in Python, not generated:
-    citations rule out structured output on the answer call."""
-
-    conversation_id: str
-    run_id: str
-    answer: str = ""
-    segments: list[dict] = field(default_factory=list)
-    citations: list[dict] = field(default_factory=list)
-    confidence: float = 0.0
-    outcome: str = "answer"  # "answer" | "converse" | "ticket"
-    ticket_id: str | None = None
-
-
-# ── state and dependencies ───────────────────────────────────────────────────────────
+    """Unknown run, another client's run, or a run with no ticket offer to confirm. A 404
+    that reveals nothing about which."""
 
 
 class TurnState(TypedDict, total=False):
-    """Everything the checkpointer persists. Plain JSON only — hits are dicts, not `Hit`
-    — so a checkpoint written by one release still loads in the next."""
+    """What the checkpointer saves. Plain JSON: hits are dicts, not `Hit`."""
 
     question: str
     history: list[dict]
@@ -119,23 +79,22 @@ class TurnState(TypedDict, total=False):
     why: str
     draft: dict
     ticket: dict
-    outcome: str
+    outcome: str  # "answer" | "converse" | "ticket"
     answer: str
     segments: list[dict]
     citations: list[dict]
-    usage: Annotated[list[dict], operator.add]
 
 
 @dataclass
 class Deps:
-    """Per-request objects the nodes need. Passed as LangGraph `context`, which is never
-    checkpointed — a session or an HTTP client has no business in saved state."""
+    """Per-request objects, passed as LangGraph `context`, which is never checkpointed."""
 
     cfg: ClientConfig
     client_id: str
     db: AsyncSession
     aclient: anthropic.AsyncAnthropic | None
     recorder: "RunRecorder"
+    usage: UsageTotals = field(default_factory=UsageTotals)
 
 
 # ── audit trail ──────────────────────────────────────────────────────────────────────
@@ -144,9 +103,8 @@ class Deps:
 class RunRecorder:
     """Owns the `Run` row: the step trail the UI shows and a reloaded conversation replays.
 
-    The checkpointer is what resumes a run; this is what a person reads. Each step commits
-    through `checkpoint_session()`, never the request session, which rolls back on exactly
-    the failure the trail has to survive (D3).
+    Each step commits through `checkpoint_session()`, never the request session, which
+    rolls back on exactly the failure the trail has to survive (D3).
     """
 
     def __init__(self, run_id: str, conversation_id: str, client_id: str):
@@ -162,7 +120,7 @@ class RunRecorder:
                 conversation_id=conversation_id,
                 client_id=client_id,
                 status="running",
-                current_stage=STAGES[0],
+                current_stage="retrieve",
                 steps=[],
                 state={},
             )
@@ -187,14 +145,9 @@ class RunRecorder:
             run.current_stage = current_stage
 
     def next_seq(self, stage: str) -> int:
-        """The seq this stage's step will get.
-
-        A node that runs again straight after itself — re-run on resume because the crash
-        landed before its checkpoint, or a ticket retried after a failed filing — reuses
-        its seq and replaces its entry. That keeps the trail free of duplicates, and it
-        keeps the ticket's `{run_id}:{stage_seq}` idempotency key stable across the re-run
-        that could otherwise file twice (D4).
-        """
+        """The seq this stage's step will get. A stage that runs again straight after itself
+        (a ticket retried after a failed filing) replaces its entry and keeps its seq, so the
+        `{run_id}:{stage_seq}` idempotency key stays stable across the retry (D4)."""
         if self.steps and self.steps[-1]["stage"] == stage:
             return self.steps[-1]["seq"]
         return len(self.steps) + 1
@@ -235,18 +188,29 @@ class RunRecorder:
         await self._persist(status=status, current_stage=None)
 
 
-async def _step(d: Deps, stage: str, started: float, **extra: Any) -> dict:
-    """Record a step and stream it. The trail the user watches and the trail that is
-    stored are one write, so they cannot drift."""
-    entry = await d.recorder.step(stage, started=started, **extra)
-    get_stream_writer()(("step", entry))
-    return entry
+async def _step(d: Deps, stage: str, started: float, **extra: Any) -> None:
+    """Record a step and stream it: one write, so the trail watched and stored can't drift."""
+    get_stream_writer()(("step", await d.recorder.step(stage, started=started, **extra)))
+
+
+async def _model_step(
+    d: Deps, state: TurnState, stage: str, started: float, response: Any, **extra: Any
+) -> None:
+    """`_step` for a node that made a model call: also accrues its cost and traces it."""
+    usage = UsageTotals()
+    usage.add(response.usage)
+    d.usage.add(response.usage)
+    d.db.add(
+        _model_trace(
+            state["conversation_id"], response.usage, int((time.monotonic() - started) * 1000)
+        )
+    )
+    await _step(d, stage, started, usage=usage, **extra)
 
 
 def _maybe_crash(stage: str) -> None:
-    """Fault injection for the resume demo (D6). Called by the consumer after a step is
-    streamed, never inside a node: asyncio treats a SystemExit raised in a task as fatal
-    to the event loop, not as a crash of this run."""
+    """Fault injection (D6). Called by the stream consumer, never inside a node: asyncio
+    treats a SystemExit raised in a task as fatal to the event loop."""
     if os.getenv("CRASH_AFTER") == stage:
         logger.warning("CRASH_AFTER=%s — exiting deliberately", stage)
         raise GraphCrash(f"CRASH_AFTER={stage}")
@@ -256,36 +220,8 @@ def _maybe_crash(stage: str) -> None:
 
 
 def _prompt(cfg: ClientConfig, name: str) -> str:
-    """Load a stage prompt that sits next to the configured answer prompt. One file per
-    stage, because the grade prompt is the guardrail and has to be readable on its own."""
+    """A stage prompt from beside the configured answer prompt."""
     return (cfg.system_prompt_path(_REPO_ROOT).parent / f"{name}.md").read_text()
-
-
-_USAGE_KEYS = (
-    "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
-)
-
-
-def _usage_dict(response: Any) -> dict:
-    usage = getattr(response, "usage", None)
-    return {k: getattr(usage, k, 0) or 0 for k in _USAGE_KEYS}
-
-
-def _totals(usages: list[dict]) -> UsageTotals:
-    totals = UsageTotals()
-    for u in usages:
-        totals.add(SimpleNamespace(**u))
-    return totals
-
-
-def _record_trace(d: Deps, conversation_id: str, response: Any, started: float) -> None:
-    d.db.add(
-        _model_trace(
-            conversation_id,
-            getattr(response, "usage", None),
-            int((time.monotonic() - started) * 1000),
-        )
-    )
 
 
 async def _structured_call(
@@ -293,7 +229,7 @@ async def _structured_call(
     *,
     model: str,
     system: str,
-    user_content: list[dict] | str,
+    user_content: str,
     schema: dict,
     max_tokens: int,
 ) -> tuple[dict, Any]:
@@ -314,8 +250,8 @@ async def _structured_call(
 _GRADE_SCHEMA = {
     "type": "object",
     "properties": {
-        # Triage rides on the grade call (D9): no extra call, and it is made with the
-        # passages in view rather than by a router that sees only the question.
+        # Triage rides on the grade call (D9): no extra call, and made with the passages in
+        # view rather than by a router that sees only the question.
         "kind": {"type": "string", "enum": ["question", "conversation"]},
         "supported": {"type": "boolean"},
         "confidence": {"type": "number"},
@@ -360,14 +296,9 @@ _DRAFT_SCHEMA = {
     "additionalProperties": False,
 }
 
-# Filled in when the draft leaves a field out. An under-described ticket still reaches a
-# human, which is the failure mode worth having.
-_TICKET_DEFAULTS = {"category": "other", "product_area": "other", "priority": "normal"}
-
 
 def _transcript(history: list[dict], turns: int = 6) -> str:
-    """The last few readable turns, for the two calls that need context: triage (is this a
-    follow-up?) and rewriting (what does "that" refer to?)."""
+    """The last few readable turns, for triage, rewriting and drafting."""
     lines = [
         f"{m['role'].capitalize()}: {m['content']}"
         for m in history[-turns:]
@@ -376,45 +307,16 @@ def _transcript(history: list[dict], turns: int = 6) -> str:
     return "\n".join(lines) or "(none)"
 
 
-async def _grade_call(d: Deps, question: str, hits: list[dict], history: list[dict]):
-    """Groundedness and triage in one structured call — the model half of the guardrail.
-
-    With zero passages the call still runs, because a greeting still has to be recognised,
-    but its confidence is overwritten with 0 in Python: a model rating nothing invents a
-    number (D2).
-    """
-    passages = "\n\n".join(
-        f"[{i + 1}] {h['document_title']} ({h['source_uri']})\n{h['text']}"
-        for i, h in enumerate(hits)
-    ) or "(none — retrieval returned nothing above the drop floor)"
-    user = (
-        f"Question:\n{question}\n\nRecent conversation:\n{_transcript(history)}"
-        f"\n\nRetrieved passages:\n{passages}"
-    )
-    score, response = await _structured_call(
-        d.aclient,
-        model=d.cfg.agent.model,
-        system=_prompt(d.cfg, "grade"),
-        user_content=user,
-        schema=_GRADE_SCHEMA,
-        max_tokens=768,
-    )
-    if not hits:
-        score = {**score, "confidence": 0.0, "supported": False}
-    return score, response
-
-
 # ── the decisions ────────────────────────────────────────────────────────────────────
 
 
 def decide_level1(
     *, top_similarity: float, score: dict, n_hits: int, cfg: ClientConfig
 ) -> tuple[str, str]:
-    """Route after Level 1. Plain Python; no model is consulted and none can override it.
+    """Route after Level 1. Plain Python; no model can override it.
 
-    Answer only when **both** signals clear their thresholds (D2). Otherwise a turn the
-    grader called conversation goes to `converse`, and anything else goes to Level 2 — or
-    straight to Level 3 when the client has turned corrective retrieval off.
+    Answer only when both signals clear their thresholds (D2). Otherwise a conversation goes
+    to `converse`, and anything else to Level 2 — or to Level 3 if corrective is off.
     """
     confidence = float(score.get("confidence", 0.0))
     agent = cfg.agent
@@ -431,20 +333,15 @@ def decide_level1(
     elif top_similarity < agent.escalate_below:
         why = f"top similarity {top_similarity:.2f} < escalate_below {agent.escalate_below}"
     else:
-        why = (
-            f"groundedness {confidence:.2f} < confidence_threshold "
-            f"{agent.confidence_threshold}"
-        )
+        why = f"groundedness {confidence:.2f} < confidence_threshold {agent.confidence_threshold}"
     return ("rewrite" if agent.corrective.enabled else "escalate"), why
 
 
 def decide_level2(*, score: dict, n_hits: int, cfg: ClientConfig) -> tuple[str, str]:
-    """Route after Level 2: answer if the corrected evidence grounds an answer, else a human.
+    """Route after Level 2: answer if the new evidence grounds an answer, else a human.
 
-    `escalate_below` does not apply here. It is a cosine floor, and the passages Level 2
-    exists to find are the keyword matches dense retrieval ranked low — gating them on
-    cosine would reject exactly what this tier adds. The groundedness check still stands,
-    and the answer is still cited from the passages.
+    No cosine floor here: keyword matches carry no cosine similarity, and gating on one would
+    reject exactly what this tier adds. Groundedness still has to clear its threshold.
     """
     confidence = float(score.get("confidence", 0.0))
     threshold = cfg.agent.confidence_threshold
@@ -461,19 +358,7 @@ def decide_level2(*, score: dict, n_hits: int, cfg: ClientConfig) -> tuple[str, 
     )
 
 
-# ── Level 1 ──────────────────────────────────────────────────────────────────────────
-
-
-def _retrieval_query(user_message: str, history: list[dict]) -> str:
-    """Level 1's embedding query: the message, with the previous user turn prepended.
-
-    Free, and enough for most follow-ups. The ones it cannot fix fail Level 1 and get a
-    real rewrite at Level 2.
-    """
-    previous = [m for m in history if m.get("role") == "user"]
-    if not previous or not isinstance(previous[-1].get("content"), str):
-        return user_message
-    return f"{previous[-1]['content']}\n{user_message}"
+# ── nodes ────────────────────────────────────────────────────────────────────────────
 
 
 def _hit_dict(hit: Hit) -> dict:
@@ -486,12 +371,12 @@ def _hit_dict(hit: Hit) -> dict:
 
 
 async def retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
-    """pgvector top-k. No model call — the deterministic half of the guardrail."""
+    """Level 1: pgvector top-k. No model call — the deterministic half of the guardrail."""
     d, t = runtime.context, time.monotonic()
     hits = await search(
         d.db,
         client_id=d.client_id,
-        query=_retrieval_query(state["question"], state.get("history", [])),
+        query=state["question"],
         k=5,
         floor=d.cfg.agent.retrieval_drop_floor,
     )
@@ -512,25 +397,46 @@ async def retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
 
 
 async def grade(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    """Groundedness and triage in one structured call, then the Python decision.
+
+    The same node runs as `grade` at Level 1 and `regrade` at Level 2. With zero passages
+    the call still runs, so a greeting is recognised, but its confidence is overwritten
+    with 0: a model rating nothing invents a number (D2).
+    """
     d, t = runtime.context, time.monotonic()
-    score, response = await _grade_call(
-        d, state["question"], state["hits"], state.get("history", [])
+    hits, level = state["hits"], state["level"]
+    passages = "\n\n".join(
+        f"[{i + 1}] {h['document_title']} ({h['source_uri']})\n{h['text']}"
+        for i, h in enumerate(hits)
+    ) or "(none — retrieval returned nothing above the drop floor)"
+    score, response = await _structured_call(
+        d.aclient,
+        model=d.cfg.agent.model,
+        system=_prompt(d.cfg, "grade"),
+        user_content=(
+            f"Question:\n{state['question']}\n\n"
+            f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
+            f"Retrieved passages:\n{passages}"
+        ),
+        schema=_GRADE_SCHEMA,
+        max_tokens=768,
     )
-    _record_trace(d, state["conversation_id"], response, t)
-    route, why = decide_level1(
-        top_similarity=state["top_similarity"], score=score, n_hits=len(state["hits"]), cfg=d.cfg
-    )
-    await _step(
-        d, "grade", t,
-        level=1,
+    if not hits:
+        score = {**score, "confidence": 0.0, "supported": False}
+    if level == 1:
+        route, why = decide_level1(
+            top_similarity=state["top_similarity"], score=score, n_hits=len(hits), cfg=d.cfg
+        )
+    else:
+        route, why = decide_level2(score=score, n_hits=len(hits), cfg=d.cfg)
+    await _model_step(
+        d, state, "grade" if level == 1 else "regrade", t, response,
+        level=level,
         reasoning=score.get("reasoning"),
         confidence=round(float(score.get("confidence", 0.0)), 4),
-        supported=score.get("supported"),
-        missing_info=score.get("missing_info"),
         kind=score.get("kind"),
-        usage=_totals([_usage_dict(response)]),
     )
-    return {"grade": score, "route": route, "why": why, "usage": [_usage_dict(response)]}
+    return {"grade": score, "route": route, "why": why}
 
 
 _CONVERSE_FALLBACK = (
@@ -541,48 +447,41 @@ _CONVERSE_FALLBACK = (
 
 
 async def converse(state: TurnState, runtime: Runtime[Deps]) -> dict:
-    """The one path with no passages in front of the reply. `grade.md` forbids stating a
-    platform fact in it, which is what keeps this from being a hole in the grounding."""
+    """The one path with no passages behind the reply; `grade.md` forbids platform facts in it."""
     d, t = runtime.context, time.monotonic()
     text = (state["grade"].get("reply") or "").strip() or _CONVERSE_FALLBACK
-    await _step(d, "converse", t, level=1, reasoning=state["why"], route="converse")
+    await _step(d, "converse", t, level=1, reasoning=state["why"])
     get_stream_writer()(("text", {"delta": text}))
     return {"outcome": "converse", "answer": text, "segments": [{"text": text, "citations": []}]}
 
 
-# ── Level 2 ──────────────────────────────────────────────────────────────────────────
-
-
 async def rewrite(state: TurnState, runtime: Runtime[Deps]) -> dict:
-    """Reformulate the question with the conversation in view: semantic variants for the
-    dense side, and the exact identifiers for the keyword side."""
+    """Level 2: reformulate with the conversation in view — semantic variants for dense
+    search, exact identifiers for keyword search."""
     d, t = runtime.context, time.monotonic()
     n = d.cfg.agent.corrective.query_rewrites
-    user = (
-        f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
-        f"Latest message:\n{state['question']}\n\n"
-        f"Why the first search failed: {state['why']}\n\nWrite {n} queries."
-    )
     out, response = await _structured_call(
         d.aclient,
         model=d.cfg.agent.model,
         system=_prompt(d.cfg, "rewrite"),
-        user_content=user,
+        user_content=(
+            f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
+            f"Latest message:\n{state['question']}\n\n"
+            f"Why the first search failed: {state['why']}\n\nWrite {n} queries."
+        ),
         schema=_REWRITE_SCHEMA,
         max_tokens=512,
     )
-    _record_trace(d, state["conversation_id"], response, t)
     queries = [q.strip() for q in out.get("queries") or [] if isinstance(q, str) and q.strip()][:n]
     keywords = str(out.get("keywords") or "").strip()
-    await _step(
-        d, "rewrite", t,
+    await _model_step(
+        d, state, "rewrite", t, response,
         level=2,
         reasoning=f"Level 1 fell short ({state['why']}), so searching again",
         queries=queries,
         keywords=keywords or None,
-        usage=_totals([_usage_dict(response)]),
     )
-    return {"queries": queries, "keywords": keywords, "usage": [_usage_dict(response)]}
+    return {"queries": queries, "keywords": keywords}
 
 
 async def hybrid_retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
@@ -599,98 +498,40 @@ async def hybrid_retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
         d, "hybrid_retrieve", t,
         level=2,
         reasoning=(
-            f"Best match: {hits[0].document_title}" if hits else "Keyword and semantic search found nothing"
+            f"Best match: {hits[0].document_title}"
+            if hits
+            else "Keyword and semantic search found nothing"
         ),
         n_hits=len(hits),
         sources=[h.source_uri for h in hits],
     )
-    return {
-        "level": 2,
-        "hits": [_hit_dict(h) for h in hits],
-        "top_similarity": max((h.similarity for h in hits), default=0.0),
-    }
-
-
-async def regrade(state: TurnState, runtime: Runtime[Deps]) -> dict:
-    d, t = runtime.context, time.monotonic()
-    score, response = await _grade_call(
-        d, state["question"], state["hits"], state.get("history", [])
-    )
-    _record_trace(d, state["conversation_id"], response, t)
-    route, why = decide_level2(score=score, n_hits=len(state["hits"]), cfg=d.cfg)
-    await _step(
-        d, "regrade", t,
-        level=2,
-        reasoning=score.get("reasoning"),
-        confidence=round(float(score.get("confidence", 0.0)), 4),
-        supported=score.get("supported"),
-        missing_info=score.get("missing_info"),
-        usage=_totals([_usage_dict(response)]),
-    )
-    return {"grade": score, "route": route, "why": why, "usage": [_usage_dict(response)]}
-
-
-# ── the answer ───────────────────────────────────────────────────────────────────────
-
-
-def _search_result_blocks(hits: list[dict]) -> list[dict]:
-    """Hits as `search_result` blocks. Citations on all or none, per the API."""
-    return [
-        {
-            "type": "search_result",
-            "source": h["source_uri"],
-            "title": h["document_title"],
-            "content": [{"type": "text", "text": h["text"]}],
-            "citations": {"enabled": True},
-        }
-        for h in hits
-    ]
+    return {"level": 2, "hits": [_hit_dict(h) for h in hits]}
 
 
 def answer_request_kwargs(
     cfg: ClientConfig, *, hits: list[dict], question: str, history: list[dict]
 ) -> dict:
-    """Assemble the answering call. Note what is absent: `tools`. The answering model cannot
-    file a ticket (D2), and the tests assert it."""
-    content = _search_result_blocks(hits) + [{"type": "text", "text": question}]
+    """Assemble the answering call. Note what is absent: `tools` (D2)."""
+    search_results = [
+        {
+            "type": "search_result",
+            "source": h["source_uri"],
+            "title": h["document_title"],
+            "content": [{"type": "text", "text": h["text"]}],
+            # The API requires citations on all search results or none.
+            "citations": {"enabled": True},
+        }
+        for h in hits
+    ]
     return {
         "model": cfg.agent.model,
         "max_tokens": cfg.agent.max_tokens,
         "system": [
             {"type": "text", "text": _prompt(cfg, "answer"), "cache_control": {"type": "ephemeral"}}
         ],
-        "messages": history + [{"role": "user", "content": content}],
+        "messages": history
+        + [{"role": "user", "content": search_results + [{"type": "text", "text": question}]}],
     }
-
-
-def _collect_segments(response: Any) -> tuple[str, list[dict], list[dict]]:
-    """Map the answer's text blocks into (text, citations, segments) — the shape the
-    frontend renders and history stores."""
-    text, citations, segments = "", [], []
-    for block in response.content:
-        if _attr_or_key(block, "type") != "text":
-            continue
-        block_text = _attr_or_key(block, "text", "")
-        text += block_text
-        cits = [
-            b.model_dump(exclude_none=True) if hasattr(b, "model_dump") else b
-            for b in (_attr_or_key(block, "citations") or [])
-        ]
-        citations.extend(cits)
-        segments.append(
-            {
-                "text": block_text,
-                "citations": [
-                    {
-                        "source": c.get("source"),
-                        "title": c.get("title"),
-                        "cited_text": _excerpt(c.get("cited_text") or ""),
-                    }
-                    for c in cits
-                ],
-            }
-        )
-    return text, citations, segments
 
 
 async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
@@ -705,52 +546,34 @@ async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
         async for event in stream:
             if getattr(event, "type", "") != "content_block_delta":
                 continue
-            dtype = getattr(event.delta, "type", "")
-            if dtype == "text_delta":
+            if event.delta.type == "text_delta":
                 write(("text", {"delta": event.delta.text}))
-            elif dtype == "citations_delta":
+            elif event.delta.type == "citations_delta":
                 citation_index += 1
                 cit = event.delta.citation
-                write(
-                    (
-                        "citation",
-                        {
-                            "index": citation_index,
-                            "source": _attr_or_key(cit, "source"),
-                            "title": _attr_or_key(cit, "title"),
-                            "cited_text": _excerpt(_attr_or_key(cit, "cited_text") or ""),
-                        },
-                    )
-                )
+                write((
+                    "citation",
+                    {
+                        "index": citation_index,
+                        "source": _attr_or_key(cit, "source"),
+                        "title": _attr_or_key(cit, "title"),
+                        "cited_text": _excerpt(_attr_or_key(cit, "cited_text") or ""),
+                    },
+                ))
         response = await stream.get_final_message()
-    _record_trace(d, state["conversation_id"], response, t)
     text, citations, segments = _collect_segments(response)
-    await _step(
-        d, "answer", t,
-        level=state.get("level", 1),
+    await _model_step(
+        d, state, "answer", t, response,
+        level=state["level"],
         reasoning=state["why"],
         n_citations=len(citations),
-        usage=_totals([_usage_dict(response)]),
     )
-    return {
-        "outcome": "answer",
-        "answer": text,
-        "citations": citations,
-        "segments": segments,
-        "usage": [_usage_dict(response)],
-    }
+    return {"outcome": "answer", "answer": text, "citations": citations, "segments": segments}
 
 
 # ── Level 3 ──────────────────────────────────────────────────────────────────────────
 
-
-def _normalise_draft(draft: dict, *, question: str) -> dict:
-    draft = dict(draft)
-    draft["subject"] = (draft.get("subject") or "").strip() or _excerpt(question)
-    for key, value in _TICKET_DEFAULTS.items():
-        draft[key] = draft.get(key) or value
-    return draft
-
+_TICKET_DEFAULTS = {"category": "other", "product_area": "other", "priority": "normal"}
 
 _CATEGORY_LABEL = {
     "account_config": "project configuration",
@@ -762,20 +585,22 @@ _CATEGORY_LABEL = {
 }
 
 
+def _normalise_draft(draft: dict, *, question: str) -> dict:
+    """Fill what the draft left out. An under-described ticket still reaches a human."""
+    draft = dict(draft)
+    draft["subject"] = (draft.get("subject") or "").strip() or _excerpt(question)
+    for key, value in _TICKET_DEFAULTS.items():
+        draft[key] = draft.get(key) or value
+    return draft
+
+
 def _proposal_payload(draft: dict) -> dict:
-    """The fields the confirm card renders. The draft stays server-side, in the checkpoint:
-    the client confirms a run, it never posts back a ticket it could have edited."""
-    return {
-        "subject": draft.get("subject", ""),
-        "category": draft.get("category", "other"),
-        "product_area": draft.get("product_area", "other"),
-        "priority": draft.get("priority", "normal"),
-        "body": draft.get("body", ""),
-    }
+    """What the confirm card renders. The draft itself stays in the checkpoint: the client
+    confirms a run, it never posts back a ticket it could have edited."""
+    return {k: draft.get(k, "") for k in ("subject", "category", "product_area", "priority", "body")}
 
 
 def _proposal_reply(draft: dict) -> str:
-    """What the user sees instead of a filed ticket: why a human is needed, and an offer."""
     category = _CATEGORY_LABEL.get(draft.get("category", "other"), "other")
     return (
         "That one needs a human: it depends on your own project configuration, and my "
@@ -786,7 +611,6 @@ def _proposal_reply(draft: dict) -> str:
 
 
 def _escalation_reply(ticket: dict, ok: bool) -> str:
-    """What the user sees once they have confirmed."""
     if not ok:
         return (
             "I couldn't reach the ticket system just now, so nothing was filed. Please retry "
@@ -802,33 +626,29 @@ def _escalation_reply(ticket: dict, ok: bool) -> str:
 
 
 async def escalate(state: TurnState, runtime: Runtime[Deps]) -> dict:
-    """Draft the ticket and offer it. Structured output; the model never places the call,
-    and never decides whether the turn was answerable — the decide functions did."""
+    """Draft the ticket and offer it. The model never places the call."""
     d, t = runtime.context, time.monotonic()
-    user = (
-        f"The assistant could not answer this from its documentation.\n"
-        f"Reason: {state['why']}\n\nRecent conversation:\n{_transcript(state.get('history', []))}"
-        f"\n\nUser's message:\n{state['question']}"
-    )
     raw, response = await _structured_call(
         d.aclient,
         model=d.cfg.agent.model,
         system=_prompt(d.cfg, "ticket_draft"),
-        user_content=user,
+        user_content=(
+            f"The assistant could not answer this from its documentation.\n"
+            f"Reason: {state['why']}\n\n"
+            f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
+            f"User's message:\n{state['question']}"
+        ),
         schema=_DRAFT_SCHEMA,
         max_tokens=768,
     )
-    _record_trace(d, state["conversation_id"], response, t)
     draft = _normalise_draft(raw, question=state["question"])
-    await _step(
-        d, "escalate", t,
+    await _model_step(
+        d, state, "escalate", t, response,
         level=3,
         reasoning=state["why"],
-        route="ticket",
         category=draft["category"],
         product_area=draft["product_area"],
         priority=draft["priority"],
-        usage=_totals([_usage_dict(response)]),
     )
     text = _proposal_reply(draft)
     write = get_stream_writer()
@@ -839,15 +659,13 @@ async def escalate(state: TurnState, runtime: Runtime[Deps]) -> dict:
         "outcome": "ticket",
         "answer": text,
         "segments": [{"text": text, "citations": []}],
-        "usage": [_usage_dict(response)],
     }
 
 
 async def stage_ticket(
     draft: dict, *, db: AsyncSession, client_id: str, run_id: str, stage_seq: int
 ) -> dict:
-    """File the ticket. Python calls the executor directly: one call site to keep
-    idempotent (D4)."""
+    """File the ticket: Python calls the executor directly, one call site to keep idempotent."""
     executor = get_tool_executor(_TICKET_TOOL)
     return await executor(draft, client_id=client_id, db=db, run_id=run_id, stage_seq=stage_seq)
 
@@ -855,9 +673,8 @@ async def stage_ticket(
 async def ticket(state: TurnState, runtime: Runtime[Deps]) -> dict:
     """Wait for the user, then file.
 
-    Its own node, because `interrupt()` re-runs its node from the top on resume: anything
-    placed before it in the same node would execute twice. The graph pauses here at the
-    end of the turn and `confirm_ticket()` resumes it.
+    Its own node because `interrupt()` re-runs its node from the top on resume: anything
+    before it in the same node would execute twice.
     """
     interrupt({"run_id": state["run_id"], **_proposal_payload(state["draft"])})
     d, t = runtime.context, time.monotonic()
@@ -900,14 +717,21 @@ def _route(state: TurnState) -> str:
 
 
 def _after_ticket(state: TurnState) -> str:
-    """A failed filing loops back and pauses again, so the user can retry the same draft."""
-    return "ticket" if "error" in (state.get("ticket") or {}) else END
+    """A failed filing loops back to the pause, so the user can retry the same draft."""
+    return "ticket" if "error" in state["ticket"] else END
 
 
 def _build() -> StateGraph:
     g = StateGraph(TurnState, context_schema=Deps)
-    for node in (retrieve, grade, converse, rewrite, hybrid_retrieve, regrade, answer, escalate, ticket):
-        g.add_node(node.__name__, node)
+    g.add_node("retrieve", retrieve)
+    g.add_node("grade", grade)
+    g.add_node("converse", converse)
+    g.add_node("rewrite", rewrite)
+    g.add_node("hybrid_retrieve", hybrid_retrieve)
+    g.add_node("regrade", grade)
+    g.add_node("answer", answer)
+    g.add_node("escalate", escalate)
+    g.add_node("ticket", ticket)
     g.add_edge(START, "retrieve")
     g.add_edge("retrieve", "grade")
     g.add_conditional_edges("grade", _route, ["answer", "converse", "rewrite", "escalate"])
@@ -926,8 +750,7 @@ _graph = None
 
 
 def use_checkpointer(saver) -> None:
-    """Compile the graph against a checkpointer. The app lifespan passes Postgres; tests
-    pass an in-memory saver."""
+    """Compile the graph against a checkpointer: Postgres in the app, in-memory in tests."""
     global _graph
     _graph = _builder.compile(checkpointer=saver)
 
@@ -936,117 +759,31 @@ def _compiled():
     if _graph is None:
         raise RuntimeError(
             "The support graph has no checkpointer: the app lifespan did not run "
-            "postgres_checkpointer(), and interrupt/resume cannot work without one."
+            "postgres_checkpointer(), and the ticket pause cannot work without one."
         )
     return _graph
 
 
 @asynccontextmanager
 async def postgres_checkpointer(database_url: str):
-    """Open a psycopg3 pool beside the asyncpg engine and install the Postgres saver.
-
-    A second driver, because langgraph-checkpoint-postgres is written against psycopg.
-    `setup()` creates or migrates its own tables and is safe on every start.
-    """
+    """Install the Postgres saver for the app's lifetime. psycopg 3, beside asyncpg, because
+    langgraph-checkpoint-postgres is written against it; `setup()` is idempotent."""
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from psycopg.rows import dict_row
-    from psycopg_pool import AsyncConnectionPool
 
     conninfo = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    async with AsyncConnectionPool(
-        conninfo,
-        open=False,
-        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
-    ) as pool:
-        saver = AsyncPostgresSaver(pool)
+    # ponytail: one shared connection with a lock. Swap to an AsyncConnectionPool if
+    # concurrent turns contend on it, or if a dropped connection needs to heal itself.
+    async with AsyncPostgresSaver.from_conn_string(conninfo) as saver:
         await saver.setup()
         use_checkpointer(saver)
-        yield saver
+        yield
 
 
 def _thread(run_id: str) -> dict:
     return {"configurable": {"thread_id": run_id}}
 
 
-# ── driving it ───────────────────────────────────────────────────────────────────────
-
-
-async def _drive(graph_input: Any, deps: Deps) -> AsyncIterator[tuple[str, dict]]:
-    """Run the graph until it ends or pauses, forwarding what the nodes stream.
-
-    `durability="sync"` writes each checkpoint before the next node starts, so a crash
-    loses at most the node that was running.
-    """
-    async for event, data in _compiled().astream(
-        graph_input,
-        _thread(deps.recorder.run_id),
-        context=deps,
-        stream_mode="custom",
-        durability="sync",
-    ):
-        yield event, data
-        if event == "step":
-            _maybe_crash(data["stage"])
-
-
-async def _finish(deps: Deps, started: float) -> AsyncIterator[tuple[str, dict]]:
-    """Persist the turn from the checkpointed state and emit `done`."""
-    db, run_id = deps.db, deps.recorder.run_id
-    values = (await _compiled().aget_state(_thread(run_id))).values
-    conversation_id = values["conversation_id"]
-    usage = _totals(values.get("usage", []))
-    db.add(Message(conversation_id=conversation_id, role="user", content=values["question"]))
-    db.add(
-        Message(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=values.get("answer", ""),
-            citations={"segments": values.get("segments", [])},
-            # The join back to this turn's step trail, for reloading a conversation.
-            run_id=run_id,
-        )
-    )
-    await _update_conversation_totals(db, conversation_id, usage)
-    await db.commit()
-    await deps.recorder.finish("completed")
-    yield (
-        "done",
-        {
-            "conversation_id": conversation_id,
-            "run_id": run_id,
-            "outcome": values.get("outcome", "answer"),
-            "confidence": round(float((values.get("grade") or {}).get("confidence", 0.0)), 4),
-            "ticket_id": None,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "cache_creation_input_tokens": usage.cache_creation_input_tokens,
-            "cache_read_input_tokens": usage.cache_read_input_tokens,
-            "cost_usd": round(usage.cost_usd, 6),
-            "latency_ms": int((time.monotonic() - started) * 1000),
-        },
-    )
-
-
-async def _guarded(events: AsyncIterator, *, client_id: str, db: AsyncSession, recorders: list):
-    """Turn failures into an `error` event. The HTTP status went out long ago, and a stream
-    that simply stops looks like a finished turn from the browser's side."""
-    try:
-        async for event in events:
-            yield event
-    except GraphCrash:
-        raise
-    except anthropic.APIError as exc:
-        logger.exception("Anthropic API error during graph turn (client=%s)", client_id)
-        await db.rollback()
-        if recorders:
-            await recorders[-1].finish("failed")
-        yield ("error", {"message": f"Upstream API error: {exc.__class__.__name__}"})
-    except Exception:
-        logger.exception("Graph turn failed (client=%s)", client_id)
-        await db.rollback()
-        if recorders:
-            await recorders[-1].finish("failed")
-        yield ("error", {"message": "An internal error occurred. Please try again."})
+# ── entry points ─────────────────────────────────────────────────────────────────────
 
 
 async def stream_graph(
@@ -1058,69 +795,98 @@ async def stream_graph(
     db: AsyncSession,
 ) -> AsyncIterator[tuple[str, dict]]:
     """Run one turn, yielding SSE `(event, data)` tuples: `run`, a `step` per node, `text` /
-    `citation` deltas, `ticket_proposal` when a human is needed, then one `done`."""
-    recorders: list[RunRecorder] = []
+    `citation` deltas, `ticket_proposal` when a human is needed, then one `done`.
 
-    async def turn():
-        started = time.monotonic()
-        conv_id, history = await _prepare_conversation(db, client_id, conversation_id)
-        recorder = await RunRecorder.start(conv_id, client_id)
-        recorders.append(recorder)
-        yield ("run", {"run_id": recorder.run_id, "conversation_id": conv_id})
+    On failure the stream emits `error` instead of `done`: the HTTP status went out long
+    ago, and a stream that simply stops looks like a finished turn to the browser.
+    """
+    started = time.monotonic()
+    recorder = None
+    try:
+        conversation_id, history = await _prepare_conversation(db, client_id, conversation_id)
+        recorder = await RunRecorder.start(conversation_id, client_id)
+        run_id = recorder.run_id
+        yield ("run", {"run_id": run_id, "conversation_id": conversation_id})
+
         deps = Deps(cfg, client_id, db, anthropic.AsyncAnthropic(), recorder)
         initial = {
             "question": user_message,
             "history": history,
-            "conversation_id": conv_id,
-            "run_id": recorder.run_id,
-            "usage": [],
+            "conversation_id": conversation_id,
+            "run_id": run_id,
         }
-        async for event in _drive(initial, deps):
-            yield event
-        async for event in _finish(deps, started):
-            yield event
+        async for event, data in _compiled().astream(
+            initial, _thread(run_id), context=deps, stream_mode="custom", durability="sync"
+        ):
+            yield event, data
+            if event == "step":
+                _maybe_crash(data["stage"])
 
-    async for event in _guarded(turn(), client_id=client_id, db=db, recorders=recorders):
-        yield event
+        values = (await _compiled().aget_state(_thread(run_id))).values
+        db.add(Message(conversation_id=conversation_id, role="user", content=user_message))
+        db.add(
+            Message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=values["answer"],
+                citations={"segments": values["segments"]},
+                run_id=run_id,  # the join back to this turn's step trail, for reload
+            )
+        )
+        await _update_conversation_totals(db, conversation_id, deps.usage)
+        await db.commit()
+        await recorder.finish("completed")
+        yield (
+            "done",
+            {
+                "conversation_id": conversation_id,
+                "run_id": run_id,
+                "outcome": values["outcome"],
+                "confidence": round(float(values["grade"].get("confidence", 0.0)), 4),
+                "ticket_id": None,
+                "input_tokens": deps.usage.input_tokens,
+                "output_tokens": deps.usage.output_tokens,
+                "cache_creation_input_tokens": deps.usage.cache_creation_input_tokens,
+                "cache_read_input_tokens": deps.usage.cache_read_input_tokens,
+                "cost_usd": round(deps.usage.cost_usd, 6),
+                "latency_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
+    except GraphCrash:
+        raise
+    except Exception as exc:
+        logger.exception("Graph turn failed (client=%s)", client_id)
+        await db.rollback()
+        if recorder:
+            await recorder.finish("failed")
+        # Detail stays in the logs; the client only ever sees a generic message.
+        message = (
+            f"Upstream API error: {exc.__class__.__name__}"
+            if isinstance(exc, anthropic.APIError)
+            else "An internal error occurred. Please try again."
+        )
+        yield ("error", {"message": message})
 
 
-async def _load_run(db: AsyncSession, run_id: str, client_id: str) -> Run:
-    run = await db.get(Run, run_id)
-    if run is None or run.client_id != client_id:
-        raise RunUnavailable(f"Run {run_id!r} not found")
-    return run
-
-
-async def resumable_run(db: AsyncSession, run_id: str, client_id: str) -> Run:
-    """The pre-flight for resume, run before any stream starts so a refusal is a plain 404.
-    Resumable means the checkpoint has a next node and is not waiting on the user."""
-    run = await _load_run(db, run_id, client_id)
-    snapshot = await _compiled().aget_state(_thread(run_id))
-    if not snapshot.next or snapshot.interrupts:
-        raise RunUnavailable(f"Run {run_id!r} has nothing to resume")
-    return run
-
-
-async def stream_resume(
-    run: Run, *, cfg: ClientConfig, client_id: str, db: AsyncSession
-) -> AsyncIterator[tuple[str, dict]]:
-    """Continue a crashed run from its last checkpoint (D3). Completed nodes do not run
-    again; the node that was running when the process died does."""
-    recorders: list[RunRecorder] = []
-
-    async def resumed():
-        started = time.monotonic()
-        recorder = RunRecorder.from_run(run)
-        recorders.append(recorder)
-        yield ("run", {"run_id": run.id, "conversation_id": run.conversation_id})
-        deps = Deps(cfg, client_id, db, anthropic.AsyncAnthropic(), recorder)
-        async for event in _drive(None, deps):
-            yield event
-        async for event in _finish(deps, started):
-            yield event
-
-    async for event in _guarded(resumed(), client_id=client_id, db=db, recorders=recorders):
-        yield event
+async def run_graph(
+    user_message: str,
+    *,
+    cfg: ClientConfig,
+    client_id: str,
+    conversation_id: str | None,
+    db: AsyncSession,
+) -> dict:
+    """Non-streaming entry point: drain the stream, so the two paths cannot drift. Returns
+    the final state."""
+    run_id = None
+    async for event, data in stream_graph(
+        user_message, cfg=cfg, client_id=client_id, conversation_id=conversation_id, db=db
+    ):
+        if event == "run":
+            run_id = data["run_id"]
+        elif event == "error":
+            raise RuntimeError(data["message"])
+    return (await _compiled().aget_state(_thread(run_id))).values
 
 
 async def confirm_ticket(
@@ -1128,23 +894,27 @@ async def confirm_ticket(
 ) -> dict:
     """File the ticket this run proposed, once the user has said yes (D9).
 
-    The draft comes from the checkpoint, not the request. Both D4 guards hold: a filed
-    `ticket_id` in state short-circuits a second confirmation, and the `{run_id}:{stage_seq}`
-    idempotency key covers a retry that races it.
+    Resumes the graph paused on `interrupt()`. The draft comes from the checkpoint, not the
+    request. Both D4 guards hold: a filed `ticket_id` short-circuits a second confirmation,
+    and the `{run_id}:{stage_seq}` idempotency key covers a retry that races it.
     """
-    run = await _load_run(db, run_id, client_id)
-    snapshot = await _compiled().aget_state(_thread(run_id))
+    run = await db.get(Run, run_id)
+    if run is None or run.client_id != client_id:
+        raise RunUnavailable(f"Run {run_id!r} not found")
+    graph, thread = _compiled(), _thread(run_id)
+    snapshot = await graph.aget_state(thread)
     filed = snapshot.values.get("ticket") or {}
     if filed.get("ticket_id"):
         return {"ticket_id": filed["ticket_id"], "reply": None, "already_filed": True}
-    if "ticket" not in snapshot.next or not snapshot.interrupts:
+    if not snapshot.interrupts:
         raise RunUnavailable(f"Run {run_id!r} did not propose a ticket")
 
     recorder = RunRecorder.from_run(run)
-    deps = Deps(cfg, client_id, db, None, recorder)
-    async for _ in _drive(Command(resume=True), deps):
-        pass
-    result = (await _compiled().aget_state(_thread(run_id))).values.get("ticket") or {}
+    values = await graph.ainvoke(
+        Command(resume=True), thread, context=Deps(cfg, client_id, db, None, recorder),
+        durability="sync",
+    )
+    result = values["ticket"]
     ok = "error" not in result
     await recorder.finish("completed")
 
@@ -1167,32 +937,6 @@ async def confirm_ticket(
         "queue": result.get("queue"),
         "eta_hours": result.get("eta_hours"),
         "reply": reply,
-        "step": recorder.steps[-1] if recorder.steps else None,
+        "step": recorder.steps[-1],
         "already_filed": False,
     }
-
-
-async def run_graph(
-    user_message: str,
-    *,
-    cfg: ClientConfig,
-    client_id: str,
-    conversation_id: str | None,
-    db: AsyncSession,
-) -> TurnResult:
-    """Non-streaming entry point: drain the stream, so the two paths cannot drift."""
-    result = TurnResult(conversation_id="", run_id="")
-    async for event, data in stream_graph(
-        user_message, cfg=cfg, client_id=client_id, conversation_id=conversation_id, db=db
-    ):
-        if event == "text":
-            result.answer += data["delta"]
-        elif event == "done":
-            result.conversation_id = data["conversation_id"]
-            result.run_id = data["run_id"]
-            result.outcome = data["outcome"]
-            result.confidence = data["confidence"]
-            values = (await _compiled().aget_state(_thread(result.run_id))).values
-            result.citations = values.get("citations", [])
-            result.segments = values.get("segments", [])
-    return result

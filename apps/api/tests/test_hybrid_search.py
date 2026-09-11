@@ -29,12 +29,11 @@ def test_a_keyword_only_match_survives_the_merge():
     assert 9 in [h.chunk_id for h in rrf_merge([dense, keyword], k=3)]
 
 
-def test_agreement_across_lists_ranks_first_and_keeps_the_best_similarity():
+def test_agreement_across_lists_ranks_first():
     merged = rrf_merge(
         [[_hit(1, 0.60), _hit(2, 0.55)], [_hit(2, 0.58), _hit(3, 0.50)], [_hit(2, 0.0)]], k=5
     )
     assert merged[0].chunk_id == 2
-    assert merged[0].similarity == 0.58
 
 
 def test_k_caps_the_result():

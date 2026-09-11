@@ -141,7 +141,6 @@ class Harness:
         self.calls: list[tuple[str, object]] = []
         self.answer_requests: list[dict] = []
         self.hybrid_requests: list[dict] = []
-        self.search_requests = 0
         self.ticket_calls: list[dict] = []
         self.ticket_failures = 0
 
@@ -164,7 +163,6 @@ class Harness:
         return conversation_id or "conv-1", list(self.scenario.get("history") or [])
 
     async def _search(self, *_a, **_k):
-        self.search_requests += 1
         return list(self.scenario.get("hits") or [])
 
     async def _hybrid(self, _db, *, client_id, queries, keywords, k, floor):
@@ -225,16 +223,6 @@ class Harness:
         return await graph.confirm_ticket(
             run_id=run_id, client_id=client_id, cfg=self.cfg, db=self.db
         )
-
-    async def resume(self, run_id: str = "run-1") -> list[tuple[str, dict]]:
-        """Continue a crashed turn with the same scenario. Model calls are counted afresh, so
-        a node re-run on resume sees the answer its first run would have."""
-        self.calls = []
-        run = await graph.resumable_run(self.db, run_id, CLIENT)
-        return [
-            event
-            async for event in graph.stream_resume(run, cfg=self.cfg, client_id=CLIENT, db=self.db)
-        ]
 
     def call_names(self) -> list[str]:
         return [name for name, _ in self.calls]

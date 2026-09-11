@@ -39,12 +39,9 @@ export interface RunStep {
   seq: number;
   stage: string;
   status: string;
-  // 1 = RAG, 2 = corrective RAG, 3 = human. Absent on runs from before the graph.
-  level?: number;
   reasoning?: string | null;
   latency_ms?: number;
   confidence?: number;
-  kind?: string;
   n_hits?: number;
   top_similarity?: number;
   queries?: string[];
@@ -319,13 +316,9 @@ const STAGE_LABEL: Record<string, string> = {
   answer: "Answered from sources",
   escalate: "Drafted a ticket for review",
   ticket: "Filed a ticket",
-  // The retired pipeline's name for grade, still replayed when an older conversation reloads.
-  score: "Scored the evidence",
 };
 
 function stageLabel(step: RunStep): string {
-  // Before the graph, `escalate` also carried triage. A reloaded run from then says which.
-  if (step.stage === "escalate" && step.route === "converse") return "Not a support request";
   return STAGE_LABEL[step.stage] ?? step.stage;
 }
 
@@ -338,7 +331,6 @@ function stageDetail(step: RunStep): string | null {
         `${step.n_hits} passage${step.n_hits === 1 ? "" : "s"}` +
         (step.top_similarity !== undefined ? ` · best match ${step.top_similarity.toFixed(2)}` : "")
       );
-    case "score":
     case "grade":
     case "regrade":
       return step.confidence !== undefined ? `confidence ${step.confidence.toFixed(2)}` : null;
@@ -353,7 +345,7 @@ function stageDetail(step: RunStep): string | null {
     case "answer":
       return step.n_citations !== undefined ? `${step.n_citations} citations` : null;
     case "escalate":
-      return step.route === "converse" ? "no ticket" : (step.category ?? null);
+      return step.category ?? null;
     case "ticket":
       return step.ticket_id ?? null;
     default:
