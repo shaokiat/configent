@@ -5,13 +5,13 @@ order: 17
 group: Cross-Cutting
 ---
 
-When the agent answers a question, it cites the exact document passages it drew from. The Anthropic API produces citations natively — the model marks the specific text it used, not the whole chunk.
+When the agent answers a question, it cites the exact document passages it drew from. The Anthropic API produces citations natively: the model marks the specific text it used, not the whole chunk.
 
 ---
 
 ## How it works
 
-Citations flow through three layers, and both engines share all three:
+Citations flow through three layers:
 
 ```
 retrieved chunks
@@ -22,41 +22,36 @@ retrieved chunks
 
 ### 1. `search_result` blocks
 
-`search_result` is the Anthropic content type that enables citation tracking. Where the block is placed is the only thing that differs by engine:
+`search_result` is the Anthropic content type that enables citation tracking. The graph's `answer` node puts the blocks directly in the user message, built by `answer_request_kwargs()`. See [Answering](/configent/docs/answering).
 
-| Engine | Where the blocks go |
-|---|---|
-| `loop` | Inside `tool_result.content`, returned by [`search_docs`](/configent/docs/tools-system#search_docs-shared) |
-| `graph` | Directly in the user message, built by `answer_request_kwargs()` — see [Answering](/configent/docs/answering) |
-
-Either way the blocks are passed verbatim, never serialized to JSON. The distinction matters: the API only enables citation tracking on the `search_result` content type, not on the same data JSON-stringified into a text block.
+The blocks are passed verbatim, never serialized to JSON. The API only enables citation tracking on the `search_result` content type, not on the same data JSON-stringified into a text block.
 
 ### 2. Anthropic generates citations
 
-With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on current Claude models — including the `claude-haiku-4-5` models the shipped clients run — with no beta header required.
+With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on current Claude models, including the `claude-haiku-4-5` model the shipped client runs, with no beta header required.
 
 The attribution is the API's, not ours. Each citation comes back with its source, title, and a `cited_text` field. The API decides which block and which span supports each run of the reply. We do no string matching.
 
-**One caveat: `cited_text` is the whole chunk.** The API returns the entire matched chunk, often hundreds of tokens. The `_excerpt()` helper trims it to a ~400-character, sentence-boundary preview before it reaches the frontend. The raw version stays in the stored response.
+**One caveat: `cited_text` is the whole chunk.** The API returns the entire matched chunk, often hundreds of tokens. `excerpt()` in `agent/common.py` trims it to a ~400-character, sentence-boundary preview before it reaches the frontend.
 
 ### 3. Segments extraction
 
-Both engines extract citation data from the API response into a `segments` list — `_collect_segments()` is shared — alternating text and cited passages, structured for the frontend:
+`collect_segments()` turns the final response into a `segments` list, alternating text and cited passages, structured for the frontend:
 
 ```json
 [
   {
-    "text": "The PX900 chamber seal should be replaced every 500 operating hours",
+    "text": "That error means the container never listened on the port Cloud Run expects",
     "citations": [
       {
-        "source": "corpus://acme-fab/spare-parts-catalog",
-        "title": "Spare Parts Catalog",
-        "cited_text": "Recommended replacement interval: 500 operating hours or upon visual inspection failure"
+        "source": "corpus://gcp-platform-support/cloud-run-troubleshooting",
+        "title": "Cloud Run troubleshooting",
+        "cited_text": "Container failed to start. Failed to start and then listen on the port defined by the PORT environment variable."
       }
     ]
   },
   {
-    "text": " or whenever a visual inspection reveals wear.",
+    "text": ", so the startup probe gave up.",
     "citations": []
   }
 ]
@@ -68,34 +63,31 @@ Segments with empty `citations` are plain text. Segments with citations render w
 
 ## Storage
 
-The final assistant message stores two citation representations in the `messages` table:
+The assistant message stores the reply in two columns of the `messages` table:
 
 | Column | Contents |
 |--------|----------|
-| `content` | Raw Anthropic wire format — preserves the full API response including citation annotations |
-| `citations` | `{"segments": [...]}` — the frontend-friendly segments list |
+| `content` | The reply text |
+| `citations` | `{"segments": [...]}`, the frontend-friendly segments list |
 
-The database stores both: the raw response for debugging replay, and the segments list ready to render without post-processing.
+Reloading a conversation renders straight from `segments`, with no post-processing.
 
 ---
 
 ## Empty retrieval
 
-The two engines handle it differently, and the difference is the point of the graph.
-
-- **`loop`:** `search_docs` returns a plain `text` block (`"No documents matched the query."`) instead of `search_result` blocks. The system prompt instructs the model to say it doesn't know rather than hallucinate. No citation markers are emitted.
-- **`graph`:** the answering call never runs with zero passages. Both route functions require at least one before they choose `answer`, so an empty retrieval goes to Level 2, a greeting reply, or a ticket offer. There is no uncited answer to guard against.
+The answering call never runs with zero passages. Both route functions require at least one before they choose `answer`, so an empty retrieval goes to Level 2, a conversational reply, or a ticket offer. There is no uncited answer to guard against.
 
 ---
 
 ## Frontend rendering
 
-Citations aren't delivered whole in `done`. They stream. As the model emits each one, the loop turns the API's `citations_delta` into a `citation` SSE event, interleaved with the `text` deltas:
+Citations aren't delivered whole in `done`. They stream. As the model emits each one, the `answer` node turns the API's `citations_delta` into a `citation` SSE event, interleaved with the `text` deltas:
 
 ```json
 // citation event payload
-{"index": 3, "source": "corpus://acme-fab/spare-parts-catalog",
- "title": "Spare Parts Catalog", "cited_text": "Recommended replacement interval: 500 operating hours..."}
+{"index": 1, "source": "corpus://gcp-platform-support/cloud-run-troubleshooting",
+ "title": "Cloud Run troubleshooting", "cited_text": "Container failed to start. Failed to start and then listen on the port..."}
 ```
 
 ```
@@ -110,9 +102,9 @@ Where the segments come from differs by path:
 
 | Path | Segment assembly |
 |---|---|
-| `run()` (non-streaming) | `_collect_segments` builds the full array in one shot |
-| `stream_turn()` (SSE) | frontend rebuilds them from `citation` deltas |
+| `run_graph()` (non-streaming) | `collect_segments()` builds the full array in one shot |
+| `stream_graph()` (SSE) | The frontend rebuilds them from `citation` deltas |
 
-Either way, the final list lands in the `messages.citations` column at commit. The `done` event carries no `reply` or `segments`, only `conversation_id`, token counts, `cost_usd`, and `latency_ms`.
+Either way, the `collect_segments()` list lands in the `messages.citations` column at commit. The `done` event carries no `reply` or `segments`.
 
 See [SSE Streaming](/configent/docs/sse-streaming) for the full event contract.

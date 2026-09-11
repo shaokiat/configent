@@ -55,7 +55,9 @@ owns how tools *run*; Tools System owns what a tool *is*.
 
 ## Page structure
 
-`agent-loop.mdx` is the reference page for the patterns below. Copy its shape.
+`agent-loop.mdx` was the reference page for the patterns below. It was retired with the loop
+engine (recover it with `git show 841a1ba:apps/docs/src/content/docs/agent-loop.mdx`), but
+its shape is still the one to copy, and the quotes below come from it.
 
 **Draw the flow; don't narrate it.** When the topic is control flow with branches (a
 loop, a request path, a state machine), use a diagram. agent-loop opens "How the loop

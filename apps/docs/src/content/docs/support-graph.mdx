@@ -49,7 +49,7 @@ The detailed diagram adds every node, both decision points, and the step trail:
 
 Every boundary below follows from that sentence. A free-form tool-use loop cannot make the claim. Put the ticket tool in the model's tool list and the model chooses when to file, so "why did it escalate?" has no answer better than "the prompt said so."
 
-So this client runs a second engine. `agent.mode: graph` is a LangGraph state graph, and every route through it is chosen by a plain Python function:
+So the engine is a LangGraph state graph, and every route through it is chosen by a plain Python function:
 
 ```python
 def decide_level1(*, top_similarity, score, n_hits, cfg) -> tuple[str, str]: ...
@@ -63,7 +63,7 @@ Four properties fall out of the structure rather than out of prompting:
 - **Nothing is filed until the user says yes.** The graph pauses on the offer. A confirmation resumes it.
 - **Every node commits its step before the next starts,** so a crash leaves the finished nodes on the record.
 
-> **The loop still exists.** `agent.mode: loop` is the default engine, used by the dormant clients in `config/disabled/`. Both engines emit the same SSE event contract, so the frontend renders either without knowing which ran. See [Agent Loop](/configent/docs/agent-loop).
+> **It is the only engine.** A free-form tool-use loop shipped beside it for clients the demo never loaded, and was deleted in D11. See [Retiring the Loop](/configent/docs/retiring-the-loop).
 
 ---
 
@@ -81,7 +81,7 @@ Most questions never leave Level 1. Level 2 is a second search of a different sh
 
 ## The nodes
 
-`app/routers/clients.py` dispatches on `agent.mode` to `stream_graph()`, which runs these:
+`app/routers/clients.py` calls `stream_graph()`, which runs these:
 
 | Node | Model call | Owns | Page |
 |---|---|---|---|
@@ -125,8 +125,8 @@ LangGraph provides the mechanism. Every decision stays in this repo's Python.
 | **The trail the UI shows** | Nothing | `RunRecorder` writes `runs.steps` |
 
 - **Why a framework now.** The two things LangGraph gives this graph are the two things the retired pipeline built by hand: resumable state (`RunRecorder` plus `Run.state`) and a confirm endpoint reading a parked draft. The full comparison, and every decision in the change: [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph).
-- **Why not LangChain model wrappers.** Top-level `search_result` blocks and `citations_delta` streaming have to behave exactly as they do in the loop. Calling the SDK inside the node guarantees that.
-- **Why the edges are not model-chosen.** A model picking the next node is the loop engine with extra steps. The edge function only reads a string Python already wrote.
+- **Why not LangChain model wrappers.** Top-level `search_result` blocks and `citations_delta` streaming have to behave exactly as the Messages API documents them. Calling the SDK inside the node guarantees that.
+- **Why the edges are not model-chosen.** A model picking the next node is a tool-use loop with extra steps. The edge function only reads a string Python already wrote.
 
 ---
 
@@ -172,7 +172,7 @@ The fix keeps the ordering. The grade call returns a `kind` field alongside its 
 
 Both were verified against the Messages API before the build. Between them they explain why the nodes are cut where they are.
 
-- **`search_result` blocks are valid as top-level user content.** They do not have to arrive inside a `tool_result`, so retrieval can be a node while citations keep working exactly as they do in the loop.
+- **`search_result` blocks are valid as top-level user content.** They do not have to arrive inside a `tool_result`, so retrieval can be a node with no tool involved.
 - **Citations and `output_config.format` cannot be combined.** The API returns 400. The split falls along node lines: `grade`, `rewrite` and `escalate` take structured output, and `answer` takes citations.
 
 > **The final response is assembled, not generated.** No single model call can return citations and a schema, so Python builds the response from the checkpointed state. The contract is constructed rather than hoped for.
@@ -194,7 +194,6 @@ The whole client is one YAML file:
 ```yaml
 client_id: gcp-platform-support
 agent:
-  mode: graph
   model: claude-haiku-4-5-20251001
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
@@ -204,16 +203,16 @@ agent:
     query_rewrites: 3
 ```
 
-Config decides *which* engine, *which* model, *where* the thresholds sit, and whether Level 2 runs. Code decides the graph's shape and who picks each route. Adding a client is a YAML file, a corpus and a prompt directory, with no Python. See [Adding a New Use Case](/configent/docs/adding-a-use-case).
+Config decides *which* model, *where* the thresholds sit, and whether Level 2 runs. Code decides the graph's shape and who picks each route. Adding a client is a YAML file, a corpus and a prompt directory, with no Python. See [Adding a New Use Case](/configent/docs/adding-a-use-case).
 
-> **A graph client carries no `agent.tools` key.** Retrieval is a node and the ticket executor is invoked from Python, so no tool definition is ever sent. `agent.tools` is read only by `loop.py`. See [Retrieval → Retrieval is a node, not a tool](/configent/docs/retrieval#retrieval-is-a-node-not-a-tool).
+> **A client config has no `tools` key.** Retrieval is a node and the ticket client is called from Python, so no tool definition is ever sent. The schema rejects unknown keys, so a leftover `tools`, `mode` or `effort` fails at load. See [Retrieval → Retrieval is a node, not a tool](/configent/docs/retrieval#retrieval-is-a-node-not-a-tool).
 
 ---
 
 ## Trade-offs I would raise myself
 
 - **Level 2 costs a question that ends with a human two more model calls.** A rewrite, a regrade and one embedding call run before the ticket offer: $0.031 for the quota question. The answerable Level 1 path makes the same calls it always did.
-- **Still no multi-hop.** Level 2 is one more search, not a loop. The loop engine exists for clients that need the other trade.
+- **No multi-hop.** Level 2 is one more search, not a loop. The engine that could chain searches was retired; see [Retiring the Loop](/configent/docs/retiring-the-loop#what-it-cost).
 - **Level 2 answers rest on the grader alone.** The cosine floor gates Level 1 only, because keyword matches carry no similarity. The answer is still cited from the passages.
 - **The grader is a model judging a model's inputs.** It is cheap and narrow, which is why it works. It is a second model call, not a proof.
 - **No resume after a crash.** Checkpoints are written after every node, but nothing reads them back except the ticket confirmation.

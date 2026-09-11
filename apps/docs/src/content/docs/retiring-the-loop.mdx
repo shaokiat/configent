@@ -1,0 +1,150 @@
+---
+title: Retiring the Loop
+description: Why the free-form tool-use loop was deleted rather than kept beside the graph. Both engines side by side, every decision in the change, what it cost, and how to recover the old code.
+order: 16
+group: The Support Graph
+---
+
+The repo shipped two engines until 2026-09-11. `agent.mode: loop` was a hand-written tool-use loop in which the model chose when to search and which tool to call. `agent.mode: graph` is [the support graph](/configent/docs/support-graph). The loop is now deleted (decision D11, PR #8), and this page keeps it on the record.
+
+**Nothing ran on it.** Its two clients, Acme Fab Equipment and Meridian Insurance, sat in `config/disabled/`, which the registry does not load.
+
+---
+
+## The two shapes
+
+**The loop** (June 2026 to D11):
+
+```
+up to 8 iterations
+  call Claude with the client's tools ── stop_reason?
+     ├─ end_turn  → collect text and citations, return
+     └─ tool_use  → run the tools concurrently, append tool_results, call again
+```
+
+**The graph** (D10):
+
+```
+Level 1 · RAG             retrieve → grade ─┬─ answer | converse
+Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
+Level 3 · human           escalate → ticket   (interrupt → user confirms → file)
+```
+
+---
+
+## Side by side
+
+| | Loop (retired) | **Graph (kept)** |
+|---|---|---|
+| **Who picks the next step** | The model, through `stop_reason` | `decide_level1` and `decide_level2` |
+| **Retrieval** | `search_docs`, a tool the model may call, skip or repeat | `retrieve`, a node that always runs |
+| **Escalation** | A tool in the model's list | Python drafts a ticket; the user confirms |
+| **Multi-hop** | Yes: one search can inform the next | No: at most one extra search at Level 2 |
+| **Business tools** | `pricing_lookup`, `coverage_check`, per client | None |
+| **Framework** | None | LangGraph, for checkpoints and the pause |
+| **Cache breakpoints** | System prompt, and the latest message of history | System prompt only |
+| **SSE events** | `tool`, `text`, `citation`, `done`, `error` | `run`, `step`, `text`, `citation`, `ticket_proposal`, `done`, `error` |
+| **Clients** | Acme, Meridian: neither loaded | `gcp-platform-support` |
+| **Code** | `loop.py` (592 lines), a tool registry, four tools | `graph.py` |
+
+---
+
+## Why it went
+
+- **Dead code with a maintenance bill.** Two test suites, a tool registry, two corpora and a UI branch kept passing for an engine no loaded client used.
+- **It blurred the graph's own boundaries.** The graph imported its cost, trace and conversation helpers from a file named `loop.py`.
+- **Its config keys read like capabilities.** `effort` and `tools` validated on a graph client and did nothing.
+- **The argument survives without the code.** "Why not give the model a ticket tool?" is answered by [Answering](/configent/docs/answering) and D2, not by a second engine nobody runs.
+
+D5 kept the loop because deleting it "throws away working code and the *when would you not use a fixed pipeline* answer". That answer is still right: exploratory tool use wants a loop. The code was only worth keeping while a client ran on it.
+
+---
+
+## The decisions made in the change
+
+All six are recorded under D11 in `docs/decisions.md`.
+
+1. **Delete, don't disable.** *Why:* disabled code still has to compile, pass its tests and be read around.
+2. **The two loop clients go with it.** *Why:* each depended on a loop-only tool, so neither could move to the graph as it stood.
+3. **What the graph used moves to `agent/common.py`.** Conversation loading, `UsageTotals`, trace rows, segment collection. *Why:* none of it was loop logic; it lived in `loop.py` because that file came first.
+4. **The ticket client becomes a plain module, `app/tickets.py`.** No tool definition, no registry. *Why:* the graph calls it from Python, so a model-facing schema was dead weight.
+5. **`AgentConfig` forbids unknown keys.** *Why:* a leftover `mode`, `tools` or `effort` would otherwise load silently and do nothing.
+6. **Cost is priced per model in the same change.** Prices come from `config/pricing/claude.yaml`. *Why:* moving `UsageTotals` meant touching the Sonnet 4.6 constants it applied to a Haiku client (D8).
+
+---
+
+## What carried over unchanged
+
+- **The SSE contract**, minus `tool`. The frontend already dropped events it didn't know.
+- **Citations as `search_result` blocks**, the `segments` format and the `excerpt()` preview.
+- **Conversation ownership checks** (A1), the rate limit and the daily budget.
+- **The ticket client's contract** (D4): the positional idempotency key, errors returned rather than raised, and its three tests against the real mock service.
+
+---
+
+## What was removed, and where it went
+
+| Loop | Now |
+|---|---|
+| `stream_turn()`, `run()`, `_stream_loop()`, `_run_loop()` | Removed. `stream_graph()` and `run_graph()` serve every client |
+| `_execute_tool()`, `_sorted_tool_defs()`, `_with_turn_breakpoint()` | Removed |
+| `UsageTotals`, `_prepare_conversation()`, `_collect_segments()`, `_excerpt()`, `_model_trace()` | `app/agent/common.py`, without the leading underscore. `UsageTotals` now takes a model id |
+| `_PRICE_*` constants (Sonnet 4.6 rates) | `config/pricing/claude.yaml`, looked up per model |
+| `tools/registry.py`, `search_docs`, `get_document`, `pricing_lookup`, `coverage_check` | Removed |
+| `tools/gcp_platform/create_escalation_ticket.py` | `app/tickets.py` · `create_ticket()` |
+| `agent.mode`, `agent.tools`, `agent.effort` | Rejected at load |
+| Acme Fab Equipment, Meridian Insurance | Removed: config, corpus, prompt, assets, sentinels |
+| `test_agent.py`, `test_stream.py`, `test_e2e_*.py`, `test_tools.py` | Removed. The ticket tests moved to `test_tickets.py` |
+| The web app's `tool` event, "Searching…" indicator and loop client group | Removed |
+| The Agent Loop and Tools System pages | This page |
+
+---
+
+## What it cost
+
+- **No multi-hop engine.** A question that needs one search to inform the next has nowhere to go. Level 2 is one extra search.
+- **No history caching.** The loop placed a breakpoint on the latest message. The graph's only breakpoint is on the answering system prompt, and on Haiku 4.5 that prompt is under the minimum cacheable length. See [Prompt Caching](/configent/docs/prompt-caching).
+- **One tenant in the repo.** Isolation is still enforced on every request, but only one client exercises it, and the cross-corpus sentinel test has one corpus to check.
+- **`documents.full_text` has no reader.** Ingestion still writes it; `get_document` was its only consumer.
+- **About 5,000 lines gone,** most of them corpus files, and a demo contrast that now lives in prose.
+
+---
+
+## Recovering the retired design
+
+Nothing was lost; it is in git. The last commit on `main` with the loop is `841a1ba`, the merge of PR #6.
+
+```bash
+# the engine, the registry, and their tests
+git show 841a1ba:apps/api/app/agent/loop.py
+git show 841a1ba:apps/api/app/tools/registry.py
+git show 841a1ba:apps/api/tests/test_agent.py
+git show 841a1ba:apps/api/tests/test_stream.py
+
+# a loop client, whole
+git show 841a1ba:config/disabled/acme-fab.yaml
+git show 841a1ba:prompts/acme-fab.md
+git ls-tree -r --name-only 841a1ba corpora/acme-fab
+
+# the docs as they stood
+git show 841a1ba:apps/docs/src/content/docs/agent-loop.mdx
+git show 841a1ba:apps/docs/src/content/docs/tools-system.mdx
+
+# put a directory back in the working tree
+git checkout 841a1ba -- corpora/acme-fab
+
+# how the loop evolved
+git log --oneline 3649cd9^..841a1ba -- apps/api/app/agent/loop.py
+```
+
+| Milestone | Where |
+|---|---|
+| The loop, non-streaming (T3.2) | `3649cd9`, 2026-06-11 |
+| The support pipeline beside the loop (D5) | PR #1 |
+| The graph replaces the pipeline (D10) | PR #6, merged as `841a1ba` |
+| The loop retired, cost priced per model (D11, D8) | PR #8 |
+| The decision records | `docs/decisions.md`: P3, P5, D5, D8, D11 |
+
+---
+
+**Next:** [Runs & Durability](/configent/docs/runs-and-durability), the trail every turn writes, and what a crash leaves behind.

@@ -1,18 +1,19 @@
 ---
 title: Quickstart
-description: Get a Configent RAG assistant running in under 10 minutes.
+description: Get a Configent support assistant running locally in under 10 minutes.
 order: 2
 group: Getting Started
 ---
 
 <div class="lead">
-  This guide walks you from zero to a working RAG assistant. You'll write one config file,
-  drop in some documents, and have a streaming agentic assistant running locally.
+  This guide walks you from zero to a working support assistant on your own documents. You'll
+  write one config file, drop in some documents, copy a prompt set, and have the support graph
+  streaming cited answers locally.
 </div>
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.12 and [uv](https://docs.astral.sh/uv/)
 - Docker (for Postgres + pgvector)
 - An [Anthropic API key](https://console.anthropic.com/)
 - A [Voyage AI API key](https://dash.voyageai.com/) — used for document and query embeddings (`voyage-3`)
@@ -28,7 +29,7 @@ Install backend dependencies:
 
 ```bash
 cd apps/api
-pip install -r requirements.txt
+uv sync
 ```
 
 Install frontend dependencies:
@@ -60,7 +61,7 @@ TICKET_API_URL=http://localhost:9000
 
 `.env.example` at the repo root is the source of truth for this list. `DATABASE_URL` needs
 the `+asyncpg` driver — the API's engine is async. `TICKET_API_URL` points at the mock
-ticket service that graph clients POST confirmed tickets to; `make dev` starts it.
+ticket service that confirmed tickets are POSTed to; `make dev` starts it.
 
 ## 4. Write your first config
 
@@ -82,53 +83,61 @@ corpus:
     overlap: 100
 
 agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/my-assistant.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/my-assistant/answer.md
+  max_tokens: 2048
 
 limits:
   rate_limit_per_minute: 20
   daily_budget_usd: 2.00
 ```
 
-> **The config is the only thing you write.** The orchestration layer reads this at startup,
-> embeds your documents using Voyage AI `voyage-3`, and has the assistant ready to query.
+The guardrail thresholds and corrective retrieval take their defaults. `agent.model` must have
+a row in `config/pricing/claude.yaml`; Haiku 4.5 and Sonnet 4.6 already do.
 
-> **Want a complete, real example?** The [Adding a New Use Case](/configent/docs/adding-a-use-case)
-> guide builds the **Acme Fab Equipment** assistant end to end, including when to add a
-> client-specific tool.
+> **Want a complete, real example?** [Adding a New Use Case](/configent/docs/adding-a-use-case)
+> walks through the shipped Cloud Platform Support assistant, including the one decision that
+> shapes the prompts: what the corpus can never know.
 
-## 5. Add your documents and system prompt
+## 5. Add your documents and prompts
 
-**Documents** — place any `.pdf`, `.md`, or `.html` files in `corpora/my-assistant/`.
+**Documents:** place any `.pdf`, `.md`, or `.html` files in `corpora/my-assistant/`.
 The ingest step scans this directory recursively.
 
-**System prompt** — create `prompts/my-assistant.md`:
+**Prompts:** the graph makes four model calls, each with its own prompt. Copy the shipped set
+and rewrite the domain-specific parts:
 
-```markdown
-You are a helpful assistant. Answer questions accurately using the knowledge base.
-Always cite the specific document and section you are referencing.
-If the answer is not in the knowledge base, say so — do not guess.
+```bash
+cp -r prompts/gcp-platform-support prompts/my-assistant
 ```
+
+| File | Used by |
+|---|---|
+| `answer.md` | The cited answer |
+| `grade.md` | Whether the passages support an answer, and whether the message is a question at all |
+| `rewrite.md` | The Level 2 query rewrite |
+| `ticket_draft.md` | The ticket offered when neither level can answer |
 
 ## 6. Ingest documents
 
 ```bash
 cd apps/api
-python -m app.cli ingest my-assistant
+uv run python -m app.cli --client my-assistant
 ```
 
 You'll see output like:
 
 ```
-INFO  Ingesting client: my-assistant
-INFO  Processing: corpora/my-assistant/product-manual.pdf
-INFO  Embedded 47 chunks → pgvector (namespace: my-assistant)
-INFO  Ingest complete: 1 added, 0 skipped, 47 total chunks
+Ingesting corpus for my-assistant...
+          Ingest summary: my-assistant
+┌───────────────────────────────┬───────┐
+│ Metric                        │ Count │
+├───────────────────────────────┼───────┤
+│ Documents added               │     4 │
+│ Documents replaced            │     0 │
+│ Documents skipped (unchanged) │     0 │
+│ Total chunks upserted         │    47 │
+└───────────────────────────────┴───────┘
 ```
 
 Documents are hashed. Re-running ingest skips unchanged files and re-embeds only modified ones.
@@ -136,15 +145,16 @@ Documents are hashed. Re-running ingest skips unchanged files and re-embeds only
 ## 7. Start the API
 
 ```bash
-uvicorn app.main:app --reload
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
 ```
 
-On startup the config registry loads all YAML files from `config/`, validates tool names,
-and registers the client. An unknown tool name or malformed config raises immediately.
+On the first request the config registry loads every YAML file in `config/`. A malformed
+config, an unknown `agent` key or a model with no price raises immediately.
 
 The API also opens the support graph's LangGraph checkpointer on Postgres and creates its
-tables, so the database has to be up first. Apply migrations once with
-`alembic upgrade head`; the Docker image runs it on every start.
+tables, so the database has to be up first. The Docker image runs `alembic upgrade head` on
+every start.
 
 ## 8. Start the frontend
 
@@ -160,24 +170,19 @@ Open `http://localhost:3000`. The landing page lists every client the registry l
 
 ## What happened?
 
-When you sent your first message, the agent loop:
+When you sent your first message, the support graph:
 
-1. Loaded conversation history (empty for a new session)
-2. Built the API request: sorted tool definitions + cached system prompt + turn breakpoint
-3. Sent to Claude — which decided to call `search_docs` with a focused query
-4. The engine executed `search_docs`: embedded your query via `voyage-3`, ran cosine similarity
-   search against `my-assistant`'s pgvector namespace, returned the top 5 chunks as
-   `search_result` blocks with citations enabled
-5. Claude received the results and produced a final response
-6. The response streamed back over SSE — text tokens and citation events arriving in real time
-7. The frontend rendered the response with inline citation popovers
+1. Loaded the conversation history (empty for a new session) and opened a run
+2. **`retrieve`** embedded your message with `voyage-3` and searched `my-assistant`'s chunks in pgvector
+3. **`grade`** asked Claude whether the passages support an answer, and whether the message is a question at all
+4. **`decide_level1`** compared the best similarity and the groundedness score against your thresholds
+5. **`answer`** streamed a reply from the passages as `search_result` blocks with citations enabled, and no tools
+6. Each node's step, the text and the citations streamed back over SSE
+7. The frontend rendered the step trail above the reply, with inline citation popovers
 
-The loop ran in **one iteration** (one tool call, one final response). For complex questions
-it may run multiple iterations up to the hardcoded limit of 8.
-
-> **That's `mode: loop`, the default.** A client can instead set `agent.mode: graph`, which
-> replaces the free-form loop with a three-tier support graph and moves every escalation
-> decision out of the model and into Python. See [Config Reference](/configent/docs/config-reference) for the keys.
+Had the passages fallen short, the graph would have rewritten the question and searched again
+(Level 2), then offered a drafted ticket (Level 3). A greeting skips all of that and gets a short
+reply. Expand the step trail above any reply to see which path ran.
 
 ---
 
@@ -186,5 +191,5 @@ it may run multiple iterations up to the hardcoded limit of 8.
 - [Overview](/configent/docs/concepts) — what Configent is, the stack, and where each design decision is written down
 - [Config Reference](/configent/docs/config-reference) — every key explained with types and defaults
 - [The Support Graph](/configent/docs/support-graph) — one question end to end, with the reasoning behind each boundary
-- [Example Configs](/configent/docs/examples) — the live client configs from the repo
+- [Example Configs](/configent/docs/examples) — the live client config from the repo
 - [Architecture](/configent/#architecture) — the graph diagram, the node walkthrough, and the design decisions

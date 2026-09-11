@@ -25,12 +25,14 @@ to provision, approve or explain. Enterprise prospects already run Postgres.
 **Consequence:** a very large corpus would eventually want HNSW tuning per client. Not a
 constraint at demo scale.
 
-### P3 — Manual agent loop, no framework · LOCKED
+### P3 — Manual agent loop, no framework · SUPERSEDED (2026-09-11, D10 and D11)
 The loop is a `while` over `messages.create` in `apps/api/app/agent/loop.py`.
 **Why:** tracing, cost accounting, budget enforcement and streaming all live inside the
 loop. Owning it means owning those. It is also short enough to whiteboard.
 **Consequence:** features a framework would supply (retries, checkpointing, structured
 output enforcement) are hand-built — which is the point of the support-agent pivot.
+**Superseded:** the support graph uses LangGraph for checkpoints and the ticket pause (D10),
+and the loop itself was deleted (D11). Model calls, cost and tracing are still plain code.
 
 ### P4 — Citations via `search_result` blocks · LOCKED
 `search_docs` returns Anthropic `search_result` content blocks with `citations.enabled`,
@@ -40,13 +42,17 @@ Prompt-based quoting can, and does.
 **Consequence:** citations are all-or-nothing per request — every search result in a
 request must enable them, which `search_docs` does unconditionally.
 
-### P5 — Prompt caching with a per-turn breakpoint · LOCKED
+### P5 — Prompt caching with a per-turn breakpoint · SUPERSEDED-IN-PART (2026-09-11, D11)
 System prompt cached once; a cache breakpoint is applied to the last content block of
 the latest message, per call, never baked into stored history.
 **Why:** a breakpoint written into history accumulates one marker per loop iteration and
 blows the four-breakpoint request limit.
 **Consequence:** tool definitions must serialise in a stable order — hence
 `_sorted_tool_defs`. Reordering `tools:` in a YAML must not invalidate the cache prefix.
+**Now:** only the system-prompt breakpoint survives, on the graph's answering call. The
+per-turn breakpoint and `_sorted_tool_defs` went with the loop, so history is not cached.
+On Haiku 4.5 even that breakpoint is inert: `answer.md` is about 750 tokens, under the
+model's 4,096-token minimum cacheable prefix (Part 3).
 
 ### P6 — Voyage AI embeddings (`voyage-3`) · LOCKED
 **Why:** asymmetric query/document embeddings, strong retrieval scores on technical
@@ -168,7 +174,7 @@ sessions, and no real ticketing system behaves that way.
 call count and payload, not on a literal id. The tool needs `run_id` in its executor
 kwargs, a signature change touching every tool; do it once, in W1.
 
-### D5 — Pipeline and loop coexist, selected by config · LOCKED
+### D5 — Pipeline and loop coexist, selected by config · SUPERSEDED (2026-09-11, D11)
 `AgentConfig.mode: "loop" | "pipeline"`, default `loop`. `gcp-platform-support` runs
 `pipeline`; Acme and Meridian stay on `loop`, dormant — their configs sit in
 `config/disabled/`, which the registry does not load, so the demo serves GCP alone.
@@ -203,10 +209,15 @@ outputs, and it's the claim most likely to be probed.
 **Consequence:** some expectations will turn out ambiguous. Fix them in a separate, later
 commit with a note — never amend the original.
 
-### D8 — Cost is priced per model · LOCKED
+### D8 — Cost is priced per model · LOCKED (built 2026-09-11, #8)
 Replace the module-level `_PRICE_*` constants with `_PRICES: dict[str, ModelPrice]` keyed
 by model id; price each call by the model that served it. An unknown model id raises at
 config load.
+
+**Built:** the table lives in `config/pricing/claude.yaml` rather than in code, so a price
+change is a config diff with a date beside it. `price_for()` in `app/config/pricing.py`
+loads it; the registry calls it for every client at load. Calls are priced at the client's
+`agent.model`, which every node uses.
 
 **Why:** the current constants are Sonnet 4.6 rates applied to every call, and
 `gcp-platform-support.yaml` already runs Haiku — so every cost number in the repo is wrong
@@ -319,6 +330,34 @@ pronoun follow-up or an exact identifier like `iam.serviceAccounts.actAs` could 
 - Web search is deliberately not in Level 2. Under D1, the questions that reach Level 3
   depend on the user's own project, which no public page can answer.
 
+### D11 — The loop engine is retired · LOCKED (decided and built 2026-09-11, #8)
+The free-form tool-use loop, its tool registry and tools, and the two clients that used it
+(Acme Fab Equipment, Meridian Insurance) are deleted. Every client runs the support graph.
+`AgentConfig` drops `mode`, `tools` and `effort`, and forbids unknown keys.
+
+- **What the graph used moves to `app/agent/common.py`:** conversation loading,
+  `UsageTotals`, trace rows, segment collection.
+- **The ticket client becomes `app/tickets.py`,** without the model-facing tool definition
+  the graph never sent.
+- **Recoverable from git at `841a1ba`.** The docs page *Retiring the Loop* lists the commands.
+
+**Why:** nothing ran on it. Its clients sat in `config/disabled/`, which the registry does not
+load, yet it kept two test suites, a tool registry, two corpora and a UI branch alive. The
+graph imported its cost and conversation helpers from a file named `loop.py`, and graph
+configs accepted `tools` and `effort` keys that did nothing.
+
+**What it supersedes:**
+- **P3:** no hand-written agent loop remains.
+- **P5:** only the system-prompt breakpoint survives.
+- **D5:** one engine, not two selected by config. D5's argument, that exploratory tool use
+  wants a loop, still holds; it is now made in the docs rather than demonstrated in code.
+
+**Consequence:**
+- No multi-hop engine. A question that needs one search to inform the next has nowhere to go.
+- One tenant in the repo. Isolation is still enforced on every request, but only one client
+  exercises it.
+- `documents.full_text` has no reader; ingestion still writes it.
+
 ---
 
 ## Part 3 — Known gaps
@@ -340,4 +379,7 @@ what it would take" is a better answer than a half-built version of it.
 | **Two simultaneous confirmations both resume the paused graph.** | Both file with the same `{run_id}:{stage_seq}` key, so the ticket service collapses them into one ticket (D4). Only the duplicate Trace row is visible. | A row lock on the run for the duration of the confirm. |
 | **No resume after a crash.** Checkpoints are written, but nothing reads them back except the ticket confirmation. | The first draft proves the trail survives a crash (D6); resuming is a separate feature with its own UI. | A resume endpoint that calls `astream(None, thread)` after checking the run, and an "interrupted — Resume" control (D3). |
 | **The checkpointer shares one Postgres connection.** | One API instance at demo load; the saver serialises access with a lock. | An `AsyncConnectionPool`, so concurrent turns don't queue and a dropped connection heals. |
+| **Cost is an estimate from a checked-in price table** (D8). Nothing reconciles it against the bill. | Prices change rarely and the table is dated. An unpriced model fails startup, so the failure that matters, a turn reported as free, cannot happen. | A daily job comparing summed `traces.cost_usd` against the Admin API cost report (`/v1/organizations/cost_report`), alerting on drift. |
+| **No multi-hop engine** (D11). A question that needs one search to inform the next gets one extra search at most. | The loop that could chain searches served no loaded client. | A tool-holding research node inside the graph, still sent no ticket tool. |
+| **Nothing is prompt-cached on Haiku 4.5** (P5). The answering call's one breakpoint covers a ~750-token system prompt, under the model's 4,096-token minimum, and history has no breakpoint. | Haiku input is $1/MTok and support conversations are a few turns; caching a prompt this size would save a fraction of a cent per turn. | A breakpoint on the last history message for long conversations, or a model with a lower minimum. |
 | **The ticket service is a mock in this repo.** | It exercises the real integration shape — HTTP, schema, idempotency key, retries, failure injection — without a vendor account. | A real ticketing API. The client swaps; the retry and idempotency paths don't. |

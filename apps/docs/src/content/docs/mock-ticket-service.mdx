@@ -68,7 +68,7 @@ These are what make the retry and resume demos runnable on command instead of ho
 
 ## How the caller handles failure
 
-`tools/gcp_platform/create_escalation_ticket.py` POSTs with a 10-second timeout and **returns** errors rather than raising them:
+`create_ticket()` in `app/tickets.py` POSTs with a 10-second timeout and **returns** errors rather than raising them:
 
 | Response | Returned to the graph |
 |---|---|
@@ -79,9 +79,9 @@ These are what make the retry and resume demos runnable on command instead of ho
 
 A 4xx is our bug, not theirs — retrying a 422 is not resilience.
 
-Errors are returned rather than raised for two reasons: the graph decides what happens next (a failed filing pauses for a retry), and the model must never be shown a raw exception.
+Errors are returned rather than raised for two reasons: the graph decides what happens next (a failed filing pauses for a retry), and the user must never be shown a raw exception.
 
-> **One attempt, deliberately.** There is no retry loop in the tool. Retry with backoff belongs next to the dead-letter decision, not buried inside a tool that doesn't know what a run is.
+> **One attempt, deliberately.** There is no retry loop in the client. Retry with backoff belongs next to the dead-letter decision, not buried inside a client that doesn't know what a run is.
 
 ## Configuration
 

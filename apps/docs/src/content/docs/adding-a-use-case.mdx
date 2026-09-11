@@ -1,222 +1,169 @@
 ---
 title: Adding a New Use Case
-description: The repeatable recipe for adding a new client (assistant) to Configent, using the Acme Fab Equipment bot as the worked end-to-end example.
+description: The repeatable recipe for adding a new client (assistant) to Configent, using the Cloud Platform Support assistant as the worked example.
 order: 6
 # group: Getting Started  # hidden from sidebar — reachable by link
 ---
 
 <div class="lead">
-Configent's <a href="/configent/docs/examples#acme-fab-equipment">Acme Fab Equipment</a> bot was
-  added with <strong>zero engine changes</strong> — a corpus, a prompt, one config file, and one
-  small tool. This guide turns that into a recipe you can follow for any new use case, and
-  foregrounds the single decision that matters: can your assistant run on the shared tools alone,
-  or does it need a client-specific tool?
+  A new assistant is a new client: a config file, a corpus, four prompts and a logo. Every client
+  runs <a href="/configent/docs/support-graph">the support graph</a>, so the real work is
+  deciding what the corpus can answer and writing prompts that hold that line.
 </div>
 
 ---
 
 ## The anatomy of a client
 
-A new assistant is a new **client**: a tenant defined entirely by data, with no changes to the
-engine for the common case. At most you create five things:
-
 | Artifact | Path | Controls |
 |----------|------|----------|
-| **Config** | `config/<id>.yaml` | Identity, branding, model, corpus pointer, tool list, limits |
+| **Config** | `config/<id>.yaml` | Identity, branding, model, thresholds, limits |
 | **Corpus** | `corpora/<id>/` | The documents the assistant answers from (`.md`, `.pdf`, `.html`) |
-| **System prompt** | `prompts/<id>.md` | Persona, grounding rules, when to use each tool |
+| **Prompts** | `prompts/<id>/` | `answer.md`, `grade.md`, `rewrite.md`, `ticket_draft.md` |
 | **Branding asset** | `assets/<id>/logo.svg` | The logo shown in the chat UI |
-| **Golden set** *(optional)* | `evals/<id>/golden.jsonl` | Q&A pairs for offline quality checks |
+| **Sentinels** *(recommended)* | `evals/sentinels.yaml` | Facts planted verbatim, so retrieval tests have ground truth |
+| **Golden set** *(optional)* | `evals/<id>/golden.jsonl` | The expected outcome for each test question |
 
-If your assistant only needs to answer questions from documents, those files are everything — the
-shared `search_docs` and `get_document` tools handle retrieval and citation, and you write **no
-code**.
-
----
-
-## The one decision: shared tools, or a client-specific tool?
-
-Every client gets the shared tools for free. The only question is whether yours needs to *do*
-something deterministic that retrieval can't:
-
-- **Shared tools only** (`search_docs` + `get_document`) → a pure RAG assistant. Ask a question,
-  get a cited answer from the corpus. No new code.
-- **Add a client-specific tool** → when the assistant must return an auditable, structured result:
-  look up a live price, return a deterministic verdict, file a ticket.
-
-The shipped clients sit on that spectrum:
-
-| Client | Client-specific tool | Why it needs one |
-|--------|----------------------|------------------|
-| **Acme Fab Equipment** | `pricing_lookup` | Return a real quote (price, discount, lead time) for a part |
-| **Meridian Insurance** | `coverage_check` | Return an auditable covered / not-covered verdict for a claim scenario |
-| **Cloud Platform Support** | `create_escalation_ticket` | File a ticket when a question depends on project state the docs can't know — invoked from the support graph, not chosen by the model |
-
-**A quick checklist — you need a tool when the answer:**
-
-1. Requires a calculation or lookup that isn't in the documents, **or**
-2. Must be a structured, machine-checkable result (not prose), **or**
-3. Triggers an action (file, send, create) rather than just informing.
-
-If none of these are true, ship with the shared tools.
+A model not yet in `config/pricing/claude.yaml` also needs a price row there.
 
 ---
 
-## Walkthrough: building the Acme Fab Equipment bot
+## The one decision: what can the corpus never know?
 
-Here's the exact sequence used to add the Acme Fab Equipment assistant.
+The graph answers what the corpus supports and offers a ticket for the rest. Write that
+boundary down before writing a prompt.
 
-> **A note on `config/disabled/`.** The demo deployment serves Cloud Platform Support alone, so
-> Acme's config currently lives in `config/disabled/acme-fab.yaml` — a directory the registry does
-> not read. Everything else about the client is unchanged, and moving the file up to `config/` and
-> restarting the API brings it online. Write your own config straight to `config/`.
+| Answerable from documentation | Needs a human |
+|---|---|
+| What a default, limit or error message means | Anything about the user's own account or project |
+| How a documented mechanism behaves | A change: quota, access, billing |
+| Which documented cause fits a symptom | Whether an incident is happening right now |
+
+Cloud Platform Support's corpus is public Google Cloud documentation. "What does the PORT error
+mean?" is answerable. "Raise my quota" structurally is not, however relevant the retrieved
+passages look. `grade.md` names that second column explicitly, which is what lets the grader
+score it low.
+
+---
+
+## Walkthrough: Cloud Platform Support
 
 ### 1. Plant the corpus
 
-The corpus lives in `corpora/acme-fab/`: product overview, the PX-900 operations, maintenance and
-troubleshooting manuals, the LT-200 operations manual, an installation guide, a process chemistry
-guide, a spare parts catalog, and two FAQs.
+`corpora/gcp-platform-support/` holds 10 pages of public Google Cloud documentation (CC BY 4.0,
+attributed per file) across Cloud Run, GKE and IAM.
 
-> **Getting source documents into a corpus.** If your source is MDX/HTML, strip the frontmatter
-> and any JSX/components so chunks contain prose, not markup. Keep each key fact on a single line
-> so it survives chunking and can be cited verbatim. Remember the corpus is a *snapshot* — re-run
-> ingestion to refresh it when the source changes.
+> **Getting source documents into a corpus.** Strip frontmatter and components so chunks
+> contain prose, not markup. Keep each key fact on a single line so it survives chunking and can
+> be cited verbatim. The corpus is a *snapshot*: re-run ingestion to refresh it.
 
-Each client's corpus is isolated: a fact planted for one client is never retrieved for another.
+Add a few sentinel facts to `evals/sentinels.yaml`, each a sentence copied verbatim from one
+document. `test_sentinels.py` checks that every sentinel appears in its document and in no other
+client's corpus.
 
-### 2. Write the system prompt
+### 2. Write the four prompts
 
-`prompts/acme-fab.md` sets the persona (a senior field-service engineer for the PX-900 and LT-200
-lines), the grounding rules (answer only from retrieved docs, cite the source, say "I don't know"
-on empty retrieval), and — critically — *when to call the tool*: look a price up rather than
-reading one out of a catalog chunk.
+`agent.system_prompt_file` points at `answer.md`; the other three must sit beside it.
 
-### 3. (If needed) add a client-specific tool
+| File | Call | What it has to say |
+|---|---|---|
+| `answer.md` | Streaming, with citations | The persona; answer only from the passages; cite |
+| `grade.md` | Structured output | What the corpus can never know; the confidence bands; what counts as `conversation` or `handoff` |
+| `rewrite.md` | Structured output | How to turn a follow-up into standalone queries and exact keywords |
+| `ticket_draft.md` | Structured output | How to write a subject and body the support team can act on |
 
-Acme needs live quotes, so it gets one tool. A tool is a small module that exposes a `DEFINITION`
-(the Anthropic tool schema) and an async `execute` function:
+Start from `prompts/gcp-platform-support/` and rewrite the domain parts. Each prompt's structure,
+and the fields it asks the model to return, stay the same.
 
-```python
-# apps/api/app/tools/acme_fab/pricing_lookup.py
-from typing import Any
+> **Some of the ticket path is still written for one queue.** The draft schema's `category` and
+> `product_area` values (`cloud_run`, `gke`, `iam`), the wording of the ticket offer, and the
+> greeting fallback live in `agent/graph.py`. A client with a different support queue needs those
+> moved to config first.
 
-DEFINITION = {
-    "name": "pricing_lookup",
-    "description": "Look up the unit price, volume discount, and lead time for an Acme part ...",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "part_number": {"type": "string"},
-            "quantity":    {"type": "integer", "default": 1},
-        },
-        "required": ["part_number"],
-    },
-}
+### 3. Write the config
 
-async def execute(tool_input: dict[str, Any], **_) -> dict:
-    # Canned catalog data — deterministic, and agrees with the spare-parts sentinel facts.
-    part = _CATALOG[tool_input["part_number"]]
-    return {"unit_price_usd": part["unit_price_usd"], "lead_time_days": ..., ...}
-```
-
-Then register it **once** in the tool registry:
-
-```python
-# apps/api/app/tools/registry.py
-from app.tools.acme_fab import pricing_lookup
-
-_REGISTRY = {
-    # ...shared + other client tools...
-    "pricing_lookup": (pricing_lookup.DEFINITION, pricing_lookup.execute),
-}
-```
-
-That one line makes the name available to configs. Use the shipped `pricing_lookup` as a
-copy-paste template for your own tool. Keep tools **deterministic** — they should return
-structured data the agent can cite, not invent business facts.
-
-### 4. Write the config
-
-`config/acme-fab.yaml` ties it together and lists exactly the tools the assistant should have:
+`config/gcp-platform-support.yaml`, with comments trimmed:
 
 ```yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
 
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: AcmeAssist
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
+  suggested_questions:
+    - "My Cloud Run container fails to start — what does the PORT error mean?"
+    - "Why won't my GKE node pool scale down after I deleted the workload?"
+    - "Can you raise my Cloud Run instance quota for europe-west1?"
 
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/gcp-platform-support/
   chunking:
-    chunk_size: 800   # larger chunks → whole procedure steps survive intact
-    overlap: 100
+    chunk_size: 512
+    overlap: 64
 
 agent:
-  model: claude-haiku-4-5-20251001   # fast + cheap is right for factual lookup
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
-    - pricing_lookup
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+  corrective:
+    enabled: true
+    query_rewrites: 3
 
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```
 
-### 5. Add a branding asset
+- **Start with the default thresholds.** Tune them against a golden set, not against one answer that looked wrong.
+- **One suggested question per branch.** An answer from one document, a synthesis, and a question only a human can act on.
 
-Drop a `logo.svg` into `assets/acme-fab/`. The UI reads `branding` to render a chat that
-looks like the client's own product.
+### 4. Add a branding asset
 
-### 6. (Optional) add a golden eval set
+Drop a `logo.svg` into `assets/gcp-platform-support/`. The UI reads `branding` to render a chat
+that looks like the client's own product.
 
-`evals/acme-fab/golden.jsonl` holds Q&A pairs — including a refusal case the corpus can't answer —
-so you can measure grounding before shipping a change. See
-[Citations](/configent/docs/citations) for how grounding is evaluated.
-
-### 7. Ingest and try it
+### 5. Ingest and try it
 
 ```bash
-make ingest CLIENT=acme-fab   # or just restart the API — it ingests on startup
+cd apps/api
+uv run python -m app.cli --client gcp-platform-support
 ```
 
-Open `/c/acme-fab` and ask away. Re-running ingest is safe: unchanged documents are
-skipped, changed ones are re-embedded.
+Open `/c/gcp-platform-support` and ask the suggested questions. Re-running ingest is safe:
+unchanged documents are skipped, changed ones are re-embedded.
 
 ---
 
-## What the engine validates for you
+## What the platform validates for you
 
-You don't wire any of this manually — the platform checks it at startup:
+The registry checks every config when it first loads:
 
-- **Config schema:** the platform validates it; a malformed config fails boot with an error naming the field and
-  the file.
-- **Tool names fail fast.** Every name in `agent.tools` is checked against the registry. An unknown
-  tool name stops startup — it can never reach a live user. (See [Tools](/configent/docs/tools-system).)
-- **Tenant isolation:** the platform enforces it at the query level, filtering retrieval by `client_id`, so a
-  client can only ever see its own corpus. (See [Multi-Tenancy](/configent/docs/multi-tenancy).)
+- **Config schema:** a malformed config fails with an error naming the field and the file.
+- **Unknown keys fail.** A typo in an `agent` key, or a leftover `tools` from the retired loop engine, is rejected rather than ignored.
+- **An unpriced model fails.** `agent.model` must have a row in `config/pricing/claude.yaml`.
+- **An unreachable guardrail fails.** An `escalate_below` at or under `retrieval_drop_floor` could never fire, so it is refused.
+- **Tenant isolation** is enforced at the query level, filtering retrieval by `client_id`. See [Multi-Tenancy](/configent/docs/multi-tenancy).
 
 ---
 
 ## New use case in five steps
 
 ```text
-corpora/<id>/            1. Drop in documents
-prompts/<id>.md          2. Write the system prompt
-apps/api/app/tools/<id>/ 3. (only if needed) add + register a client-specific tool
-config/<id>.yaml         4. Write the config, listing the tools to enable
-assets/<id>/logo.svg     5. Add branding → make ingest CLIENT=<id>
+corpora/<id>/            1. Drop in documents, plant a few sentinels
+prompts/<id>/            2. Write answer.md, grade.md, rewrite.md, ticket_draft.md
+config/<id>.yaml         3. Write the config (and a price row for a new model)
+assets/<id>/logo.svg     4. Add branding
+python -m app.cli        5. --client <id>, then open /c/<id>
 ```
 
-No code change for a documents-only assistant. No deployment pipeline. If something doesn't
-validate, the startup error names the field and the file.
+No Python for a client whose tickets go to the same kind of queue. If something doesn't
+validate, the error names the field and the file.
 
 See also: [Configuration Reference](/configent/docs/config-reference) ·
-[Tools System](/configent/docs/tools-system) ·
+[The Support Graph](/configent/docs/support-graph) ·
 [Example Configs](/configent/docs/examples)

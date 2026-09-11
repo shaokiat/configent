@@ -106,12 +106,8 @@ interface RunStep {
 }
 ```
 
-`ChatPanel` keeps two copies of the same data, deliberately:
-
-- **`liveSteps`** — the turn currently streaming. Separate from the message so the trail
-  can render before the assistant has produced any text.
-- **`msg.steps`** — attached to the assistant message as each `step` arrives, so the trail
-  stays after the stream ends.
+`ChatPanel` attaches each `step` to the assistant message as it arrives (`msg.steps`), so
+the trail renders before the assistant has produced any text and stays after the stream ends.
 
 `StepTrail` renders a collapsible timeline, open while live and collapsed afterwards.
 `stageLabel` maps node names to human phrasing ("Graded the evidence", "Searched again:
@@ -122,9 +118,6 @@ runs colour their trail differently from answered ones.
 The amber "escalated" badge fires on `escalate` and `ticket` steps only. A greeting ends at
 its own `converse` node, labelled *"Not a support request · no ticket"*, so it can never be
 badged as an escalation.
-
-The loop's "Searching…" tool indicator is suppressed whenever steps are present, so a
-graph turn reports progress one way rather than two.
 
 > **The trail survives a reload.** Steps live in the `runs` table, not on the message row,
 > and the assistant `Message` carries a `run_id` to join back through. Replaying a
