@@ -7,7 +7,6 @@ import { ThemeToggle } from "./theme";
 interface ClientSummary {
   id: string;
   name: string;
-  mode: string;
   branding: {
     assistant_name: string;
     primary_color: string;
@@ -32,23 +31,11 @@ async function getClients(): Promise<ClientSummary[]> {
 
 // Copy the registry cannot supply: what each client is for, in the words a visitor
 // needs. Keyed by client_id; a client with no entry still renders from its tagline.
-// Acme and Meridian are kept here against their configs in `config/disabled/` — the
-// demo loads GCP alone, so those two never render unless a config is moved back up.
 const BLURBS: Record<string, { description: string; tags: string[] }> = {
   "gcp-platform-support": {
     description:
       "Answers Cloud Run, GKE and IAM questions from public Google Cloud documentation, with citations. Questions that depend on your own project can't be answered from those documents, so it files a ticket instead.",
     tags: ["Three-tier escalation", "Two-signal guardrail", "Human in the loop"],
-  },
-  "acme-fab": {
-    description:
-      "Industrial equipment specs, maintenance schedules, parts pricing, and compliance documentation — all answered in seconds.",
-    tags: ["Specs & Manuals", "Pricing Lookup", "Maintenance"],
-  },
-  "meridian-insurance": {
-    description:
-      "Coverage details, claims procedures, eligibility rules, and policy comparisons — grounded in official documents.",
-    tags: ["Coverage", "Claims", "Eligibility"],
   },
 };
 
@@ -75,11 +62,9 @@ function ClientCard({ client, primary }: { client: ClientSummary; primary?: bool
         >
           {client.name.charAt(0)}
         </div>
-        {client.mode === "graph" && (
-          <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
-            support graph
-          </span>
-        )}
+        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+          support graph
+        </span>
       </div>
 
       <div className="mb-1 flex items-center gap-2">
@@ -130,8 +115,6 @@ function ClientCard({ client, primary }: { client: ClientSummary; primary?: bool
 
 export default async function Home() {
   const clients = await getClients();
-  const supportGraph = clients.filter((c) => c.mode === "graph");
-  const loop = clients.filter((c) => c.mode !== "graph");
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-white flex flex-col">
@@ -177,41 +160,17 @@ export default async function Home() {
             </p>
           </div>
         ) : (
-          <>
-            {/* Primary: the support-graph client(s) this deployment is built around */}
-            {supportGraph.length > 0 && (
-              <div className="w-full max-w-2xl mb-10 grid grid-cols-1 gap-5">
-                {supportGraph.map((client) => (
-                  <ClientCard key={client.id} client={client} primary />
-                ))}
-              </div>
-            )}
-
-            {/* Secondary: clients still on the free-form loop. Same codebase, same
-                entry point, different engine — selected by one line of config. */}
-            {loop.length > 0 && (
-              <div className="w-full max-w-2xl mb-14">
-                <div className="flex items-center gap-3 mb-5">
-                  <div className="h-px flex-1 bg-gray-200 dark:bg-white/10" />
-                  <span className="text-xs text-gray-400 dark:text-white/30 uppercase tracking-wide font-medium">
-                    Also in this deployment · free-form loop
-                  </span>
-                  <div className="h-px flex-1 bg-gray-200 dark:bg-white/10" />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  {loop.map((client) => (
-                    <ClientCard key={client.id} client={client} />
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
+          <div className="w-full max-w-2xl mb-14 grid grid-cols-1 gap-5">
+            {clients.map((client) => (
+              <ClientCard key={client.id} client={client} primary />
+            ))}
+          </div>
         )}
 
         {/* How it works strip */}
         <div className="grid grid-cols-3 gap-8 max-w-xl text-center">
           {[
-            { step: "1", label: "YAML config", sub: "Model, tools, thresholds" },
+            { step: "1", label: "YAML config", sub: "Model and thresholds" },
             { step: "2", label: "Drop documents", sub: "Markdown corpus" },
             { step: "3", label: "Instant assistant", sub: "Citations + audit trail" },
           ].map(({ step, label, sub }) => (

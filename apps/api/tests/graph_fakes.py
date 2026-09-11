@@ -146,7 +146,7 @@ class Harness:
 
         monkeypatch.setattr(graph, "_graph", graph._builder.compile(checkpointer=InMemorySaver()))
         monkeypatch.setattr(graph, "RunRecorder", _recorder_class(self.runs))
-        monkeypatch.setattr(graph, "_prepare_conversation", self._prepare)
+        monkeypatch.setattr(graph, "prepare_conversation", self._prepare)
         monkeypatch.setattr(graph, "search", self._search)
         monkeypatch.setattr(graph, "hybrid_search", self._hybrid)
         monkeypatch.setattr(graph, "_structured_call", self._structured)
@@ -194,7 +194,7 @@ class Harness:
         self.answer_requests.append(kwargs)
         return _AnswerStream(self.scenario.get("answer_text", "By default each instance gets 1 vCPU."))
 
-    async def _file(self, draft, *, db, client_id, run_id, stage_seq):
+    async def _file(self, draft, *, run_id, stage_seq):
         self.ticket_calls.append({"draft": draft, "run_id": run_id, "stage_seq": stage_seq})
         if self.ticket_failures:
             self.ticket_failures -= 1

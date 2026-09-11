@@ -96,12 +96,6 @@ function parseSse(buffer: string): { events: SseEvent[]; rest: string } {
   return { events, rest: buffer };
 }
 
-function toolLabel(name: string): string {
-  if (name === "search_docs") return "Searching documents";
-  if (name === "get_document") return "Opening document";
-  return `Running ${name}`;
-}
-
 const POPOVER_W = 384; // w-96
 
 function storageKey(clientId: string): string {
@@ -514,12 +508,7 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  // Steps for the turn currently streaming. Kept separate from the message so the
-  // trail can be shown before the first answer token arrives; W2 also needs runId to
-  // offer "Resume" when a stream closes without `done`.
-  const [liveSteps, setLiveSteps] = useState<RunStep[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -557,7 +546,7 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, toolStatus]);
+  }, [messages]);
 
   function startNewChat() {
     sessionStorage.removeItem(storageKey(branding.id));
@@ -580,7 +569,6 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
 
   function handleEvent(event: string, data: Record<string, unknown>) {
     if (event === "text") {
-      setToolStatus(null);
       updateLastAssistant((msg) => {
         const lastPart = msg.parts[msg.parts.length - 1];
         if (lastPart?.kind === "text") {
@@ -602,9 +590,6 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
           cited_text: (data.cited_text as string) ?? "",
         });
       });
-    } else if (event === "tool") {
-      if (data.status === "start") setToolStatus(toolLabel(data.name as string));
-      else setToolStatus(null);
     } else if (event === "ticket_proposal") {
       updateLastAssistant((msg) => {
         msg.proposal = data as unknown as TicketProposal;
@@ -616,8 +601,6 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
       // Each stage of the pipeline as it completes. Shown live, then kept with the
       // message so the trail is still there after the answer finishes.
       const step = data as unknown as RunStep;
-      setLiveSteps((prev) => [...prev, step]);
-      setToolStatus(null);
       updateLastAssistant((msg) => {
         msg.steps = [...(msg.steps ?? []), step];
       });
@@ -635,7 +618,6 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
           ticket_id: (data.ticket_id as string | null) ?? null,
         };
       });
-      setLiveSteps([]);
     } else if (event === "error") {
       updateLastAssistant((msg) => {
         msg.error = (data.message as string) || "Something went wrong.";
@@ -719,7 +701,6 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
       });
     } finally {
       setStreaming(false);
-      setToolStatus(null);
       inputRef.current?.focus();
     }
   }
@@ -887,32 +868,6 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
               </div>
             </div>
           )
-        )}
-
-        {/* Tool status (loop clients only — the pipeline reports progress as steps) */}
-        {toolStatus && liveSteps.length === 0 && (
-          <div className="flex justify-start gap-3">
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm"
-              style={{ backgroundColor: branding.primary_color }}
-            >
-              {branding.assistant_name.charAt(0)}
-            </div>
-            <div className="bg-gray-50 dark:bg-white/5 rounded-2xl rounded-tl-md px-4 py-3 border border-gray-200 dark:border-white/10">
-              <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-white/40">
-                <svg
-                  className="w-3.5 h-3.5 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                {toolStatus}…
-              </div>
-            </div>
-          </div>
         )}
 
         <div ref={bottomRef} />

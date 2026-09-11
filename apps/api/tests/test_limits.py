@@ -1,15 +1,41 @@
-"""Tests for A3: cost math (TC-4.1), rate limiting, and the daily budget guard."""
+"""Tests for A3 and D8: cost math, rate limiting, and the daily budget guard."""
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
+from app.agent.common import UsageTotals
 from app.agent.limits import (
     BudgetExceeded,
     _rate_windows,
     check_daily_budget,
 )
+from app.config.pricing import price_for
 from app.config.schema import LimitsConfig
+
+CLIENT = "gcp-platform-support"
+HAIKU = "claude-haiku-4-5-20251001"
+_MTOK = 1_000_000
+
+
+def test_cost_prices_each_token_kind_at_the_models_own_rate():
+    usage = UsageTotals(HAIKU, _MTOK, _MTOK, _MTOK, _MTOK)
+    price = price_for(HAIKU)
+    assert usage.cost_usd == pytest.approx(
+        price.input + price.output + price.cache_write + price.cache_read
+    )
+
+
+def test_the_same_tokens_cost_less_on_haiku_than_on_sonnet():
+    """The bug D8 fixed: every call was priced at Sonnet rates, whichever model ran."""
+    haiku = UsageTotals(HAIKU, input_tokens=_MTOK, output_tokens=_MTOK)
+    sonnet = UsageTotals("claude-sonnet-4-6", input_tokens=_MTOK, output_tokens=_MTOK)
+    assert haiku.cost_usd < sonnet.cost_usd
+
+
+def test_an_unpriced_model_is_an_error_not_free():
+    with pytest.raises(ValueError, match="No price"):
+        UsageTotals("claude-unpriced", input_tokens=1).cost_usd
 
 
 def test_enforce_rate_limit_returns_429_with_json_body():
@@ -37,7 +63,7 @@ def _mock_scalar_result(value):
 async def test_check_daily_budget_under_threshold_does_not_raise():
     db = AsyncMock()
     db.execute.return_value = _mock_scalar_result(1.00)
-    cfg = MagicMock(client_id="acme-fab", limits=LimitsConfig(daily_budget_usd=2.00))
+    cfg = MagicMock(client_id=CLIENT, limits=LimitsConfig(daily_budget_usd=2.00))
 
     await check_daily_budget(db, cfg)  # should not raise
 
@@ -47,7 +73,7 @@ async def test_check_daily_budget_at_threshold_raises():
     """TC-4.5: spend at or above the daily budget trips the guard (>= per A3 spec)."""
     db = AsyncMock()
     db.execute.return_value = _mock_scalar_result(2.00)
-    cfg = MagicMock(client_id="acme-fab", limits=LimitsConfig(daily_budget_usd=2.00))
+    cfg = MagicMock(client_id=CLIENT, limits=LimitsConfig(daily_budget_usd=2.00))
 
     with pytest.raises(BudgetExceeded):
         await check_daily_budget(db, cfg)
@@ -59,7 +85,7 @@ async def test_enforce_daily_budget_returns_429_with_json_body():
 
     db = AsyncMock()
     db.execute.return_value = _mock_scalar_result(5.00)
-    cfg = MagicMock(client_id="acme-fab", limits=LimitsConfig(daily_budget_usd=2.00))
+    cfg = MagicMock(client_id=CLIENT, limits=LimitsConfig(daily_budget_usd=2.00))
 
     with pytest.raises(HTTPException) as exc_info:
         await _enforce_daily_budget(db, cfg)

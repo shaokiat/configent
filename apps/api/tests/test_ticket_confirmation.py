@@ -90,7 +90,7 @@ async def test_a_run_from_another_client_is_not_confirmable(h):
     """Tenancy is enforced here, not by the database (P8)."""
     await _propose(h)
     with pytest.raises(graph.RunUnavailable):
-        await h.confirm(client_id="acme-fab")
+        await h.confirm(client_id="another-client")
     assert h.ticket_calls == []
 
 

@@ -8,61 +8,6 @@
 #   1. The sentence must appear in the named document character-for-character.
 #   2. A sentinel must never appear in another client's corpus — the cross-client
 #      isolation tests depend on it.
-#   3. Mock tool data must agree with the corpus. A tool that contradicts a cited
-#      clause is the worst possible demo failure.
-
-acme-fab:
-  AF-1:
-    fact: "The PX-900 plasma etcher requires chamber seal replacement every 1,200 RF hours."
-    document: px900-maintenance-manual.md
-  AF-2:
-    fact: "Error code E-417 indicates a helium backside cooling leak and requires immediate chamber vent."
-    document: px900-troubleshooting-guide.md
-  AF-3:
-    fact: "The recommended idle standby temperature for the LT-200 load lock is 45 degrees Celsius."
-    document: lt200-operations-manual.md
-  AF-4:
-    fact: "Field service response time for Tier 1 contracts is 4 business hours."
-    document: service-contracts-faq.md
-  AF-5:
-    fact: 'Part `PX900-SEAL-A2` exists in the spare parts catalog with description "chamber seal kit, fluoroelastomer".'
-    document: spare-parts-catalog.md
-
-  # Canned data for the pricing_lookup mock. Must agree with the catalog above.
-  tool_fixtures:
-    pricing_lookup:
-      PX900-SEAL-A2:
-        unit_price_usd: 1840.00
-        volume_discount: { min_qty: 10, pct: 8 }
-        lead_time_days: 21
-      LT200-VALVE-B1:
-        unit_price_usd: 412.50
-        volume_discount: { min_qty: 25, pct: 5 }
-        lead_time_days: 10
-
-meridian-insurance:
-  MI-1:
-    fact: "Clause 4.2.1: Water damage arising from gradual seepage over a period exceeding 14 days is excluded from coverage."
-    document: home-policy-wording.md
-  MI-2:
-    fact: "The standard excess for accidental damage claims under the HomeShield Plus plan is $500."
-    document: home-policy-wording.md
-  MI-3:
-    fact: "Claims must be lodged within 30 days of the insured event unless exceptional circumstances apply."
-    document: claims-process-faq.md
-  MI-4:
-    fact: "Properties located within 100 metres of a coastline require a flood risk assessment before underwriting."
-    document: underwriting-guidelines.md
-  MI-5:
-    fact: "Jewellery items valued above $5,000 must be individually listed on the policy schedule."
-    document: coverage-exclusions-list.md
-
-  # Canned data for the coverage_check mock. Verdicts must agree with the policy wording.
-  tool_fixtures:
-    coverage_check:
-      burst_pipe_sudden: { covered: true, excess_usd: 500, clause: "3.1.4" }
-      gradual_seepage: { covered: false, clause: "4.2.1" }
-      unlisted_jewellery_over_5000: { covered: false, clause: "7.3.2" }
 
 gcp-platform-support:
   # Knowledge base is public Google Cloud documentation (CC BY 4.0), curated into
@@ -89,6 +34,3 @@ gcp-platform-support:
     fact: "These roles can be useful for testing purposes, but shouldn't be used in production environments."
     document: iam-overview.md
     source: https://cloud.google.com/iam/docs/overview
-
-  # No tool_fixtures: create_escalation_ticket has no canned data to agree with — its
-  # correctness is the routing decision, not a looked-up value.

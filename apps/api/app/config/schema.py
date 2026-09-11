@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class BrandingConfig(BaseModel):
@@ -33,17 +33,15 @@ class CorrectiveConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
+    # An unknown key fails at load. `mode`, `tools` and `effort` belonged to the retired
+    # loop engine; left in a YAML they would read like capabilities that do nothing (D11).
+    model_config = ConfigDict(extra="forbid")
+
     model: str
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
-    effort: str = Field(default="medium")
-    tools: list[str] = Field(default_factory=list)
 
-    # "loop" is the free-form manual tool-use loop; "graph" is the three-tier support
-    # graph whose every route is Python control flow (D5, D10).
-    mode: str = Field(default="loop")
-
-    # --- graph-only knobs (D2, D10) -----------------------------------------------
+    # --- the guardrail (D2, D10) ----------------------------------------------------
     # Two *different* floors, and the difference matters:
     #   retrieval_drop_floor  discards weak chunks inside search() — they never reach
     #                         the model at all.
@@ -56,25 +54,9 @@ class AgentConfig(BaseModel):
     confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     corrective: CorrectiveConfig = CorrectiveConfig()
 
-    @field_validator("effort")
-    @classmethod
-    def effort_must_be_valid(cls, v: str) -> str:
-        valid = {"low", "medium", "high", "max"}
-        if v not in valid:
-            raise ValueError(f"effort must be one of {valid}, got {v!r}")
-        return v
-
-    @field_validator("mode")
-    @classmethod
-    def mode_must_be_valid(cls, v: str) -> str:
-        valid = {"loop", "graph"}
-        if v not in valid:
-            raise ValueError(f"agent.mode must be one of {valid}, got {v!r}")
-        return v
-
     @model_validator(mode="after")
     def escalation_floor_must_be_reachable(self) -> "AgentConfig":
-        if self.mode == "graph" and self.escalate_below <= self.retrieval_drop_floor:
+        if self.escalate_below <= self.retrieval_drop_floor:
             raise ValueError(
                 f"agent.escalate_below ({self.escalate_below}) must be greater than "
                 f"agent.retrieval_drop_floor ({self.retrieval_drop_floor}) — otherwise the "
