@@ -732,9 +732,9 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
   const isEmpty = messages.length === 0;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 w-full max-w-3xl mx-auto px-4">
+    <div className="flex-1 flex flex-col min-h-0 w-full">
       {!isEmpty && (
-        <div className="flex justify-end pt-3 shrink-0">
+        <div className="flex justify-end pt-3 shrink-0 w-full max-w-3xl mx-auto px-4">
           <button
             onClick={startNewChat}
             disabled={streaming}
@@ -747,8 +747,10 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
           </button>
         </div>
       )}
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto py-6 space-y-6 scroll-smooth">
+      {/* Messages — the scroller spans the full width so its scrollbar sits at the window
+          edge, not against the bubbles; the column inside keeps the reading width. */}
+      <div className="flex-1 overflow-y-auto scroll-smooth">
+      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         {/* Welcome state */}
         {isEmpty && (
           <div className="flex flex-col items-center text-center pt-10 pb-4">
@@ -915,9 +917,10 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
 
         <div ref={bottomRef} />
       </div>
+      </div>
 
       {/* Input */}
-      <div className="py-4 shrink-0">
+      <div className="py-4 shrink-0 w-full max-w-3xl mx-auto px-4">
         <form
           onSubmit={(e) => {
             e.preventDefault();
