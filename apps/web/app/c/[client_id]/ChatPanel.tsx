@@ -683,7 +683,18 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: question, conversation_id: conversationId }),
       });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok || !res.body) {
+        // A refusal before the stream opens carries {error, message}. The index one is
+        // meant for whoever runs ingest, so a chat user gets plainer words.
+        const detail = await res.json().then((b) => b?.detail, () => null);
+        updateLastAssistant((msg) => {
+          msg.error =
+            detail?.error === "index_out_of_date"
+              ? "The knowledge base is being updated. Try again in a few minutes."
+              : detail?.message || `Request failed (HTTP ${res.status}).`;
+        });
+        return;
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";

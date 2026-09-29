@@ -75,7 +75,10 @@ async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
             status_code=409,
             detail={
                 "error": "index_out_of_date",
-                "message": f"{reason} Run `configent ingest --client {cfg.client_id}`.",
+                "message": (
+                    f"{reason} Restart the API to reconcile it, or run "
+                    f"`python -m app.cli --client {cfg.client_id}`."
+                ),
             },
         )
 

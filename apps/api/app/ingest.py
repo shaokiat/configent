@@ -8,16 +8,23 @@ The YAML is the spec, the `documents` table is the status. Each run:
   4. prunes, then commits.
 """
 import hashlib
+import logging
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.schema import ClientConfig
+from app.database import AsyncSessionLocal, engine
 from app.models import Chunk, Client, Document
 from app.retrieval.chunker import chunk_document
 from app.retrieval.embed import embed
 from app.retrieval.parsers import iter_corpus, parse_document
+
+logger = logging.getLogger("configent.ingest")
+
+# Any fixed bigint: the key two API replicas contend on so only one reconciles at a time.
+_RECONCILE_LOCK = 0x636F6E66
 
 
 def _content_hash(data: bytes) -> str:
@@ -177,3 +184,34 @@ async def ingest_client(
         await _delete_documents(db, cfg.client_id, prune)
     await db.commit()
     return stats
+
+
+async def reconcile_all(configs: list[ClientConfig], repo_root: Path) -> None:
+    """Ingest every client at API startup, so a deploy with changed files or settings
+    brings the index up to date without anyone running the CLI.
+
+    Runs in the background: a full rebuild on Voyage's free tier takes minutes, and the
+    chat endpoints' 409 guard covers the window. Unchanged files are skipped by hash, so
+    an ordinary restart makes no embedding calls. One client failing does not stop the rest.
+    """
+    try:
+        # The lock is held by this connection for the whole run. Sessions release their
+        # connection on commit, so a session-level lock taken through one could be unlocked
+        # on a different connection, or not at all.
+        async with engine.connect() as lock_conn:
+            if not await lock_conn.scalar(select(func.pg_try_advisory_lock(_RECONCILE_LOCK))):
+                logger.info("Another replica is reconciling the index; skipping")
+                return
+            try:
+                for cfg in configs:
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            stats = await ingest_client(db, cfg, repo_root)
+                        logger.info("Reconciled %s: %s", cfg.client_id, stats)
+                    except Exception:
+                        logger.exception("Reconcile failed for %s", cfg.client_id)
+            finally:
+                await lock_conn.scalar(select(func.pg_advisory_unlock(_RECONCILE_LOCK)))
+    except Exception:
+        # The database was unreachable, most likely. Chat's 409 guard still protects it.
+        logger.exception("Startup reconcile aborted")
