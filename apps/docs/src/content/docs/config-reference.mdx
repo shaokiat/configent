@@ -60,12 +60,15 @@ Configures the document source and chunking settings.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `corpus.source` | `string` | — | Path to the document directory, relative to the repo root. All `.pdf`, `.md`, `.html`, and `.htm` files in the directory are ingested recursively. |
+| `corpus.embedding.model` | `string` | `voyage-3` | Voyage AI model for chunks and questions alike. Must emit 1024 dimensions: `voyage-3`, `voyage-3-large` or `voyage-3.5`. Anything else fails at load. |
 | `corpus.chunking.chunk_size` | `int` | `800` | Maximum tokens per chunk. Larger values preserve more context per retrieval hit. |
 | `corpus.chunking.overlap` | `int` | `100` | Token overlap between adjacent chunks. Prevents mid-sentence splits from degrading retrieval quality. |
 
 ```yaml
 corpus:
   source: corpora/gcp-platform-support/
+  embedding:
+    model: voyage-3
   chunking:
     chunk_size: 512
     overlap: 64
@@ -73,10 +76,9 @@ corpus:
 
 **Supported file types:** `.pdf`, `.md` / `.markdown`, `.html` / `.htm`.
 
-**Embedding:** Configent embeds documents using **Voyage AI `voyage-3`** (1024-dimension vectors).
-This requires a `VOYAGE_API_KEY` environment variable. The model is not configurable per client.
+**Embedding:** requires a `VOYAGE_API_KEY` environment variable.
 
-**Incremental ingestion:** The ingest step hashes each document's content. On re-run, it skips unchanged documents and re-chunks and re-embeds modified ones automatically.
+**Incremental ingestion:** ingest skips a file when its bytes and the `embedding` + `chunking` settings are unchanged. Edit a file and only that file is rebuilt. Change a setting and every file is rebuilt. Delete a file and its document is pruned. Until ingest runs after a settings change, chat answers `409 index_out_of_date`. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline).
 
 ---
 
@@ -201,6 +203,8 @@ branding:
 
 corpus:
   source: corpora/gcp-platform-support/
+  embedding:
+    model: voyage-3
   chunking:
     chunk_size: 512
     overlap: 64

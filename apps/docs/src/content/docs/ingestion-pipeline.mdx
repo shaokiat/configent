@@ -1,26 +1,34 @@
 ---
 title: Ingestion Pipeline
-description: How documents go from files on disk to searchable pgvector embeddings — parse, chunk, embed, upsert.
+description: How ingest reconciles a client's pgvector index with its corpus folder and corpus config — hash, plan, rebuild, prune.
 order: 4
 group: Getting Started
 ---
 
-Documents in `corpora/<client_id>/` are parsed, chunked, embedded, and stored in pgvector. At query time, the user's question is embedded and matched against those chunks via cosine similarity — this is the full RAG loop.
+Ingest makes a client's index match its config. The `corpus` block in the client YAML is the spec. The `documents` table is the status. Each run reconciles the two, so re-running it is always safe.
 
 ```
-corpora/<client_id>/
-  ├── manual.pdf
-  ├── runbook.md
-  └── spec.html
-        │
-        ▼  parse_document()       → ParsedDocument { title, text }
-        ▼  chunk_document()       → list[Chunk]     (token-aware, overlapping)
-        ▼  embed(texts)           → list[list[float]] (Voyage AI voyage-3, 1024-dim)
-        ▼  db.add(Document, Chunk rows)
-        ▼  db.commit()
+corpora/<client_id>/            corpus:  (client YAML)
+  ├── manual.pdf                  embedding.model, chunking.*
+  ├── runbook.md                          │
+  └── sub/spec.html                       ▼  fingerprint()
+        │                                 │
+        ▼  sha256(raw bytes)              │
+        └──────────────► plan() ◄─────────┘  vs. documents (content_hash, ingest_fingerprint)
+                           │
+         ┌─────────────────┼──────────────────┐
+         ▼ unchanged       ▼ new / changed     ▼ file gone
+        skip               parse → chunk →     prune
+        (never parsed)     embed → replace
+                           commit per document
 ```
 
-All four stages run inside a single `AsyncSession` and commit atomically per document. A failed embed on one document rolls back that document only — already-committed documents are unaffected.
+1. **Hash** every file's raw bytes. Nothing is parsed yet.
+2. **Plan.** Rebuild a file whose content hash *or* ingest fingerprint differs from the stored row. Prune a stored document whose file is gone. Skip the rest.
+3. **Rebuild** each planned file: parse, chunk, embed, then replace the old row. Each document commits on its own.
+4. **Prune**, then commit.
+
+A failed embed leaves the previous version of that document indexed. Documents committed earlier in the run stay.
 
 ---
 
@@ -60,7 +68,18 @@ corpus:
 
 ## Stage 3 — Embed
 
-`retrieval/embed.py` calls Voyage AI's `voyage-3` model (1024 dimensions).
+`retrieval/embed.py` calls the Voyage AI model named in `corpus.embedding.model` (default `voyage-3`, 1024 dimensions).
+
+```yaml
+corpus:
+  embedding:
+    model: voyage-3   # voyage-3 | voyage-3-large | voyage-3.5
+```
+
+The model is the one hard contract between ingest and retrieval. Retrieval embeds the question with the same configured model. Two different models give cosine similarities that mean nothing, and every threshold in `agent` stops meaning anything.
+
+- **Allowed models:** only ones that emit 1024 dimensions, the width of `chunks.embedding`. Any other model fails at config load.
+- **Changing the model:** the fingerprint moves, so the next ingest rebuilds every document.
 
 ### Why Voyage AI?
 
@@ -106,17 +125,49 @@ pgvector accepts vectors from any embedding model. The only coupling is in `embe
 
 ---
 
-## Stage 4 — Upsert
+## Stage 4 — Reconcile
 
-Each document is keyed by `MD5(client_id + source_uri)[:8]` and fingerprinted with `SHA256(text)[:32]`:
+Each document carries two hashes:
+
+| Column | Hash of | Moves when |
+|--------|---------|------------|
+| `content_hash` | the file's raw bytes | the file is edited |
+| `ingest_fingerprint` | `corpus.embedding.model`, `chunk_size`, `overlap` | a setting that shapes the index changes |
+
+`plan()` compares both against the stored row:
 
 | State | Action |
 |-------|--------|
-| New document | Insert |
-| Existing, same content hash | Skip |
-| Existing, changed content hash | Delete + re-insert (cascade deletes chunks) |
+| New file | Insert |
+| Both hashes match | Skip, without parsing |
+| Content or fingerprint differs | Delete and re-insert (chunks cascade) |
+| Stored, but the file is gone | Prune |
 
-Only changed files are re-processed and re-embedded on subsequent runs.
+- **Edit one file:** that file is rebuilt.
+- **Change a setting:** every file is rebuilt. No `--force` needed.
+- **`corpus.source` is not in the fingerprint.** Moving the folder changes no vector.
+
+### The index guard
+
+The chat endpoints refuse a client whose stored fingerprints differ from its config's. They answer `409 index_out_of_date` and name the command to run. An index that was never ingested gets the same `409`. The check is one `SELECT DISTINCT` per chat request.
+
+### What this replaced
+
+| | Before | After |
+|---|---|---|
+| Skip test | `sha256(parsed text)` | `sha256(raw bytes)` **and** fingerprint |
+| Settings change | Silently skipped; needed `--force` | Rebuilds every document |
+| Deleted file | Stayed retrievable | Pruned |
+| `source_uri` | `corpus://<client_id>/<stem>` | `corpus://<client_id>/<relative path>` |
+| Commit | Once per run | Once per document |
+| Embedding model | Hardcoded `voyage-3` | `corpus.embedding.model` |
+
+The previous design is recoverable from `498355c`, the last commit before it changed:
+
+```bash
+git show 498355c:apps/api/app/ingest.py          # hash-only skip, no prune
+git show 498355c:apps/api/app/retrieval/embed.py # hardcoded voyage-3
+```
 
 ---
 
@@ -127,7 +178,7 @@ cd apps/api
 uv run python -m app.cli --client gcp-platform-support
 ```
 
-`--force` re-ingests all documents regardless of content hash:
+`--force` rebuilds every document, even when both hashes match:
 
 ```bash
 uv run python -m app.cli --client gcp-platform-support --force
@@ -145,6 +196,7 @@ Ingesting corpus for gcp-platform-support...
 │ Documents added                 │     4 │
 │ Documents replaced              │     1 │
 │ Documents skipped (unchanged)   │     2 │
+│ Documents removed (file deleted)│     1 │
 │ Total chunks upserted           │   312 │
 └─────────────────────────────────┴───────┘
 ```
@@ -153,8 +205,8 @@ Ingesting corpus for gcp-platform-support...
 
 ## Search
 
-Retrieval is the mirror of this pipeline: `embed_query()` puts the question in the same
-vector space these chunks live in, with `input_type="query"` instead of `"document"`.
+Retrieval is the mirror of this pipeline: `embed_query()` embeds the question with the
+same `corpus.embedding.model`, with `input_type="query"` instead of `"document"`.
 pgvector then scans by cosine similarity, scoped to `client_id`.
 
 The rest — the `k×2` over-fetch, the similarity floor, the `Hit` shape — belongs to the
@@ -168,9 +220,10 @@ stage that uses it. See [Retrieval](/configent/docs/retrieval).
 documents
   id            VARCHAR(64)   PK  — MD5(client_id:source_uri)[:8]
   client_id     VARCHAR(64)       — foreign key → clients.id
-  source_uri    VARCHAR(512)      — corpus://<client_id>/<stem>
+  source_uri    VARCHAR(512)      — corpus://<client_id>/<path relative to corpus.source>
   title         VARCHAR(512)
-  content_hash  VARCHAR(64)       — SHA256(text)[:32]; drives skip/replace logic
+  content_hash  VARCHAR(64)       — SHA256(raw bytes)[:32]
+  ingest_fingerprint VARCHAR(16)  — CorpusConfig.fingerprint(); null on pre-0006 rows
   ingested_at   DATETIME
 
 chunks
