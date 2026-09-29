@@ -16,6 +16,7 @@ from app.agent.limits import (
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
+from app.ingest import index_mismatch
 from app.models import Conversation, Message, Run
 
 router = APIRouter(prefix="/api")
@@ -62,6 +63,20 @@ async def _check_conversation_ownership(
     if conv is None or conv.client_id != client_id:
         raise HTTPException(
             status_code=404, detail=f"Conversation {conversation_id!r} not found"
+        )
+
+
+async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
+    """Refuse to answer from an index the config no longer describes: the question would
+    be embedded with one model and compared against chunks embedded with another."""
+    reason = await index_mismatch(db, cfg)
+    if reason is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "index_out_of_date",
+                "message": f"{reason} Run `configent ingest --client {cfg.client_id}`.",
+            },
         )
 
 
@@ -113,6 +128,7 @@ async def chat(
     cfg = _client(client_id)
     _enforce_rate_limit(client_id, cfg)
     await _enforce_daily_budget(db, cfg)
+    await _enforce_index_current(db, cfg)
 
     await _check_conversation_ownership(db, client_id, req.conversation_id)
     try:
@@ -145,6 +161,7 @@ async def chat_stream(client_id: str, req: ChatRequest):
     async with AsyncSessionLocal() as preflight_db:
         await _check_conversation_ownership(preflight_db, client_id, req.conversation_id)
         await _enforce_daily_budget(preflight_db, cfg)
+        await _enforce_index_current(preflight_db, cfg)
 
     async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session

@@ -20,7 +20,7 @@ def ingest(
     client: str = typer.Option(..., "--client", "-c", help="client_id to ingest"),
     force: bool = typer.Option(False, "--force", help="Re-ingest even unchanged docs"),
 ):
-    """Parse, chunk, embed, and upsert corpus documents for a client."""
+    """Bring a client's index in line with its corpus folder and `corpus` config."""
 
     async def _run():
         import os
@@ -57,6 +57,7 @@ def ingest(
         table.add_row("Documents added", str(stats["added"]))
         table.add_row("Documents replaced", str(stats["replaced"]))
         table.add_row("Documents skipped (unchanged)", str(stats["skipped"]))
+        table.add_row("Documents removed (file deleted)", str(stats["removed"]))
         table.add_row("Total chunks upserted", str(stats["total_chunks"]))
         console.print(table)
 
