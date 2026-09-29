@@ -125,6 +125,8 @@ cd apps/api
 uv run python -m app.cli --client my-assistant
 ```
 
+The API runs the same reconcile for every client on startup, so a restart also works. The CLI runs it without one.
+
 You'll see output like:
 
 ```

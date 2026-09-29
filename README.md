@@ -106,6 +106,9 @@ cd apps/api && .venv/bin/alembic upgrade head
 .venv/bin/python -m app.cli --client gcp-platform-support   # ~30s, embeds the corpus
 ```
 
+The API also reconciles every client's index on each start, so after this first run,
+editing `corpora/` or a `corpus:` setting only needs a restart.
+
 Then open **http://localhost:3000/c/gcp-platform-support**.
 
 `make up` runs the same stack in Docker instead; `make docs` serves the docs site on

@@ -171,6 +171,21 @@ git show 498355c:apps/api/app/retrieval/embed.py # hardcoded voyage-3
 
 ---
 
+## When ingest runs
+
+| Trigger | How | Use it for |
+|---------|-----|------------|
+| API startup | `reconcile_all()` in a background task | Deploys and restarts. Edit files or settings, restart, done |
+| CLI | `python -m app.cli --client <id>` | Local work without a restart, and `--force` |
+
+- **Startup runs in the background.** A full rebuild on Voyage's free tier takes minutes. Chat answers `409` for that client until it finishes, and the web app shows "The knowledge base is being updated."
+- **A normal restart costs nothing.** Unchanged files are skipped by hash, so no embedding calls are made.
+- **One replica reconciles.** A Postgres advisory lock, held on a dedicated connection, makes a second replica skip.
+- **Stopping mid-run is safe.** Documents commit one at a time, so the next start picks up the rest.
+- **No UI trigger.** The API has no auth, so a public button would let anyone spend the embedding budget. The corpus is repo files, so whoever edits them can restart. A button belongs with document upload, if that is ever built.
+
+The Docker image copies `corpora/` so the container can reconcile itself.
+
 ## Running the CLI
 
 ```bash
