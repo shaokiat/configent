@@ -34,6 +34,11 @@ def test_a_deleted_file_is_pruned_and_a_new_one_added():
     assert plan(files, indexed, FP) == (["new.md"], ["gone.md"])
 
 
+def test_an_empty_corpus_is_refused_instead_of_pruning_everything():
+    with pytest.raises(ValueError, match="no documents"):
+        plan({}, {"a.md": ("h1", FP)}, FP)
+
+
 def test_force_rebuilds_unchanged_files():
     assert plan({"a.md": "h1"}, {"a.md": ("h1", FP)}, FP, force=True) == (["a.md"], [])
 

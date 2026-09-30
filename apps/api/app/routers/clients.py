@@ -229,6 +229,7 @@ async def get_conversation_history(
 ):
     """Renderable conversation history for reloading a conversation (B6): user text, and
     each assistant turn's citation segments with the step trail of the run behind it."""
+    _client(client_id)  # 404 for a client that is no longer configured
     await _check_conversation_ownership(db, client_id, conversation_id)
 
     result = await db.execute(

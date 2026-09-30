@@ -1,6 +1,6 @@
 # Token prices, USD per million tokens, keyed by the exact model id a client config uses (D8).
 #
-# Source: https://platform.claude.com/docs/en/about-claude/pricing — checked 2026-09-11.
+# Source: https://platform.claude.com/docs/en/about-claude/pricing — checked 2026-09-30.
 # No API returns prices, so this table is checked in and dated. When a price changes, edit
 # the row and the date. Copy each column from the page rather than deriving it from a
 # multiplier: the multipliers are not the same on every model.

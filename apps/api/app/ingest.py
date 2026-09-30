@@ -55,7 +55,12 @@ def plan(
 
     `files` maps each corpus file's source URI to its content hash; `indexed` maps each
     stored document's source URI to its (content hash, ingest fingerprint).
+
+    An empty corpus is refused rather than planned: a folder that mounted empty would
+    otherwise prune the whole index.
     """
+    if not files:
+        raise ValueError("The corpus folder has no documents; refusing to prune the index.")
     rebuild = [uri for uri, h in files.items() if force or indexed.get(uri) != (h, fingerprint)]
     prune = [uri for uri in indexed if uri not in files]
     return rebuild, prune
@@ -202,6 +207,9 @@ async def reconcile_all(configs: list[ClientConfig], repo_root: Path) -> None:
             if not await lock_conn.scalar(select(func.pg_try_advisory_lock(_RECONCILE_LOCK))):
                 logger.info("Another replica is reconciling the index; skipping")
                 return
+            # A session-level lock outlives the transaction that took it, so end that one
+            # instead of sitting idle in it for the whole run.
+            await lock_conn.commit()
             try:
                 for cfg in configs:
                     try:
