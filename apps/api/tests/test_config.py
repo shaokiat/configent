@@ -25,8 +25,6 @@ VALID_CONFIG = {
         "model": "claude-sonnet-4-6",
         "system_prompt_file": "prompts/test.md",
         "max_tokens": 4096,
-        "effort": "medium",
-        "tools": ["search_docs", "get_document"],
     },
     "limits": {"rate_limit_per_minute": 20, "daily_budget_usd": 2.0},
 }
@@ -53,13 +51,13 @@ def test_config_duplicate_client_id_rejected(tmp_path):
         ConfigRegistry(config_dir=tmp_path)
 
 
-def test_config_unknown_tool_rejected(tmp_path):
+def test_a_model_with_no_price_fails_at_load(tmp_path):
+    """D8: an unpriced model would report every turn as free, and the budget would never trip."""
     bad = dict(VALID_CONFIG)
-    bad["agent"] = dict(VALID_CONFIG["agent"])
-    bad["agent"]["tools"] = ["search_docs", "nonexistent_tool"]
-    write_yaml(tmp_path, "bad-tools.yaml", bad)
+    bad["agent"] = {**VALID_CONFIG["agent"], "model": "claude-unpriced"}
+    write_yaml(tmp_path, "unpriced.yaml", bad)
 
-    with pytest.raises(ValueError, match="Unknown tool"):
+    with pytest.raises(ValueError, match="unpriced.yaml.*No price"):
         ConfigRegistry(config_dir=tmp_path)
 
 
@@ -72,28 +70,10 @@ def test_gcp_platform_support_config_loads():
     assert cfg.corpus.source == "corpora/gcp-platform-support/"
 
 
-def test_graph_clients_declare_no_tools():
-    """A graph client must not list tools.
-
-    `agent.tools` is read only by loop.py, so anything listed on a graph client is dead
-    config that reads like a capability. Retrieval is a node and the ticket executor is
-    invoked from Python.
-    """
-    from app.config.registry import get_registry
-
-    for cfg in get_registry().all():
-        if cfg.agent.mode == "graph":
-            assert cfg.agent.tools == [], (
-                f"{cfg.client_id} runs the graph engine but lists "
-                f"{cfg.agent.tools} — those definitions are never sent to a model"
-            )
-
-
-def test_gcp_platform_support_runs_the_graph_with_corrective_retrieval():
+def test_gcp_platform_support_runs_corrective_retrieval():
     from app.config.registry import get_registry
 
     agent = get_registry().get("gcp-platform-support").agent
-    assert agent.mode == "graph"
     assert agent.corrective.enabled is True
     assert agent.corrective.query_rewrites == 3
 
@@ -104,22 +84,27 @@ def _agent(**overrides):
     return AgentConfig(model="m", system_prompt_file="p.md", **overrides)
 
 
+@pytest.mark.parametrize(
+    "stale",
+    [{"mode": "loop"}, {"mode": "pipeline"}, {"tools": ["search_docs"]}, {"effort": "low"}],
+    ids=["mode-loop", "mode-pipeline", "tools", "effort"],
+)
+def test_a_retired_engine_key_fails_loudly(stale):
+    """D11: a key from a retired engine must not load and read like a live capability."""
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _agent(**stale)
+
+
 def test_corrective_defaults_on():
-    assert _agent(mode="graph").corrective.enabled is True
+    assert _agent().corrective.enabled is True
 
 
 def test_query_rewrites_is_bounded():
     with pytest.raises(ValueError):
-        _agent(mode="graph", corrective={"query_rewrites": 9})
+        _agent(corrective={"query_rewrites": 9})
 
 
-def test_escalation_floor_below_drop_floor_is_rejected_for_graph_clients():
+def test_escalation_floor_below_drop_floor_is_rejected():
     """A floor that can never fire is a silently disabled guardrail, so it fails loudly."""
     with pytest.raises(ValueError, match="can never fire"):
-        _agent(mode="graph", retrieval_drop_floor=0.5, escalate_below=0.4)
-
-
-def test_the_retired_pipeline_mode_fails_loudly():
-    """A config still saying `pipeline` must not quietly fall back to another engine."""
-    with pytest.raises(ValueError, match="graph"):
-        _agent(mode="pipeline")
+        _agent(retrieval_drop_floor=0.5, escalate_below=0.4)

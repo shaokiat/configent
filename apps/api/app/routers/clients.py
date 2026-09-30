@@ -13,8 +13,6 @@ from app.agent.limits import (
     check_daily_budget,
     check_rate_limit,
 )
-from app.agent.loop import ConversationNotFoundError, stream_turn
-from app.agent.loop import run as agent_run
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
@@ -94,9 +92,6 @@ async def list_clients():
         {
             "id": cfg.client_id,
             "name": cfg.name,
-            # The engine this client runs on. The landing page groups clients by it,
-            # so a graph client is never presented as a free-form assistant.
-            "mode": cfg.agent.mode,
             "branding": {
                 "logo": cfg.branding.logo,
                 "primary_color": cfg.branding.primary_color,
@@ -119,45 +114,22 @@ async def chat(
     _enforce_rate_limit(client_id, cfg)
     await _enforce_daily_budget(db, cfg)
 
-    if cfg.agent.mode == "graph":
-        await _check_conversation_ownership(db, client_id, req.conversation_id)
-        try:
-            state = await run_graph(
-                req.message,
-                cfg=cfg,
-                client_id=client_id,
-                conversation_id=req.conversation_id,
-                db=db,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from None
-        return ChatResponse(
-            conversation_id=state["conversation_id"],
-            reply=state["answer"],
-            citations=state.get("citations", []),
-            segments=state["segments"],
-        )
-
+    await _check_conversation_ownership(db, client_id, req.conversation_id)
     try:
-        conv_id, result = await agent_run(
+        state = await run_graph(
             req.message,
             cfg=cfg,
             client_id=client_id,
             conversation_id=req.conversation_id,
             db=db,
         )
-    except ConversationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=f"System prompt not found: {exc}")
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
+        raise HTTPException(status_code=500, detail=str(exc)) from None
     return ChatResponse(
-        conversation_id=conv_id,
-        reply=result.reply_text,
-        citations=result.citations,
-        segments=result.segments,
+        conversation_id=state["conversation_id"],
+        reply=state["answer"],
+        citations=state.get("citations", []),
+        segments=state["segments"],
     )
 
 
@@ -174,15 +146,11 @@ async def chat_stream(client_id: str, req: ChatRequest):
         await _check_conversation_ownership(preflight_db, client_id, req.conversation_id)
         await _enforce_daily_budget(preflight_db, cfg)
 
-    # One entry point, two engines (D5). `loop` is the free-form manual tool-use loop;
-    # `graph` is the three-tier support graph whose every route is Python (D10).
-    engine = stream_graph if cfg.agent.mode == "graph" else stream_turn
-
     async def event_source():
         # The session is opened inside the generator: a Depends(get_db) session
         # can be torn down before a StreamingResponse body starts executing.
         async with AsyncSessionLocal() as db:
-            async for name, data in engine(
+            async for name, data in stream_graph(
                 req.message,
                 cfg=cfg,
                 client_id=client_id,
@@ -225,9 +193,6 @@ async def get_client_branding(client_id: str):
     return {
         "id": cfg.client_id,
         "name": cfg.name,
-        # Drives the header badge: a graph client advertises its guardrail, not
-        # the free-form loop's citation behaviour.
-        "mode": cfg.agent.mode,
         "primary_color": cfg.branding.primary_color,
         "logo": cfg.branding.logo,
         "assistant_name": cfg.branding.assistant_name,
@@ -242,12 +207,8 @@ async def get_conversation_history(
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Renderable conversation history for reloading a conversation (B6).
-
-    Returns only user turns and final-assistant turns (with their citation
-    segments) — tool_use-only assistant messages and tool_result plumbing
-    messages are internal to the loop and are skipped.
-    """
+    """Renderable conversation history for reloading a conversation (B6): user text, and
+    each assistant turn's citation segments with the step trail of the run behind it."""
     await _check_conversation_ownership(db, client_id, conversation_id)
 
     result = await db.execute(
@@ -269,16 +230,11 @@ async def get_conversation_history(
     messages: list[dict] = []
     for m in rows:
         if m.role == "user":
-            if isinstance(m.content, str):
-                messages.append({"role": "user", "text": m.content})
-            # else: a tool_result plumbing message — not user-visible, skip.
-        elif m.role == "assistant":
-            segments = (m.citations or {}).get("segments")
-            if segments:
-                entry: dict = {"role": "assistant", "segments": segments}
-                if steps := steps_by_run.get(m.run_id or ""):
-                    entry["steps"] = steps
-                messages.append(entry)
-            # else: a tool_use-only assistant message — skip.
+            messages.append({"role": "user", "text": m.content})
+            continue
+        entry: dict = {"role": "assistant", "segments": (m.citations or {}).get("segments", [])}
+        if steps := steps_by_run.get(m.run_id or ""):
+            entry["steps"] = steps
+        messages.append(entry)
 
     return {"conversation_id": conversation_id, "messages": messages}

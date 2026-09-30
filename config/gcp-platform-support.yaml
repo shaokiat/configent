@@ -24,13 +24,12 @@ corpus:
     chunk_size: 512
     overlap: 64
 agent:
-  # The three-tier support graph: RAG → corrective RAG → human (D10).
-  mode: graph
+  # Runs the three-tier support graph: RAG → corrective RAG → human (D10).
+  # The model must have a row in config/pricing/claude.yaml (D8).
   model: claude-haiku-4-5-20251001
   # answer.md; grade.md, rewrite.md and ticket_draft.md sit beside it.
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
-  effort: low
   # Retrieval below this similarity is discarded before the model sees it.
   retrieval_drop_floor: 0.3
   # Level 1: the best surviving hit being weaker than this fails the tier (D2).
@@ -41,9 +40,6 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
-  # No `tools:` key, deliberately. On the graph engine retrieval is a node and the
-  # ticket executor is invoked from Python. `agent.tools` is read only by loop.py, so
-  # anything listed here would be dead config that reads like a capability.
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
   judge_model: claude-sonnet-4-6

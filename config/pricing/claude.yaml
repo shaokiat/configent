@@ -1,0 +1,23 @@
+# Token prices, USD per million tokens, keyed by the exact model id a client config uses (D8).
+#
+# Source: https://platform.claude.com/docs/en/about-claude/pricing — checked 2026-09-11.
+# No API returns prices, so this table is checked in and dated. When a price changes, edit
+# the row and the date. Copy each column from the page rather than deriving it from a
+# multiplier: the multipliers are not the same on every model.
+#
+# Every client's `agent.model` must have a row here, or the API refuses to start.
+#
+#   cache_write  the 5-minute TTL rate: the only cache this app writes
+#   cache_read   "cache hits and refreshes"
+
+claude-haiku-4-5-20251001:
+  input: 1.00
+  output: 5.00
+  cache_write: 1.25
+  cache_read: 0.10
+
+claude-sonnet-4-6:
+  input: 3.00
+  output: 15.00
+  cache_write: 3.75
+  cache_read: 0.30

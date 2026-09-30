@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from app.config.pricing import price_for
 from app.config.schema import ClientConfig
 
 # Root of the monorepo (two levels up from apps/api/app/config/)
@@ -41,10 +42,9 @@ def _load_all(config_dir: Path) -> dict[str, ClientConfig]:
                 f"Duplicate client_id {cfg.client_id!r} in {path.name} and {existing.name}"
             )
 
-        # Validate tool names against the registry
+        # An unpriced model would report every turn as free (D8)
         try:
-            from app.tools.registry import validate_tool_names
-            validate_tool_names(cfg.agent.tools)
+            price_for(cfg.agent.model)
         except ValueError as exc:
             raise ValueError(f"Config error in {path.name}: {exc}") from exc
 

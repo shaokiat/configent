@@ -30,21 +30,21 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.loop import (
+from app import tickets
+from app.agent.common import (
     UsageTotals,
-    _attr_or_key,
-    _collect_segments,
-    _excerpt,
-    _model_trace,
-    _prepare_conversation,
-    _trace_payload,
-    _update_conversation_totals,
+    attr_or_key,
+    collect_segments,
+    excerpt,
+    model_trace,
+    prepare_conversation,
+    trace_payload,
+    update_conversation_totals,
 )
 from app.config.schema import ClientConfig
 from app.database import checkpoint_session
 from app.models import Message, Run, Trace
 from app.retrieval.search import Hit, hybrid_search, search
-from app.tools.registry import get_tool_executor
 
 logger = logging.getLogger("configent.graph")
 
@@ -94,7 +94,10 @@ class Deps:
     db: AsyncSession
     aclient: anthropic.AsyncAnthropic | None
     recorder: "RunRecorder"
-    usage: UsageTotals = field(default_factory=UsageTotals)
+    usage: UsageTotals = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.usage = UsageTotals(self.cfg.agent.model)
 
 
 # ── audit trail ──────────────────────────────────────────────────────────────────────
@@ -197,14 +200,12 @@ async def _model_step(
     d: Deps, state: TurnState, stage: str, started: float, response: Any, **extra: Any
 ) -> None:
     """`_step` for a node that made a model call: also accrues its cost and traces it."""
-    usage = UsageTotals()
+    model = d.cfg.agent.model
+    usage = UsageTotals(model)
     usage.add(response.usage)
     d.usage.add(response.usage)
-    d.db.add(
-        _model_trace(
-            state["conversation_id"], response.usage, int((time.monotonic() - started) * 1000)
-        )
-    )
+    latency_ms = int((time.monotonic() - started) * 1000)
+    d.db.add(model_trace(state["conversation_id"], model, response.usage, latency_ms))
     await _step(d, stage, started, usage=usage, **extra)
 
 
@@ -242,7 +243,7 @@ async def _structured_call(
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )
     text = "".join(
-        _attr_or_key(b, "text", "") for b in response.content if _attr_or_key(b, "type") == "text"
+        attr_or_key(b, "text", "") for b in response.content if attr_or_key(b, "type") == "text"
     )
     return json.loads(text), response
 
@@ -559,13 +560,13 @@ async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
                     "citation",
                     {
                         "index": citation_index,
-                        "source": _attr_or_key(cit, "source"),
-                        "title": _attr_or_key(cit, "title"),
-                        "cited_text": _excerpt(_attr_or_key(cit, "cited_text") or ""),
+                        "source": attr_or_key(cit, "source"),
+                        "title": attr_or_key(cit, "title"),
+                        "cited_text": excerpt(attr_or_key(cit, "cited_text") or ""),
                     },
                 ))
         response = await stream.get_final_message()
-    text, citations, segments = _collect_segments(response)
+    text, citations, segments = collect_segments(response)
     await _model_step(
         d, state, "answer", t, response,
         level=state["level"],
@@ -592,7 +593,7 @@ _CATEGORY_LABEL = {
 def _normalise_draft(draft: dict, *, question: str) -> dict:
     """Fill what the draft left out. An under-described ticket still reaches a human."""
     draft = dict(draft)
-    draft["subject"] = (draft.get("subject") or "").strip() or _excerpt(question)
+    draft["subject"] = (draft.get("subject") or "").strip() or excerpt(question)
     for key, value in _TICKET_DEFAULTS.items():
         draft[key] = draft.get(key) or value
     return draft
@@ -666,12 +667,9 @@ async def escalate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     }
 
 
-async def stage_ticket(
-    draft: dict, *, db: AsyncSession, client_id: str, run_id: str, stage_seq: int
-) -> dict:
-    """File the ticket: Python calls the executor directly, one call site to keep idempotent."""
-    executor = get_tool_executor(_TICKET_TOOL)
-    return await executor(draft, client_id=client_id, db=db, run_id=run_id, stage_seq=stage_seq)
+async def stage_ticket(draft: dict, *, run_id: str, stage_seq: int) -> dict:
+    """File the ticket from Python: one call site, so one place to keep idempotent."""
+    return await tickets.create_ticket(draft, run_id=run_id, stage_seq=stage_seq)
 
 
 async def ticket(state: TurnState, runtime: Runtime[Deps]) -> dict:
@@ -684,8 +682,6 @@ async def ticket(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
     result = await stage_ticket(
         state["draft"],
-        db=d.db,
-        client_id=d.client_id,
         run_id=state["run_id"],
         stage_seq=d.recorder.next_seq("ticket"),
     )
@@ -695,8 +691,8 @@ async def ticket(state: TurnState, runtime: Runtime[Deps]) -> dict:
             conversation_id=state["conversation_id"],
             span_type="tool",
             tool_name=_TICKET_TOOL,
-            input_=_trace_payload(state["draft"]),
-            output=_trace_payload(result),
+            input_=trace_payload(state["draft"]),
+            output=trace_payload(result),
             latency_ms=int((time.monotonic() - t) * 1000),
         )
     )
@@ -807,7 +803,7 @@ async def stream_graph(
     started = time.monotonic()
     recorder = None
     try:
-        conversation_id, history = await _prepare_conversation(db, client_id, conversation_id)
+        conversation_id, history = await prepare_conversation(db, client_id, conversation_id)
         recorder = await RunRecorder.start(conversation_id, client_id)
         run_id = recorder.run_id
         yield ("run", {"run_id": run_id, "conversation_id": conversation_id})
@@ -837,7 +833,7 @@ async def stream_graph(
                 run_id=run_id,  # the join back to this turn's step trail, for reload
             )
         )
-        await _update_conversation_totals(db, conversation_id, deps.usage)
+        await update_conversation_totals(db, conversation_id, deps.usage)
         await db.commit()
         await recorder.finish("completed")
         yield (
