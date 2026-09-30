@@ -12,61 +12,21 @@ tests run against docker-compose with real APIs and implement the use cases belo
 
 ---
 
-## UC-1 — Single-fact answer with citation (the core loop)
+## UC-1 to UC-7 — Retired with the loop engine (D11)
 
-- **Client:** `acme-fab`
-- **User:** "How often does the chamber seal on the PX-900 need replacing?"
-- **Expected:** exactly one `search_docs` call (query mentions seal/PX-900); answer
-  states 1,200 RF hours; at least one `search_result_location` citation whose `title`
-  matches the PX-900 maintenance manual and whose `cited_text` contains AF-1.
+These seven scenarios ran against `acme-fab` and `meridian-insurance` on the free-form loop:
+single-fact and multi-document answers, a client-specific tool call, out-of-corpus refusal,
+cross-client isolation, a clause citation, and multi-turn caching. Both clients and the loop
+were deleted on 2026-09-11. The scenarios as written:
+`git show 841a1ba:docs/test-anchors.md`.
 
-## UC-2 — Multi-document synthesis
+What they asserted still holds on the support graph, and is covered there:
 
-- **Client:** `acme-fab`
-- **User:** "The PX-900 is showing error E-417. What does it mean and how fast can a
-  field engineer get here on a Tier 1 contract?"
-- **Expected:** answer covers both AF-2 (helium leak, chamber vent) and AF-4 (4 business
-  hours); citations reference two distinct documents.
-
-## UC-3 — Agent chooses a client-specific tool
-
-- **Client:** `acme-fab`
-- **User:** "Quote me 50 chamber seal kits for the PX-900."
-- **Expected:** the loop resolves `PX900-SEAL-A2`, then calls `pricing_lookup` with that
-  part number and qty 50; the answer includes the $1,840 unit price, the 8% volume
-  discount (50 > min 10) and the 21-day lead time; the trace shows both tool spans in
-  order.
-
-## UC-4 — Out-of-corpus refusal (grounding)
-
-- **Client:** `acme-fab`
-- **User:** "What's your CEO's opinion on quantum computing?"
-- **Expected:** no hit above the similarity floor; the assistant says it doesn't have
-  that in its documentation, offers what it can help with, and invents nothing. Zero
-  citations in the answer.
-
-## UC-5 — Cross-client isolation
-
-- **Client:** `meridian-insurance`
-- **User:** UC-1's question.
-- **Expected:** `search_docs` returns nothing relevant (AF-1 is not in Meridian's
-  corpus); Meridian's assistant refuses per UC-4 and must not answer with Acme data.
-
-## UC-6 — Policy exclusion with clause citation
-
-- **Client:** `meridian-insurance`
-- **User:** "My ceiling has been leaking slowly for about a month. Am I covered?"
-- **Expected:** not covered; names gradual seepage and the 14-day threshold; cites
-  clause 4.2.1 (MI-1) through a `search_result_location`. If `coverage_check` is called
-  with `gradual_seepage`, its verdict must agree with the cited clause.
-
-## UC-7 — Multi-turn follow-up with caching
-
-- **Client:** `meridian-insurance`
-- **Turn 1:** "What's the excess on accidental damage claims for HomeShield Plus?"
-  ($500, cites MI-2). **Turn 2:** "And how long do I have to lodge a claim?" (30 days,
-  cites MI-3 — the pronoun-free follow-up must resolve in conversation context).
-- **Expected:** turn 2's usage shows `cache_read_input_tokens > 0`.
+- **Cited single-fact answer:** UC-10 below, and `test_a_documented_question_answers_at_level_one`.
+- **Out-of-corpus refusal:** the graph never answers with zero passages; see UC-11.
+- **Cross-client isolation:** `test_sentinels_do_not_leak_across_corpora`, the ownership tests.
+- **Multi-turn follow-up:** UC-14's follow-up case, answered at Level 2. It shows no cache
+  reads: nothing is prompt-cached on Haiku 4.5 (P5).
 
 ## UC-8 — Budget guard trips
 
@@ -76,34 +36,39 @@ tests run against docker-compose with real APIs and implement the use cases belo
 
 ## UC-9 — New client onboarding
 
-- **Steps:** write `config/newco.yaml`, drop 5 docs in `corpora/newco/`, run
-  `configent ingest --client newco`, open `/c/newco`.
+- **Steps:** write `config/newco.yaml`, drop 5 docs in `corpora/newco/`, copy a prompt
+  directory to `prompts/newco/`, run `configent --client newco`, open `/c/newco`.
 - **Expected:** a branded assistant answering corpus questions with citations, zero code
   changes. Keep `newco` out of version control.
 
 ## UC-10 — Streaming event contract
 
-`POST /api/c/acme-fab/chat/stream` with UC-1's question. **The frontend is built against
-exactly this.** Change this block first if the contract needs to change.
+`POST /api/c/gcp-platform-support/chat/stream` with "My Cloud Run container fails to start —
+what does the PORT error mean?". **The frontend is built against exactly this.** Change this
+block first if the contract needs to change.
 
 ```
-event: tool      data: {"name": "search_docs", "status": "start"}
-event: tool      data: {"name": "search_docs", "status": "end"}
-event: text      data: {"delta": "The chamber seal on the PX-900 "}
-event: text      data: {"delta": "should be replaced every 1,200 RF hours"}
-event: citation  data: {"index": 1, "source": "corpus://acme-fab/px900-maintenance-manual",
-                        "title": "PX-900 Maintenance Manual",
-                        "cited_text": "The PX-900 plasma etcher requires chamber seal replacement every 1,200 RF hours."}
-event: text      data: {"delta": "."}
-event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "output_tokens": 411,
-                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 3050,
-                        "cost_usd": 0.0241, "latency_ms": 2140}
+event: run       data: {"run_id": "3f2b…", "conversation_id": "f3a1…"}
+event: step      data: {"seq": 1, "stage": "retrieve", "level": 1, "n_hits": 5, "top_similarity": 0.62, …}
+event: step      data: {"seq": 2, "stage": "grade", "level": 1, "confidence": 0.95, "kind": "question", …}
+event: text      data: {"delta": "That error means the container never listened on the port "}
+event: citation  data: {"index": 1, "source": "corpus://gcp-platform-support/cloud-run-troubleshooting",
+                        "title": "Cloud Run troubleshooting",
+                        "cited_text": "Container failed to start. Failed to start and then listen on the port defined by the PORT environment variable."}
+event: text      data: {"delta": "Cloud Run expects."}
+event: step      data: {"seq": 3, "stage": "answer", "level": 1, "n_citations": 1, …}
+event: done      data: {"conversation_id": "f3a1…", "run_id": "3f2b…", "outcome": "answer",
+                        "confidence": 0.95, "ticket_id": null, "input_tokens": 5123,
+                        "output_tokens": 411, "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0, "cost_usd": 0.0072, "latency_ms": 2140}
 ```
 
-- `done` carries `conversation_id` (the frontend needs it to continue the turn) and
-  `cache_creation_input_tokens` (turn 1 shows creation, turn 2 shows reads).
+- `done` carries `conversation_id` (the frontend needs it to continue the turn) and `outcome`.
+  `cost_usd` is priced at the client model's row in `config/pricing/claude.yaml` (D8).
 - On failure the stream emits `event: error` with `{"message": …}` instead of `done`,
-  and the turn is not persisted.
+  and the turn's messages are not persisted. The steps already committed stay on the run.
+- **Amended 2026-09-11 for D11:** the contract previously opened with `tool` start/end
+  events from the loop engine, and ran against `acme-fab`. Both are gone.
 
 ## UC-11 — Forced escalation (support agent) · planned, W1
 
@@ -167,6 +132,9 @@ event: done      data: {"conversation_id": "f3a1…", "input_tokens": 5123, "out
 ---
 
 ## Judge fixtures
+
+> **Retired with UC-2 (D11).** The pair below judged an Acme answer; a replacement should pin
+> a `gcp-platform-support` pair before the judge is built.
 
 One pinned pair, so judge-prompt changes are regression-testable. Stored at
 `evals/fixtures/judge_pair_uc2.json`.

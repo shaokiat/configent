@@ -1,11 +1,11 @@
 ---
 title: SSE Streaming
-description: How agent responses stream from FastAPI to the Next.js frontend over Server-Sent Events, from either engine.
+description: How the support graph's steps, text and citations stream from FastAPI to the Next.js frontend over Server-Sent Events.
 order: 18
 group: Cross-Cutting
 ---
 
-The chat endpoint returns a `StreamingResponse` immediately. As the engine runs, it yields SSE frames (text deltas, citation events, step or tool status) that the frontend consumes incrementally.
+The chat endpoint returns a `StreamingResponse` immediately. As the graph runs, it yields SSE frames (step records, text deltas, citation events) that the frontend consumes incrementally.
 
 SSE works over plain HTTP with no upgrade handshake and passes through any proxy. For server→client-only streaming, WebSockets add complexity for no benefit.
 
@@ -15,20 +15,17 @@ SSE works over plain HTTP with no upgrade handshake and passes through any proxy
 
 Every frame is `event: <name>\ndata: <json>\n\n`.
 
-Both engines emit the same contract. `tool` frames come only from the loop; `run`, `step` and `ticket_proposal` frames come only from the graph. Everything else is shared.
+| Event | Payload | When |
+|---|---|---|
+| `run` | `{run_id, conversation_id}` | Once, before the first node |
+| `step` | `{seq, stage, status, level, reasoning, latency_ms, ts, …}` | As each node finishes |
+| `text` | `{delta: str}` | Each text chunk |
+| `citation` | `{index, source, title, cited_text}` | Each inline citation |
+| `ticket_proposal` | `{run_id, subject, category, product_area, priority, body}` | When a turn offers to file a ticket |
+| `done` | `{conversation_id, run_id, outcome, confidence, ticket_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit |
+| `error` | `{message: str}` | On any exception, instead of `done` |
 
-| Event | Payload | When | Engine |
-|---|---|---|---|
-| `run` | `{run_id, conversation_id}` | Once, before the first node | graph |
-| `step` | `{seq, stage, status, level, reasoning, latency_ms, ts, …}` | As each node finishes | graph |
-| `tool` | `{name, status: "start"\|"end"}` | Before and after each tool call | loop |
-| `text` | `{delta: str}` | Each text chunk | both |
-| `citation` | `{index, source, title, cited_text}` | Each inline citation | both |
-| `ticket_proposal` | `{run_id, subject, category, product_area, priority, body}` | When a turn offers to file a ticket | graph |
-| `done` | `{conversation_id, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms}` | After DB commit | both |
-| `error` | `{message: str}` | On any exception, instead of `done` | both |
-
-A graph `done` frame carries four extra fields: `run_id`, `outcome`, `confidence` and `ticket_id`. `outcome` is `"answer"`, `"converse"` or `"ticket"`. It is three-way because a boolean cannot express *this was not a support question*.
+`outcome` is `"answer"`, `"converse"` or `"ticket"`. It is three-way because a boolean cannot express *this was not a support question*. `cost_usd` is priced at the client model's row in `config/pricing/claude.yaml`.
 
 `ticket_proposal` is an **offer**, not a record: the ticket has not been filed when it arrives. The client renders it as a card with a confirm button, which posts to `/api/c/{client_id}/runs/{run_id}/ticket`. Nothing about the ticket travels in that request. The draft stays in the graph's checkpoint, so a client can accept an offer but never author one.
 
@@ -38,36 +35,41 @@ The payload is the same dict written to `Run.steps`, returned by the same call t
 
 ```
 event: step
-data: {"seq": 2, "stage": "grade", "status": "ok", "level": 1, "reasoning": "The passages cover Cloud Run deployment…", "confidence": 0.05, "kind": "question", "latency_ms": 4110, "cost_usd": 0.0024}
+data: {"seq": 2, "stage": "grade", "status": "ok", "level": 1, "reasoning": "The passages cover Cloud Run deployment…", "confidence": 0.05, "kind": "question", "latency_ms": 4110, "cost_usd": 0.0008}
 ```
 
 **Unknown events are dropped silently** by the frontend's `handleEvent`, so backend work on a new event type stays invisible until the client learns to render it.
 
 ### Sample streams
 
-A single `search_docs` call in the loop:
+A turn answered at Level 1:
 
 ```
-event: tool
-data: {"name": "search_docs", "status": "start"}
+event: run
+data: {"run_id": "3f2b...", "conversation_id": "..."}
 
-event: tool
-data: {"name": "search_docs", "status": "end"}
+event: step
+data: {"seq": 1, "stage": "retrieve", "level": 1, "n_hits": 5, "top_similarity": 0.62, ...}
+
+event: step
+data: {"seq": 2, "stage": "grade", "level": 1, "confidence": 0.95, "kind": "question", ...}
 
 event: text
-data: {"delta": "The PX-900 filter "}
+data: {"delta": "That error means the container never listened on the port Cloud Run expects"}
 
 event: citation
-data: {"index": 1, "source": "corpora/acme-fab/px900-maintenance.md", "title": "PX-900 Maintenance Guide", "cited_text": "Replace the intake filter every 500 operating hours..."}
+data: {"index": 1, "source": "corpus://gcp-platform-support/cloud-run-troubleshooting", "title": "Cloud Run troubleshooting", "cited_text": "Container failed to start. Failed to start and then listen on the port..."}
 
-event: text
-data: {"delta": "should be replaced every 500 operating hours."}
+event: step
+data: {"seq": 3, "stage": "answer", "level": 1, "n_citations": 2, ...}
 
 event: done
-data: {"conversation_id": "...", "cost_usd": 0.000312, "latency_ms": 1840, ...}
+data: {"conversation_id": "...", "run_id": "3f2b...", "outcome": "answer", "confidence": 0.95, "ticket_id": null, ...}
 ```
 
-A graph turn that falls through all three tiers:
+The `answer` step arrives after its text. The node records its step once the stream has closed and the final message's usage is known.
+
+A turn that falls through all three tiers:
 
 ```
 event: run
@@ -132,11 +134,14 @@ data: {"conversation_id": "...", "run_id": "3f2b...", "outcome": "converse", "ti
 @router.post("/c/{client_id}/chat/stream")
 async def chat_stream(client_id: str, req: ChatRequest):
     cfg = _client(client_id)
-    engine = stream_graph if cfg.agent.mode == "graph" else stream_turn
+    _enforce_rate_limit(client_id, cfg)
+    async with AsyncSessionLocal() as preflight_db:
+        await _check_conversation_ownership(preflight_db, client_id, req.conversation_id)
+        await _enforce_daily_budget(preflight_db, cfg)
 
     async def event_source():
         async with AsyncSessionLocal() as db:
-            async for name, data in engine(
+            async for name, data in stream_graph(
                 req.message, cfg=cfg, client_id=client_id,
                 conversation_id=req.conversation_id, db=db,
             ):
@@ -149,9 +154,9 @@ async def chat_stream(client_id: str, req: ChatRequest):
     )
 ```
 
-One entry point, two engines, selected by `agent.mode`. The endpoint opens the DB session inside `event_source()`, not via `Depends(get_db)`, because a `Depends`-scoped session closes before `StreamingResponse` starts writing.
-
-`X-Accel-Buffering: no` prevents nginx from holding the entire stream and releasing it as one chunk.
+- **Checks run before the response exists.** Once the 200 and the first bytes are sent, a rejection can only be an `error` event.
+- **The turn's session opens inside `event_source()`**, not via `Depends(get_db)`, because a `Depends`-scoped session closes before `StreamingResponse` starts writing.
+- **`X-Accel-Buffering: no`** stops nginx holding the entire stream and releasing it as one chunk.
 
 ---
 
@@ -172,56 +177,29 @@ async for event, data in graph.astream(
 ```
 
 - **The custom mode, not `updates`.** An `updates` chunk arrives only when a node returns, after all its text deltas. The custom stream carries steps, deltas and proposals in the exact order the nodes wrote them, in one mode.
-- **The tuples are the SSE events.** Nodes write the same `(event, data)` pairs the loop yields, so the endpoint and the frontend need no graph-specific code.
-- **`done` and `error` come from `stream_graph()`, not a node.** They depend on persisting the turn after the graph stops, which happens outside it.
+- **The tuples are the SSE events.** The endpoint serializes each `(event, data)` pair unchanged, so it needs no per-event code.
+- **`run`, `done` and `error` come from `stream_graph()`, not a node.** They bracket the graph: one before it starts, one after the turn is persisted.
 
 ---
 
-## The loop's `stream_turn`
-
-`stream_turn` is an async generator that handles setup, error recovery and the `done` event:
+## Errors
 
 ```python
-async def stream_turn(user_message, *, cfg, client_id, conversation_id, db):
-    started = time.monotonic()
-    conversation_id, history = await _prepare_conversation(db, client_id, conversation_id)
-    result = LoopResult(messages=messages)
+async def stream_graph(user_message, *, cfg, client_id, conversation_id, db):
     try:
-        async for event in _stream_loop(messages, ..., result=result):
-            yield event
-    except anthropic.APIError as exc:
-        await db.rollback()
-        yield ("error", {"message": f"Upstream API error: {exc.__class__.__name__}"})
-        return
+        ...                                   # prepare, run the graph, persist, commit
+        yield ("done", {...})
+    except GraphCrash:
+        raise                                 # the fault injector must kill the process
     except Exception as exc:
         await db.rollback()
-        yield ("error", {"message": "An internal error occurred. Please try again."})
-        return
-
-    await _persist_turn(db, conversation_id, len(history), result)
-    await db.commit()
-    yield ("done", {"cost_usd": round(result.usage.cost_usd, 6), ...})
+        await recorder.finish("failed")
+        yield ("error", {"message": "Upstream API error: RateLimitError"
+                         if isinstance(exc, anthropic.APIError)
+                         else "An internal error occurred. Please try again."})
 ```
 
-Errors call `db.rollback()` before yielding `error`. HTTP headers are already sent by that point, so there is no other way to signal failure. `stream_graph()` follows the same rule.
-
-`_stream_loop` translates raw Anthropic SDK events into event tuples:
-
-```python
-async with aclient.messages.stream(**_request_kwargs(...)) as stream:
-    async for event in stream:
-        if event.type == "content_block_start":
-            if event.content_block.type == "tool_use":
-                yield ("tool", {"name": event.content_block.name, "status": "start"})
-        elif event.type == "content_block_delta":
-            if event.delta.type == "text_delta":
-                yield ("text", {"delta": event.delta.text})
-            elif event.delta.type == "citations_delta":
-                yield ("citation", {"index": citation_index, ...})
-    response = await stream.get_final_message()
-```
-
-`get_final_message()` returns the completed response after the stream closes, and its `usage` struct feeds cost accounting. `_stream_loop` emits `tool` `status: "end"` after `asyncio.gather` completes, so the frontend knows exactly when a tool call finishes.
+The HTTP status went out with the first byte, so the `error` event is the only way to tell the client. A generator that simply stops looks like a finished turn from the browser's side. Detail stays in the server log.
 
 ---
 
@@ -245,8 +223,8 @@ for await (const { event, data } of parseSse(response.body!.getReader())) {
 
 | Event | Effect |
 |---|---|
-| `tool start` / `tool end` | Shows and removes a "Searching…" indicator |
-| `step` | Appends to the live step trail |
+| `run` | Stores the run id |
+| `step` | Appends to the message's step trail |
 | `text` | Appends `delta` to the current message |
 | `citation` | Attaches a numbered popover to the preceding text segment |
 | `ticket_proposal` | Renders the confirm card |
@@ -281,4 +259,4 @@ The proxy keeps the FastAPI origin off the browser and handles CORS in one place
 
 Streamable HTTP is the MCP spec's replacement for HTTP+SSE as an MCP server transport. It lets a single endpoint respond with either plain JSON or an SSE stream, and adds session management.
 
-That overhead suits MCP servers serving external clients like Claude Desktop, not a custom chat API with a fixed event contract that always streams. If Configent ever exposes its tools as an MCP server, Streamable HTTP would be the right transport for that surface.
+That overhead suits MCP servers serving external clients like Claude Desktop, not a custom chat API with a fixed event contract that always streams. If Configent ever exposes its retrieval as an MCP server, Streamable HTTP would be the right transport for that surface.

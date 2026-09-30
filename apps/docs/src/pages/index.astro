@@ -31,11 +31,11 @@ const decisions = [
       ticket in someone's queue.`,
   },
   {
-    id: 'D5',
-    title: 'Graph and loop coexist',
-    body: `One line of config selects the engine. Clients that suit a free-form agent
-      loop keep it; the support agent gets a three-tier graph. Both run from the same
-      entry point, so neither is a fork of the other.`,
+    id: 'D11',
+    title: 'One engine, not two',
+    body: `A free-form tool-use loop shipped beside the graph for clients the demo never
+      loaded. It was deleted rather than kept: disabled code still has to pass its tests,
+      and the case for a loop is argued in the docs, with the old code one git command away.`,
   },
   {
     id: 'P2',
@@ -45,9 +45,9 @@ const decisions = [
       column rather than by hoping two systems agree.`,
   },
   {
-    id: 'P3',
+    id: 'D10',
     title: 'A framework for mechanism, not decisions',
-    body: `The loop is written out. The support graph uses LangGraph for two things:
+    body: `The support graph uses LangGraph for two things:
       checkpoints, and the pause before a ticket is filed. Routing, model calls, citations
       and cost stay plain code, and the move from a hand-written pipeline is documented.`,
   },

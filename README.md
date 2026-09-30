@@ -17,34 +17,35 @@ fully branded, citation-grounded assistant for that client — with zero code ch
 ## The config is the client
 
 ```yaml
-# config/acme-fab.yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+# config/gcp-platform-support.yaml
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: "AcmeAssist"
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
 corpus:
-  source: corpora/acme-fab/
+  source: corpora/gcp-platform-support/
   chunking:
-    chunk_size: 800
-    overlap: 100
+    chunk_size: 512
+    overlap: 64
 agent:
-  model: claude-sonnet-4-6
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
-    - pricing_lookup
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  retrieval_drop_floor: 0.3
+  escalate_below: 0.45
+  confidence_threshold: 0.6
+  corrective:
+    enabled: true
+    query_rewrites: 3
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```
 
-This file *is* the client: its branding, its documents, its system prompt, its
-tools, its spend limits. Nothing else changes between tenants — same code, same
+This file *is* the client: its branding, its documents, its prompts, its guardrail
+thresholds, its spend limits. Nothing else changes between tenants — same code, same
 deployment, different YAML.
 
 ## Architecture
@@ -52,9 +53,9 @@ deployment, different YAML.
 ```
  ┌──────────┐  HTTPS   ┌─────────────┐  REST  ┌────────────────┐
  │ Browser  │─────────▶│   Next.js   │───────▶│    FastAPI     │
- │ - Chat UI│  SSE     │  frontend   │        │ - Agent loop   │
+ │ - Chat UI│  SSE     │  frontend   │        │ - Support graph│
  │ - Client │◀─────────│ - Chat UI   │        │ - RAG retrieval│
- │  switcher│ streaming│ - Branding  │        │ - Tool runtime │
+ │  switcher│ streaming│ - Branding  │        │ - Ticket client│
  └──────────┘          └─────────────┘        │ - Tracing      │
                                                │ - Rate/budget  │
                                                └───────┬────────┘
@@ -62,9 +63,9 @@ deployment, different YAML.
                           ▼                 ▼                      ▼
                   ┌──────────────┐  ┌───────────────┐    ┌─────────────────┐
                   │ Anthropic API│  │  Postgres +   │    │ Voyage AI       │
-                  │ Agent + tools│  │   pgvector    │    │ embeddings      │
-                  │ + citations  │  │ Chunks/convos/│    │ (ingest + query)│
-                  └──────────────┘  │ traces        │    └─────────────────┘
+                  │ Grade, draft │  │   pgvector    │    │ embeddings      │
+                  │ + citations  │  │ Chunks/runs/  │    │ (ingest + query)│
+                  └──────────────┘  │ checkpoints   │    └─────────────────┘
                                     └───────────────┘
 
   Offline: corpora/<client>/ ─▶ ingest ─▶ chunk ─▶ embed ─▶ pgvector (per client_id)
@@ -75,20 +76,21 @@ Full write-up: [`docs/architecture.md`](docs/architecture.md).)*
 
 ## What's real
 
-- **Agent loop** — hand-rolled tool-use loop against the Anthropic API (no
-  framework): parallel tool calls, an iteration cap, per-tool timeouts, and prompt
-  caching with per-turn breakpoints so history accrues in cache incrementally.
+- **Support graph** — a LangGraph state graph whose every route is a plain Python
+  function; LangGraph supplies checkpoints and the pause before a ticket is filed, and
+  model calls go through the Anthropic SDK directly (details under Status).
 - **Native citations** — chunks return as `search_result` content blocks; the API
   attaches citations at generation time, and cited text must match the source
   verbatim, so a hallucinated citation is detectable.
-- **Per-client isolation** — configs are validated (unknown tools rejected) at
-  startup, not request time; retrieval is scoped by `client_id` everywhere;
+- **Per-client isolation** — configs are validated (unknown keys and unpriced
+  models rejected) at load, not request time; retrieval is scoped by `client_id` everywhere;
   conversation loading verifies ownership, so another client's conversation ID
   can't be used to pull its history.
 - **Limits** — a per-client rate limit and daily spend budget are enforced
   server-side, both returning a friendly 429 instead of a raw error.
-- **Tracing** — every model/tool call is recorded as a trace row (tokens, cache
-  reads, cost, latency); conversations carry a running cost/token total, surfaced
+- **Tracing** — every model call and ticket filing is recorded as a trace row
+  (tokens, cache reads, cost, latency), with cost priced per model from
+  `config/pricing/claude.yaml`; conversations carry a running cost/token total, surfaced
   in the `done` SSE event and the chat UI footer.
 - **Streaming UI** — SSE chat with live citation popovers, cost/latency footer,
   config-driven branding per client.
@@ -155,9 +157,8 @@ integration with a real support desk.
 
 ## Status
 
-**Built:** config-driven multi-tenancy with fail-at-startup validation; RAG
-retrieval with client-scoped pgvector search; the agent loop described above;
-native citations; prompt caching; per-client rate limiting and daily budget
+**Built:** config-driven multi-tenancy with fail-at-load validation; RAG
+retrieval with client-scoped pgvector search; native citations; cost priced per model; per-client rate limiting and daily budget
 enforcement; per-span tracing with cost/latency; cross-tenant conversation
 ownership checks; streaming chat UI; CI (ruff + unit tests).
 
@@ -169,6 +170,8 @@ node commits a `runs` step and streams an SSE `step` event, and tickets are file
 HTTP with a positional idempotency key. It replaced a hand-written pipeline; the comparison
 and rationale are in
 [From Pipeline to Graph](https://shaokiat.github.io/configent/docs/from-pipeline-to-graph/).
+The free-form tool-use loop that shipped beside it was then deleted:
+[Retiring the Loop](https://shaokiat.github.io/configent/docs/retiring-the-loop/).
 The original plan and exit gates: [`docs/support-agent-plan.md`](docs/support-agent-plan.md).
 
 **In progress / planned:**

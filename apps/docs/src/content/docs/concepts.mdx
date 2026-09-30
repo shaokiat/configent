@@ -60,11 +60,11 @@ Next.js (chat UI)          apps/web
       │  SSE
 FastAPI                    apps/api
       ├─ config registry    one YAML per client, validated at startup
-      ├─ engine             loop  ─or─  graph   (agent.mode)
+      ├─ support graph      three tiers, every route a Python function
       │     ├─ retrieval    Voyage embed → pgvector cosine, + Postgres full-text at Level 2
       │     ├─ Anthropic    Messages API: citations, structured output
-      │     ├─ LangGraph    graph engine only: checkpoints and the ticket pause
-      │     └─ tools        plain dict registry
+      │     ├─ LangGraph    checkpoints and the ticket pause
+      │     └─ cost         priced per model from config/pricing/claude.yaml
       └─ Postgres           conversations · messages · chunks · runs · checkpoints · traces
                                   │  HTTP
                             mock ticket service   apps/mockticket
@@ -74,19 +74,17 @@ One Postgres holds the relational data, the vectors, the full-text index and the
 
 ---
 
-## Two engines, one contract
+## A graph, not a tool loop
 
-`agent.mode` picks which engine serves a client. Both emit the same SSE events, so the frontend never knows which ran.
+Every client runs the support graph. The alternative, a model looping over tools until it stops, shipped beside it until D11.
 
-| | `loop` | `graph` |
+| | Tool-use loop (retired) | Support graph |
 |---|---|---|
 | Control flow | The model picks tools until it stops | Three tiers of nodes, routed by Python functions |
 | Escalation decided by | The model | `decide_level1` and `decide_level2` |
-| Runtime | Hand-written, one file | LangGraph, for checkpoints and the pause only |
-| Good for | Open-ended work | A decision you have to justify |
-| Walkthrough | [Agent Loop](/configent/docs/agent-loop) | [The Support Graph](/configent/docs/support-graph) |
+| Good for | Open-ended, multi-hop work | A decision you have to justify |
 
-The support agent runs `graph` because its whole claim is that escalation is not the model's decision, and a model holding the ticket tool cannot make that claim.
+A model holding the ticket tool cannot make this project's claim, that escalation is not the model's decision. Why the loop was deleted rather than kept: [Retiring the Loop](/configent/docs/retiring-the-loop).
 
 **[The Support Graph](/configent/docs/support-graph) is the section to read next.** Its hub page follows one question end to end, and each page under it owns one component.
 
@@ -99,8 +97,8 @@ The support agent runs `graph` because its whole claim is that escalation is not
 | LLM | Anthropic Claude (Haiku 4.5) | Native citations and structured output are both first-class; Haiku is cheap enough to spend extra calls on grading and rewriting |
 | Embeddings | Voyage `voyage-3` | Anthropic has no embeddings API, so a third party is required either way. Voyage exposes `input_type` query/document, a [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
 | Vector and keyword search | pgvector + Postgres full-text | Already inside the Postgres we need. A dedicated search service would be a [second system for no gain at this scale](/configent/docs/ingestion-pipeline#voyage-ai-vs-pgvector) |
-| Backend | FastAPI + async SQLAlchemy | Native `async` all the way down, which is what makes concurrent tool calls and SSE cheap |
-| Agent runtime | Hand-written loop; LangGraph for the support graph | The loop stays [one readable file](/configent/docs/agent-loop). The graph uses LangGraph for exactly two mechanisms and keeps model calls and routing in plain code. [Why the switch](/configent/docs/from-pipeline-to-graph) |
+| Backend | FastAPI + async SQLAlchemy | Native `async` all the way down, which is what makes I/O-bound nodes and SSE cheap |
+| Agent runtime | LangGraph, for checkpoints and the ticket pause | Model calls, routing and citations stay plain code. [Why a framework](/configent/docs/from-pipeline-to-graph) · [Why one engine](/configent/docs/retiring-the-loop) |
 | Transport | SSE | One-way server push over plain HTTP. WebSockets buy nothing when only the server talks. [Details](/configent/docs/sse-streaming) |
 | Frontend | Next.js + Tailwind | Client-agnostic; branding comes from the API, not the build |
 
@@ -120,10 +118,11 @@ The questions worth asking about this project, and the page that answers each.
 | How do you stop the model from escalating on its own? | [Answering](/configent/docs/answering) |
 | How do you avoid filing the same ticket twice? | [Escalation & Ticket](/configent/docs/escalation-ticket) |
 | Why adopt LangGraph after building without it? | [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph) |
+| Why delete the free-form agent loop? | [Retiring the Loop](/configent/docs/retiring-the-loop) |
 | What happens if the process dies mid-turn? | [Runs & Durability](/configent/docs/runs-and-durability) |
 | How is one tenant's corpus kept out of another's? | [Multi-Tenancy](/configent/docs/multi-tenancy) |
 | Why `voyage-3`, and why not a dedicated vector DB? | [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed) |
-| How does a long conversation not get linearly more expensive? | [Prompt Caching](/configent/docs/prompt-caching) |
+| Does prompt caching help here, and why not yet? | [Prompt Caching](/configent/docs/prompt-caching) |
 | What does adding a new client actually take? | [Adding a New Use Case](/configent/docs/adding-a-use-case) |
 
 ---
@@ -132,7 +131,7 @@ The questions worth asking about this project, and the page that answers each.
 
 The terms the rest of the docs use without re-defining.
 
-- **Client / tenant:** one assistant (corpus, prompt, tools, branding, limits) defined by one YAML file in `config/`.
+- **Client / tenant:** one assistant (corpus, prompts, branding, thresholds, limits) defined by one YAML file in `config/`.
 - **Chunk:** a passage of a document (512 tokens for the support agent), embedded and stored as a row in pgvector. Retrieval returns chunks, not documents, so a citation can point at a paragraph.
 - **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. Ranges 0 to 1; the support agent discards anything below `0.3`.
 - **Groundedness:** a cheap-model score for whether the retrieved passages actually support an answer. Similarity says "close"; groundedness says "sufficient".
@@ -147,7 +146,7 @@ The terms the rest of the docs use without re-defining.
 - **Tool starvation:** the answering call is sent no tool definitions at all, so escalation is unreachable from inside the model. A guarantee, not a prompt instruction.
 - **Run:** one graph turn, and the durable step trail it leaves in Postgres.
 - **Checkpoint:** LangGraph's saved graph state after a node, keyed by the run id. What lets a turn pause on a ticket offer and continue in a later request.
-- **Tool:** a function the model can ask the backend to call. The graph's answering call is sent none.
+- **Tool:** a function the model can ask the backend to call. No call in this system is sent one.
 
 ---
 

@@ -1,16 +1,14 @@
 ---
 title: Multi-Tenancy
-description: How one Configent deployment serves multiple fully-isolated clients — each with its own branding, corpus, tools, and cost limits — driven by a single YAML file per client.
+description: How one Configent deployment serves isolated clients — each with its own branding, corpus, prompts, and cost limits — driven by a single YAML file per client.
 order: 5
 # group: Getting Started  # hidden from sidebar — reachable by link
 ---
 
-Drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fully branded, isolated assistant goes live. No code changes, no redeployment.
+Drop a YAML file in `config/`, documents in `corpora/<client_id>/` and prompts in `prompts/<client_id>/`, and a branded, isolated assistant goes live. No code changes, no redeployment.
 
-> **This is the platform layer, not the current focus.** The build is organised around a single
-> support agent running [The Support Graph](/configent/docs/support-graph). Multi-tenancy is what the
-> engine underneath it happens to support; the other clients stay in the repo on the free-form
-> loop.
+> **One client ships today.** The repo carries `gcp-platform-support` alone. Every boundary on
+> this page is still enforced on every request, and a second tenant needs only its own files.
 
 ---
 
@@ -19,63 +17,54 @@ Drop a YAML file in `config/`, add documents to `corpora/<client_id>/`, and a fu
 Each file in `config/*.yaml` defines one client:
 
 ```yaml
-# config/acme-fab.yaml
-client_id: acme-fab
-name: "Acme Fab Equipment"
+# config/gcp-platform-support.yaml
+client_id: gcp-platform-support
+name: "Cloud Platform Support"
 
 branding:
-  logo: assets/acme-fab/logo.svg
-  primary_color: "#1B4F8A"
-  assistant_name: "AcmeAssist"
+  logo: assets/gcp-platform-support/logo.svg
+  primary_color: "#1a73e8"
+  assistant_name: "DeployBot"
 
 corpus:
-  source: corpora/acme-fab/
-  chunking:
-    chunk_size: 800
-    overlap: 100
+  source: corpora/gcp-platform-support/
 
 agent:
   model: claude-haiku-4-5-20251001
-  system_prompt_file: prompts/acme-fab.md
-  max_tokens: 4096
-  effort: medium
-  tools:
-    - search_docs
-    - get_document
-    - pricing_lookup
+  system_prompt_file: prompts/gcp-platform-support/answer.md
 
 limits:
-  rate_limit_per_minute: 20
+  rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```
 
-Adding a second client — `config/meridian-insurance.yaml` — makes `meridian-insurance` available at `/c/meridian-insurance` without touching any other configuration or code.
+A second file, say `config/newco.yaml`, makes `newco` available at `/c/newco` without touching any other configuration or code.
 
 ---
 
 ## Config registry
 
-At startup, `config/registry.py` scans `config/*.yaml`, validates each file through Pydantic, and builds a module-level singleton:
+At first use, `config/registry.py` scans `config/*.yaml`, validates each file, and builds a module-level singleton:
 
 ```
 config/*.yaml
       │
       ▼  yaml.safe_load()
-      ▼  ClientConfig.model_validate()   — Pydantic, strict validation
-      ▼  validate_tool_names()           — unknown tools → ValueError at startup
+      ▼  ClientConfig.model_validate()   Pydantic; unknown agent keys rejected
+      ▼  price_for(agent.model)          no row in config/pricing/claude.yaml → ValueError
       │
-_registry_instance: ConfigRegistry      — singleton, keyed by client_id
+_registry_instance: ConfigRegistry      singleton, keyed by client_id
 ```
 
-Validation failures raise at startup with the filename and field name — not at request time. The registry catches invalid configs before the first request lands.
+Validation failures raise with the filename and field name, not at request time. The scan is not recursive, so `config/pricing/` is never mistaken for a client.
 
 ```python
 # apps/api/app/config/registry.py
 registry = get_registry()
-cfg = registry.get("acme-fab")   # KeyError if not found
+cfg = registry.get("gcp-platform-support")   # KeyError if not found
 ```
 
-`DEV_CONFIG_RELOAD=1` makes `.get()` reload the YAML directory on every call — useful during local config iteration without restarting the server.
+`DEV_CONFIG_RELOAD=1` makes `.get()` reload the YAML directory on every call, for local config iteration without restarting the server.
 
 ---
 
@@ -86,49 +75,52 @@ cfg = registry.get("acme-fab")   # KeyError if not found
 | Table | `client_id` role |
 |-------|-----------------|
 | `clients` | Primary key row; config snapshot stored here |
-| `documents` | Scopes the corpus — search never crosses client boundaries |
+| `documents` | Scopes the corpus: search never crosses client boundaries |
 | `chunks` | Denormalized for index-scoped pgvector queries (no join on hot path) |
 | `conversations` | Scopes message history |
-| `traces` | Scopes per-turn observability data |
+| `runs` | Scopes the step trail. The ticket confirm endpoint checks it before resuming a run |
+| `traces` | Scopes per-turn observability data, and the daily budget sum |
 | `eval_runs` | Scopes evaluation results |
 
-The API router validates `client_id` against the config registry on every request — a valid UUID for a different client returns 404, not the wrong client's data.
+The API router validates `client_id` against the config registry on every request. A conversation or run id that belongs to a different client returns 404, not the other client's data.
 
 ---
 
 ## Branding API
 
-The frontend loads branding at mount time:
+The frontend loads branding at render time:
 
 ```
 GET /api/clients/:client_id/branding
 
 {
-  "id": "acme-fab",
-  "name": "Acme Fab Equipment",
-  "primary_color": "#1B4F8A",
-  "logo": "assets/acme-fab/logo.svg",
-  "assistant_name": "AcmeAssist"
+  "id": "gcp-platform-support",
+  "name": "Cloud Platform Support",
+  "primary_color": "#1a73e8",
+  "logo": "assets/gcp-platform-support/logo.svg",
+  "assistant_name": "DeployBot",
+  "suggested_questions": ["My Cloud Run container fails to start — what does the PORT error mean?", "..."],
+  "tagline": "I answer Cloud Run, GKE and IAM questions from public Google Cloud documentation…"
 }
 ```
 
-The Next.js shell applies `primary_color` as a CSS variable and renders `assistant_name` in the chat header — no client-specific frontend code.
+The Next.js shell applies `primary_color` as the accent and renders `assistant_name` in the chat header. There is no client-specific frontend code.
 
 ---
 
 ## Config schema
 
-`ClientConfig` is a Pydantic model in `apps/api/app/config/schema.py`. Pydantic type-checks and validates all fields at load time:
+`ClientConfig` is a Pydantic model in `apps/api/app/config/schema.py`:
 
 | Section | Key fields |
 |---------|-----------|
-| `branding` | `logo`, `primary_color`, `assistant_name` |
+| `branding` | `logo`, `primary_color`, `assistant_name`, `tagline`, `suggested_questions` |
 | `corpus` | `source`, `chunking.chunk_size`, `chunking.overlap` |
-| `agent` | `model`, `system_prompt_file`, `max_tokens`, `effort`, `tools` |
+| `agent` | `model`, `system_prompt_file`, `max_tokens`, the three thresholds, `corrective` |
 | `evals` | `golden_set`, `judge_model` |
 | `limits` | `rate_limit_per_minute`, `daily_budget_usd` |
 
-`client_id` is validated as a lowercase slug (`[a-z0-9][a-z0-9-]*[a-z0-9]`). Duplicate `client_id` values across files fail at startup with the conflicting filenames named.
+`client_id` is validated as a lowercase slug (`[a-z0-9][a-z0-9-]*[a-z0-9]`). Duplicate `client_id` values across files fail with the conflicting filenames named.
 
 See [Config Reference](/configent/docs/config-reference) for the full field listing.
 
@@ -136,8 +128,10 @@ See [Config Reference](/configent/docs/config-reference) for the full field list
 
 ## Adding a new client
 
-1. Create `config/<client_id>.yaml`
-2. Add documents to `corpora/<client_id>/`
-3. Write a system prompt at the path specified in `agent.system_prompt_file`
-4. Run `python -m app.cli ingest --client <client_id>`
-5. The client is live at `/c/<client_id>`
+1. Create `config/<client_id>.yaml`.
+2. Add documents to `corpora/<client_id>/`.
+3. Write the four prompts in `prompts/<client_id>/`: `answer.md`, `grade.md`, `rewrite.md`, `ticket_draft.md`.
+4. If the client uses a new model, add its row to `config/pricing/claude.yaml`.
+5. Ingest the corpus, then open `/c/<client_id>`.
+
+[Adding a New Use Case](/configent/docs/adding-a-use-case) walks the whole recipe.
