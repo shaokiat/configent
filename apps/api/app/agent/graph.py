@@ -382,6 +382,7 @@ async def retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
         d.db,
         client_id=d.client_id,
         query=state["question"],
+        model=d.cfg.corpus.embedding.model,
         k=5,
         floor=d.cfg.agent.retrieval_drop_floor,
     )
@@ -496,6 +497,7 @@ async def hybrid_retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
         client_id=d.client_id,
         queries=[state["question"], *state.get("queries", [])],
         keywords=state.get("keywords", ""),
+        model=d.cfg.corpus.embedding.model,
         k=5,
         floor=d.cfg.agent.retrieval_drop_floor,
     )

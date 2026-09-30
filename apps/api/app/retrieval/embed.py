@@ -5,8 +5,11 @@ from typing import Final
 import voyageai
 import voyageai.error
 
-# voyage-3 produces 1024-dimension vectors
+# Width of the `chunks.embedding` column. A client may pick any model that emits it.
 EMBEDDING_DIM: Final[int] = 1024
+# Models whose default output is EMBEDDING_DIM wide. Anything else needs a column (and a
+# migration) of its own, so the config refuses it at load.
+EMBEDDING_MODELS: Final[frozenset[str]] = frozenset({"voyage-3", "voyage-3-large", "voyage-3.5"})
 # Voyage caps at 128 per call; keyless free tier (10K TPM) needs a much smaller batch
 _VOYAGE_BATCH_SIZE: Final[int] = int(os.getenv("VOYAGE_BATCH_SIZE", "128"))
 _MAX_RETRIES: Final[int] = 6
@@ -20,7 +23,7 @@ def _get_client() -> voyageai.Client:
 
 
 async def _embed_with_retry(
-    client: voyageai.Client, texts: list[str], input_type: str
+    client: voyageai.Client, texts: list[str], input_type: str, model: str
 ) -> list[list[float]]:
     delay = 21.0  # free-tier rate limits reset on a per-minute window (3 RPM)
     for attempt in range(_MAX_RETRIES):
@@ -28,7 +31,7 @@ async def _embed_with_retry(
             response = await asyncio.to_thread(
                 client.embed,
                 texts,
-                model="voyage-3",
+                model=model,
                 input_type=input_type,
             )
             return response.embeddings
@@ -40,8 +43,8 @@ async def _embed_with_retry(
     raise RuntimeError("unreachable")
 
 
-async def embed(texts: list[str]) -> list[list[float]]:
-    """Embed texts using Voyage AI voyage-3.
+async def embed(texts: list[str], model: str) -> list[list[float]]:
+    """Embed documents with a Voyage AI model — the client's `corpus.embedding.model`.
 
     Batches automatically and retries 429/5xx with backoff sized to Voyage's
     per-minute rate-limit window.
@@ -54,18 +57,18 @@ async def embed(texts: list[str]) -> list[list[float]]:
 
     for i in range(0, len(texts), _VOYAGE_BATCH_SIZE):
         batch = texts[i : i + _VOYAGE_BATCH_SIZE]
-        results.extend(await _embed_with_retry(client, batch, "document"))
+        results.extend(await _embed_with_retry(client, batch, "document", model))
 
     return results
 
 
-async def embed_query(query: str) -> list[float]:
+async def embed_query(query: str, model: str) -> list[float]:
     """Embed a single query string with the query input_type for better retrieval."""
-    return (await embed_queries([query]))[0]
+    return (await embed_queries([query], model))[0]
 
 
-async def embed_queries(queries: list[str]) -> list[list[float]]:
+async def embed_queries(queries: list[str], model: str) -> list[list[float]]:
     """Embed several queries in one call — Level 2 embeds all its rewrites together."""
     if not queries:
         return []
-    return await _embed_with_retry(_get_client(), queries, "query")
+    return await _embed_with_retry(_get_client(), queries, "query", model)

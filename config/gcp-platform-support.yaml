@@ -20,6 +20,10 @@ branding:
     - "Can you raise my Cloud Run instance quota for europe-west1?"
 corpus:
   source: corpora/gcp-platform-support/
+  # Change anything here and the next ingest rebuilds the whole index; until it runs,
+  # chat refuses to answer from the stale one.
+  embedding:
+    model: voyage-3
   chunking:
     chunk_size: 512
     overlap: 64

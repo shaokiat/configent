@@ -16,6 +16,7 @@ WORKDIR /workspace
 COPY config/ config/
 COPY prompts/ prompts/
 COPY assets/ assets/
+COPY corpora/ corpora/
 
 WORKDIR /workspace/apps/api
 

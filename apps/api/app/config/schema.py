@@ -1,6 +1,10 @@
+import hashlib
+import json
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.retrieval.embed import EMBEDDING_DIM, EMBEDDING_MODELS
 
 
 class BrandingConfig(BaseModel):
@@ -18,9 +22,39 @@ class ChunkingConfig(BaseModel):
     overlap: int = Field(default=100, ge=0)
 
 
+class EmbeddingConfig(BaseModel):
+    """The one hard contract between ingest and retrieval: the question is embedded with
+    the same model as the chunks, or cosine similarity is noise and every threshold in
+    `agent` stops meaning anything."""
+
+    model: str = "voyage-3"
+
+    @field_validator("model")
+    @classmethod
+    def model_must_fit_the_column(cls, v: str) -> str:
+        if v not in EMBEDDING_MODELS:
+            raise ValueError(
+                f"{v!r} is not a supported embedding model. chunks.embedding is "
+                f"{EMBEDDING_DIM}-dim, so the choices are {sorted(EMBEDDING_MODELS)}."
+            )
+        return v
+
+
 class CorpusConfig(BaseModel):
     source: str
+    embedding: EmbeddingConfig = EmbeddingConfig()
     chunking: ChunkingConfig = ChunkingConfig()
+
+    def fingerprint(self) -> str:
+        """Hash of every setting that shapes the index. Stored on each document at ingest;
+        a mismatch means the index was built under different settings and must be rebuilt.
+        `source` is left out: moving the folder does not change a single vector."""
+        spec = {
+            "embedding_model": self.embedding.model,
+            "chunk_size": self.chunking.chunk_size,
+            "overlap": self.chunking.overlap,
+        }
+        return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
 
 
 class CorrectiveConfig(BaseModel):

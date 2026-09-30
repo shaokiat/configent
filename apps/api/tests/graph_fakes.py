@@ -165,7 +165,7 @@ class Harness:
     async def _search(self, *_a, **_k):
         return list(self.scenario.get("hits") or [])
 
-    async def _hybrid(self, _db, *, client_id, queries, keywords, k, floor):
+    async def _hybrid(self, _db, *, client_id, queries, keywords, model, k, floor):
         self.hybrid_requests.append({"queries": queries, "keywords": keywords})
         return list(self.scenario.get("l2_hits") or [])
 

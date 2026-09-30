@@ -66,14 +66,18 @@ async def search(
     db: AsyncSession,
     client_id: str,
     query: str,
+    *,
+    model: str,
     k: int = 5,
     floor: float = 0.3,
 ) -> list[Hit]:
     """Cosine similarity top-k search over chunks, scoped to client_id.
 
     Drops hits below the similarity floor so irrelevant results don't reach the model.
+    `model` must be the one the chunks were embedded with — the client's
+    `corpus.embedding.model`, which the fingerprint check holds to the index.
     """
-    return await _dense(db, client_id, await embed_query(query), k, floor)
+    return await _dense(db, client_id, await embed_query(query, model), k, floor)
 
 
 async def _keyword(db: AsyncSession, client_id: str, keywords: str, k: int) -> list[Hit]:
@@ -114,12 +118,15 @@ async def hybrid_search(
     client_id: str,
     queries: list[str],
     keywords: str,
+    *,
+    model: str,
     k: int = 5,
     floor: float = 0.3,
 ) -> list[Hit]:
     """Level 2 retrieval: dense search for every query variant, plus full-text search on the
     exact keywords, fused by reciprocal rank. No new infrastructure — one GIN index."""
-    ranked = [await _dense(db, client_id, vec, k, floor) for vec in await embed_queries(queries)]
+    vecs = await embed_queries(queries, model)
+    ranked = [await _dense(db, client_id, vec, k, floor) for vec in vecs]
     if keywords:
         ranked.append(await _keyword(db, client_id, keywords, k))
     return rrf_merge(ranked, k)

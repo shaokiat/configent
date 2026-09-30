@@ -41,7 +41,12 @@ class Document(Base):
     client_id: Mapped[str] = mapped_column(String(64), ForeignKey("clients.id"), index=True)
     source_uri: Mapped[str] = mapped_column(String(512))
     title: Mapped[str] = mapped_column(String(512))
+    # sha256 of the raw file bytes: an unchanged file is skipped before it is parsed.
     content_hash: Mapped[str] = mapped_column(String(64))
+    # `CorpusConfig.fingerprint()` at the time this document was indexed. Differs from the
+    # config's → the document was chunked or embedded under other settings and is rebuilt.
+    # Null for rows written before the column existed, which never matches, so they rebuild.
+    ingest_fingerprint: Mapped[str | None] = mapped_column(String(16), nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # Full parsed document text, populated at ingest time (A2). Nullable so
     # documents ingested before this column existed still load. Its reader, the loop

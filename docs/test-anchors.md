@@ -52,7 +52,7 @@ event: run       data: {"run_id": "3f2b…", "conversation_id": "f3a1…"}
 event: step      data: {"seq": 1, "stage": "retrieve", "level": 1, "n_hits": 5, "top_similarity": 0.62, …}
 event: step      data: {"seq": 2, "stage": "grade", "level": 1, "confidence": 0.95, "kind": "question", …}
 event: text      data: {"delta": "That error means the container never listened on the port "}
-event: citation  data: {"index": 1, "source": "corpus://gcp-platform-support/cloud-run-troubleshooting",
+event: citation  data: {"index": 1, "source": "corpus://gcp-platform-support/cloud-run-troubleshooting.md",
                         "title": "Cloud Run troubleshooting",
                         "cited_text": "Container failed to start. Failed to start and then listen on the port defined by the PORT environment variable."}
 event: text      data: {"delta": "Cloud Run expects."}
