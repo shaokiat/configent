@@ -690,7 +690,7 @@ export default function ChatPanel({ branding }: { branding: BrandingData }) {
         updateLastAssistant((msg) => {
           msg.error =
             detail?.error === "index_out_of_date"
-              ? "The knowledge base is being updated. Try again in a few minutes."
+              ? "The knowledge base isn't ready. Try again in a few minutes; if this keeps happening, it needs rebuilding."
               : detail?.message || `Request failed (HTTP ${res.status}).`;
         });
         return;

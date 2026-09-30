@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -24,6 +25,11 @@ async def lifespan(_app: FastAPI):
     async with postgres_checkpointer(DATABASE_URL):
         # Bring every client's index in line with its corpus and config. Background, so
         # the API serves (and answers 409 for a stale client) while it runs.
+        # RECONCILE_ON_STARTUP=0 turns it off, for when a restart must not spend embedding
+        # budget; ingest is then the CLI's job.
+        if os.getenv("RECONCILE_ON_STARTUP", "1") == "0":
+            yield
+            return
         reconcile = asyncio.create_task(reconcile_all(get_registry().all(), _REPO_ROOT))
         yield
         # Per-document commits make stopping mid-run safe: the next start picks up the rest.
