@@ -117,14 +117,41 @@ class SupportGraphAgent(BaseModel):
         return self
 
 
+class DatabaseConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dialect: Literal["sqlite"]  # a Postgres client would be a second dialect, not another engine
+    path: str  # relative to the repo root
+
+
+class ContextConfig(BaseModel):
+    """Where the schema notes live: `descriptions/<table>.csv`, `glossary.md`, `rules.md`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+
+
+class GuardConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_limit: int = Field(default=200, gt=0)
+    timeout_ms: int = Field(default=5000, gt=0)
+
+
 class TextToSqlAgent(BaseModel):
-    """Stub: only what the shared platform reads. The engine and its keys land with #18."""
+    """Text-to-SQL: the schema and notes go in the prompt, the model writes a SELECT, code
+    guards and runs it (D13)."""
 
     model_config = ConfigDict(extra="forbid")
 
     engine: Literal["text_to_sql"]
     model: str
     system_prompt_file: str
+    database: DatabaseConfig
+    context: ContextConfig
+    guard: GuardConfig = GuardConfig()
+    repair_attempts: int = Field(default=2, ge=0, le=5)  # used by the graph (#19)
 
 
 # The tag picks the member, so a key from another engine fails at load (D13).

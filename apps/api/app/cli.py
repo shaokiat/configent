@@ -58,6 +58,7 @@ def ingest(
 
         from app.agent.engines import ENGINES
         from app.config.registry import ConfigRegistry
+        from app.ingest import IngestReport
 
         registry = ConfigRegistry(config_dir=_REPO_ROOT / "config")
         try:
@@ -66,26 +67,32 @@ def ingest(
             console.print(f"[red]Unknown client_id: {client!r}[/red]")
             raise typer.Exit(1)
 
-        engine = ENGINES[cfg.agent.engine]
+        eng = ENGINES[cfg.agent.engine]
         if check:
-            report = engine.check(cfg, _REPO_ROOT)
-            _print_report(report, report.failed)
+            report = eng.check(cfg, _REPO_ROOT)
+            if isinstance(report, IngestReport):
+                _print_report(report, report.failed)
+            else:
+                report.show(console)  # a text_to_sql client has no corpus folder
             raise typer.Exit(1 if report.failed else 0)
 
         db_url = os.getenv(
             "DATABASE_URL",
             "postgresql+asyncpg://postgres:postgres@localhost:5432/configent",
         )
-        engine = create_async_engine(db_url, echo=False)
-        AsyncSession = async_sessionmaker(engine, expire_on_commit=False)
+        db_engine = create_async_engine(db_url, echo=False)
+        AsyncSession = async_sessionmaker(db_engine, expire_on_commit=False)
 
         console.print(f"[bold]Ingesting corpus for [cyan]{client}[/cyan]...[/bold]")
 
         async with AsyncSession() as db:
-            stats = await engine.ingest(db, cfg, _REPO_ROOT, force=force)
+            stats = await eng.ingest(db, cfg, _REPO_ROOT, force=force)
 
-        await engine.dispose()
+        await db_engine.dispose()
 
+        if not isinstance(stats["report"], IngestReport):
+            console.print({k: v for k, v in stats.items() if k not in ("report", "failed")})
+            return
         _print_report(stats["report"], stats["failed"])
         table = Table(title=f"Ingest summary: {client}")
         table.add_column("Metric", style="bold")

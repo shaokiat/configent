@@ -118,7 +118,13 @@ def _load(tmp_path, **changes):
     return ConfigRegistry(config_dir=tmp_path)
 
 
-_SQL_AGENT = {"engine": "text_to_sql", "model": "claude-sonnet-4-6", "system_prompt_file": "p.md"}
+_SQL_AGENT = {
+    "engine": "text_to_sql",
+    "model": "claude-sonnet-4-6",
+    "system_prompt_file": "p.md",
+    "database": {"dialect": "sqlite", "path": "data/x.sqlite"},
+    "context": {"source": "corpora/x/"},
+}
 
 
 def test_an_agent_with_no_engine_fails_naming_the_field(tmp_path):
@@ -162,3 +168,11 @@ def test_the_draft_schema_follows_the_tenants_escalation_block(tmp_path):
     ).get("test-client").escalation
     assert esc.categories["data_request"] == "data request"
     assert esc.draft_schema["properties"]["product_area"]["enum"] == ["a", "other"]
+
+
+def test_an_engine_with_no_registry_entry_fails_at_load(tmp_path, monkeypatch):
+    from app.agent.engines import ENGINES
+
+    monkeypatch.delitem(ENGINES, "text_to_sql")
+    with pytest.raises(ValueError, match="c.yaml.*text_to_sql.*no engine registered"):
+        _load(tmp_path, agent=_SQL_AGENT, corpus=None)

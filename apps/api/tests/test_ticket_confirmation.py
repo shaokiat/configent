@@ -151,7 +151,13 @@ async def test_confirming_resumes_the_engine_the_run_was_proposed_on(h):
     await _propose(h)
     edited = h.cfg.model_copy(
         update={
-            "agent": TextToSqlAgent(engine="text_to_sql", model="m", system_prompt_file="p.md"),
+            "agent": TextToSqlAgent(
+                engine="text_to_sql",
+                model="m",
+                system_prompt_file="p.md",
+                database={"dialect": "sqlite", "path": "d"},
+                context={"source": "c"},
+            ),
             "corpus": None,
         }
     )
