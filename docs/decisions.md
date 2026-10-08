@@ -126,7 +126,7 @@ The comparison is an `if` in `pipeline.py`. Both thresholds live in
 
 Zero hits is a third path: escalate immediately without a score call, since there is
 nothing to score. And `escalate_below` is a *different* floor from the pre-existing
-`retrieval_drop_floor` that discards weak chunks inside `search()` — set the escalation
+`retrieval_drop_floor` that discards weak chunks inside `retrieve()` — set the escalation
 floor at or below the drop floor and it can never fire.
 
 **Why:** one signal alone is either brittle (similarity misses "retrieved the right
@@ -357,6 +357,32 @@ configs accepted `tools` and `effort` keys that did nothing.
 - One tenant in the repo. Isolation is still enforced on every request, but only one client
   exercises it.
 - `documents.full_text` has no reader; ingestion still writes it.
+
+### D12 — The retriever is parameterised, not pluggable · LOCKED (decided and built 2026-10-08, #10)
+One `retrieve()` in `app/retrieval/search.py`, driven by an optional `retrieval:` block
+(`top_k`, `rrf_k`, `keyword.enabled`). Every key defaults to the behaviour before the block
+existed, so a YAML without it retrieves identically.
+
+- **Replaces `search()` and `hybrid_search()`.** They differed only in their arguments.
+  Level 1 is one query and no keywords; fusing a single list is the identity, so it takes the
+  same path.
+- **Query-side only.** No `retrieval:` key joins `CorpusConfig.fingerprint()`; edits apply on
+  the next request with no re-ingest.
+- **The embedding model is an argument,** not a `retrieval:` key: it shapes the index, so it
+  stays in `corpus.embedding`, inside the fingerprint.
+
+**Why:** an interface with one implementation is a config file with extra steps.
+
+**Alternatives rejected:**
+- A strategy interface and retriever registry: no second retriever exists (#22 names the
+  trigger that would justify one).
+- Floors under `retrieval:`: `retrieval_drop_floor` and `escalate_below` are a validated pair
+  of guardrail thresholds, so they stay under `agent:`.
+
+**Consequence:** a second kind of evidence source (rows, web results) does not fit
+`retrieve()`. That is deliberate: it gets its own engine (D13) until two engines share a
+source. `keyword.language` is deferred: the text-search configuration is baked into
+`chunks.text_search` as `'english'` for every tenant.
 
 ---
 

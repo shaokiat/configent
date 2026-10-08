@@ -5,7 +5,7 @@ order: 12
 group: The Support Graph
 ---
 
-Level 2 runs when Level 1 falls short and the grader did not call the message conversation. It rewrites the question, searches again two ways, fuses the results, and grades them. The nodes are `rewrite` and `hybrid_retrieve` in `agent/graph.py`, followed by `regrade`; the search is `hybrid_search()` in `retrieval/search.py`.
+Level 2 runs when Level 1 falls short and the grader did not call the message conversation. It rewrites the question, searches again two ways, fuses the results, and grades them. The nodes are `rewrite` and `hybrid_retrieve` in `agent/graph.py`, followed by `regrade`; the search is `retrieve()` in `retrieval/search.py`.
 
 Level 1 asks the question as the user typed it. Level 2 asks it the way the documentation would answer it.
 
@@ -18,11 +18,11 @@ rewrite                               structured output · prompts/<client_id>/r
   │   in:  recent conversation · the message · why Level 1 fell short
   │   out: queries (≤ corrective.query_rewrites) · keywords
   ▼
-hybrid_retrieve → hybrid_search()     retrieval/search.py
+hybrid_retrieve → retrieve()            retrieval/search.py
   ├─ embed_queries()                  [message, *queries] in one Voyage call
   ├─ _dense()  per vector             pgvector cosine · drop floor · top k
-  ├─ _keyword(keywords)               websearch_to_tsquery over chunks.text_search
-  └─ rrf_merge()                      each list adds 1 / (60 + rank) per chunk → top 5
+  ├─ _keyword(keywords)               websearch_to_tsquery over chunks.text_search (if retrieval.keyword.enabled)
+  └─ rrf_merge()                      each list adds 1 / (rrf_k + rank) per chunk → top_k
   ▼
 regrade → decide_level2               see Grading and The Guardrail
 ```
@@ -76,7 +76,7 @@ The textbook corrective tier reaches for the web. For this corpus it would add l
 ### Fuse ranks, not scores
 
 - **Cosine similarity and `ts_rank_cd` are on unrelated scales.** Adding them would be meaningless. Positions are comparable.
-- **Reciprocal rank fusion.** Each list adds `1 / (60 + rank)` for every chunk it contains. 60 is the constant from the original RRF paper, and it damps the gap between rank 1 and rank 2 so no single list dominates.
+- **Reciprocal rank fusion.** Each list adds `1 / (rrf_k + rank)` for every chunk it contains. `rrf_k` defaults to 60, which is the constant from the original RRF paper, and it damps the gap between rank 1 and rank 2 so no single list dominates.
 - **Agreement rises.** A chunk that several query variants and the keyword search all found outranks one found once.
 - **Keyword hits carry `similarity: 0.0`.** They have no cosine similarity, and the code says so rather than inventing one. That is also why [Level 2 has no cosine floor](/configent/docs/escalation-guardrail#level-2-drops-the-cosine-floor).
 
@@ -102,8 +102,11 @@ The textbook corrective tier reaches for the web. For this corpus it would add l
 | `agent.corrective.enabled` | `true` | Off sends a turn that fails Level 1 straight to Level 3 |
 | `agent.corrective.query_rewrites` | `3` | Query variants the rewrite returns, each embedded and searched. Bounded 1 to 5 |
 | `agent.retrieval_drop_floor` | `0.3` | Applied to the dense half. The keyword half has no floor |
+| `retrieval.top_k` | `5` | Chunks kept per list and after fusion |
+| `retrieval.rrf_k` | `60` | The fusion constant |
+| `retrieval.keyword.enabled` | `true` | Off skips the keyword search, even when the rewrite returned keywords |
 
-`k` is fixed at 5, and the RRF constant at 60. The rewrite prompt is `rewrite.md`, beside the answer prompt.
+ The rewrite prompt is `rewrite.md`, beside the answer prompt.
 
 ---
 

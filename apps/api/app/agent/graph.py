@@ -44,7 +44,8 @@ from app.agent.common import (
 from app.config.schema import ClientConfig
 from app.database import checkpoint_session
 from app.models import Message, Run, Trace
-from app.retrieval.search import Hit, hybrid_search, search
+from app.retrieval import search as retrieval
+from app.retrieval.search import Hit
 
 logger = logging.getLogger("configent.graph")
 
@@ -378,12 +379,12 @@ def _hit_dict(hit: Hit) -> dict:
 async def retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
     """Level 1: pgvector top-k. No model call — the deterministic half of the guardrail."""
     d, t = runtime.context, time.monotonic()
-    hits = await search(
+    hits = await retrieval.retrieve(
         d.db,
-        client_id=d.client_id,
-        query=state["question"],
+        d.client_id,
+        [state["question"]],
+        cfg=d.cfg.retrieval,
         model=d.cfg.corpus.embedding.model,
-        k=5,
         floor=d.cfg.agent.retrieval_drop_floor,
     )
     top = hits[0].similarity if hits else 0.0
@@ -492,13 +493,13 @@ async def rewrite(state: TurnState, runtime: Runtime[Deps]) -> dict:
 
 async def hybrid_retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
-    hits = await hybrid_search(
+    hits = await retrieval.retrieve(
         d.db,
-        client_id=d.client_id,
-        queries=[state["question"], *state.get("queries", [])],
-        keywords=state.get("keywords", ""),
+        d.client_id,
+        [state["question"], *state.get("queries", [])],
+        state.get("keywords", ""),
+        cfg=d.cfg.retrieval,
         model=d.cfg.corpus.embedding.model,
-        k=5,
         floor=d.cfg.agent.retrieval_drop_floor,
     )
     await _step(
