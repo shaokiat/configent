@@ -440,7 +440,7 @@ one only together with a client that does (`f1-analyst`, #19).
   remedies in order are views in the client's database, more notes, then a code hook;
   repeated hooks mean a new engine is due.
 - A config naming an `agent.engine` with no `ENGINES` entry fails at load. `text_to_sql`
-  is registered with its ingestion contract (#18); its graph is a placeholder until #19.
+  is registered with its ingestion contract (#18) and its graph (#19): generate → guard → execute, with one repair.
 
 ---
 
