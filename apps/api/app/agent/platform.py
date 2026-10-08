@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import anthropic
 from langgraph.config import get_stream_writer
@@ -45,6 +45,24 @@ class GraphCrash(SystemExit):
 class RunUnavailable(Exception):
     """Unknown run, another client's run, or a run with no ticket offer to confirm. A 404
     that reveals nothing about which."""
+
+class TurnState(TypedDict, total=False):
+    """What every engine's state has, and all the shared nodes and the platform read. Plain
+    JSON: it is what the checkpointer saves. An engine's own state extends it."""
+
+    question: str
+    history: list[dict]
+    conversation_id: str
+    run_id: str
+    level: int  # optional: the tier the evidence came from, for an engine that has tiers
+    why: str  # what sent the turn to converse or escalate
+    reply: str  # optional: what converse says
+    draft: dict
+    ticket: dict
+    outcome: str  # "answer" | "converse" | "ticket"
+    answer: str
+    segments: list[dict]
+
 
 @dataclass(frozen=True)
 class Engine:
@@ -412,7 +430,7 @@ async def confirm_ticket(
     # Imported here: escalation imports this module for the helpers its nodes share.
     from app.agent.escalation import _escalation_reply
 
-    reply = _escalation_reply(result, ok)
+    reply = _escalation_reply(result, ok, cfg.escalation)
     # Its own assistant turn, so reloading the conversation shows the confirmation.
     db.add(
         Message(

@@ -173,11 +173,9 @@ class Harness:
         return list(self.scenario.get("l2_hits") or [])
 
     async def _structured(self, _aclient, *, schema, user_content, **_k):
-        name = {
-            id(support_graph._GRADE_SCHEMA): "grade",
-            id(support_graph._REWRITE_SCHEMA): "rewrite",
-            id(escalation._DRAFT_SCHEMA): "draft",
-        }[id(schema)]
+        # By shape: the draft schema is built per client, so object identity can't name it.
+        props = schema["properties"]
+        name = "grade" if "confidence" in props else "rewrite" if "queries" in props else "draft"
         self.calls.append((name, user_content))
         if name == "grade":
             first = sum(1 for n, _ in self.calls if n == "grade") == 1

@@ -26,11 +26,8 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="Mock Ticket Service", version="1.0.0")
 
-CATEGORIES = Literal[
-    "account_config", "quota_or_billing", "incident", "access_request", "docs_gap", "other"
-]
-
-# Target first-response hours by category. Incidents jump the queue.
+# Target first-response hours by category; any other category gets the default. Incidents
+# jump the queue.
 _ETA_HOURS: dict[str, int] = {
     "incident": 2,
     "quota_or_billing": 8,
@@ -49,8 +46,9 @@ _QUEUE: dict[str, str] = {
 
 class TicketRequest(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
-    category: CATEGORIES
-    product_area: Literal["cloud_run", "gke", "iam", "other"]
+    category: str = Field(min_length=1)
+    product_area: str = "other"
+    queue: str | None = None  # the client's own queue; unset, the area picks one
     priority: Literal["low", "normal", "high"] = "normal"
     requester_email: str | None = None
     body: str | None = None
@@ -110,8 +108,8 @@ async def create_ticket(
         "category": req.category,
         "product_area": req.product_area,
         "priority": req.priority,
-        "queue": _QUEUE[req.product_area],
-        "eta_hours": _ETA_HOURS[req.category],
+        "queue": req.queue or _QUEUE.get(req.product_area, "platform-triage"),
+        "eta_hours": _ETA_HOURS.get(req.category, 48),
         "url": f"https://platform.internal.example/tickets/{ticket_id}",
         "created_at": datetime.now(UTC).isoformat(),
     }

@@ -13,8 +13,6 @@ Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` 
 `escalate` take structured output and `answer` takes citations.
 """
 import time
-from typing import TypedDict
-
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
@@ -28,26 +26,15 @@ from app.retrieval import search as retrieval
 from app.retrieval.search import Hit
 
 
-class TurnState(TypedDict, total=False):
-    """What the checkpointer saves. Plain JSON: hits are dicts, not `Hit`."""
+class TurnState(platform.TurnState, total=False):
+    """The shared state plus what only this engine keeps. Hits are dicts, not `Hit`."""
 
-    question: str
-    history: list[dict]
-    conversation_id: str
-    run_id: str
-    level: int  # the tier the current evidence came from
     hits: list[dict]
     top_similarity: float
     grade: dict
     queries: list[str]
     keywords: str
     route: str  # chosen by decide_level1 / decide_level2; the edges only read it
-    why: str
-    draft: dict
-    ticket: dict
-    outcome: str  # "answer" | "converse" | "ticket"
-    answer: str
-    segments: list[dict]
     citations: list[dict]
 
 
@@ -213,7 +200,7 @@ async def grade(state: TurnState, runtime: Runtime[Deps]) -> dict:
         confidence=round(float(score.get("confidence", 0.0)), 4),
         kind=score.get("kind"),
     )
-    return {"grade": score, "route": route, "why": why}
+    return {"grade": score, "route": route, "why": why, "reply": score.get("reply")}
 
 
 
