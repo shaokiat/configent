@@ -158,6 +158,13 @@ def test_the_confirmation_names_the_filed_ticket(cfg):
     assert "PLATFORM-1042" in reply and "platform-serverless" in reply and "8 hours" in reply
 
 
+def test_a_queue_named_for_its_team_is_not_doubled(cfg):
+    reply = escalation._escalation_reply(
+        {"ticket_id": "PLATFORM-7", "queue": "data-team", "url": "u"}, ok=True, esc=cfg.escalation
+    )
+    assert "with the data team" in reply and "team team" not in reply
+
+
 def test_a_failed_filing_does_not_claim_a_ticket_exists(cfg):
     reply = escalation._escalation_reply({"error": "x"}, ok=False, esc=cfg.escalation)
     assert "nothing was filed" in reply.lower()

@@ -70,9 +70,10 @@ def _escalation_reply(ticket: dict, ok: bool, esc: EscalationConfig) -> str:
             f"shortly or raise it with the {esc.team} directly."
         )
     eta = ticket.get("eta_hours")
+    # A queue may already be named for its team ("data-team"); don't say "team" twice.
+    queue = (ticket.get("queue") or esc.queue or "support").removesuffix("-team")
     return (
-        f"Done — I've opened **{ticket.get('ticket_id')}** with the "
-        f"{ticket.get('queue') or esc.queue or 'support'} team"
+        f"Done — I've opened **{ticket.get('ticket_id')}** with the {queue} team"
         + (f", who aim to respond within {eta} hours" if eta else "")
         + f". You can follow it at {ticket.get('url')}."
     )
