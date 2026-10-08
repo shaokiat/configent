@@ -79,9 +79,13 @@ every cost number in this repo.
 Unknown tool names, bad enums and missing fields fail the process at load, naming the
 field and the file. **Why:** a config error should be visible before a user sees it.
 
-### P11 — Markdown-only corpora · SUPERSEDED-IN-PART (deferred 2026-06-12)
-PDF ingestion was deferred until the agent loop was solid. `parse_pdf` exists but is
-untested against real corpus files. When picked up: convert 2–3 Acme docs to PDF and
+### P11 — Markdown-first corpora · SUPERSEDED-IN-PART (deferred 2026-06-12, widened 2026-10-08)
+Markdown is the tested format. `.txt` and `.docx` (SharePoint and Drive exports are Word)
+now parse too, and YAML front matter (`title:`, `url:`) is honoured in Markdown. PDF is
+text-layer only: the preflight names a scanned or image-only PDF (under ~50 characters per
+page) as failed, "needs OCR, not supported", rather than indexing it empty. Every other file
+type is listed as unsupported by name, never silently dropped. `parse_pdf` is still untested
+against real corpus files. When picked up: convert 2–3 Acme docs to PDF and
 ingest the PDF *instead of* the `.md` (move the markdown originals to a `sources/`
 subfolder the ingester skips) — indexing both formats double-indexes the same text.
 
