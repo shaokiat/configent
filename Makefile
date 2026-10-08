@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: up up-web up-api dev dev-db dev-api dev-web down build logs ps docs docs-build
+.PHONY: up up-web up-api dev dev-db dev-api dev-web ingest down build logs ps docs docs-build
 
 # ── Production-like (Docker) ───────────────────────────────────────────────
 up: ## Rebuild and restart web + api (db untouched)
@@ -35,6 +35,9 @@ dev-api: ## Run API locally with auto-reload
 
 dev-web: ## Run web locally with hot reload
 	cd apps/web && npm run dev
+
+ingest: ## Ingest one client's corpus: make ingest CLIENT=<id> [FORCE=1] [CHECK=1]
+	cd apps/api && uv run python -m app.cli --client $(CLIENT) $(if $(FORCE),--force) $(if $(CHECK),--check)
 
 # ── Shared ─────────────────────────────────────────────────────────────────
 down: ## Stop and remove all containers (data volume preserved)

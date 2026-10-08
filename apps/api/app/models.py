@@ -47,6 +47,8 @@ class Document(Base):
     # config's → the document was chunked or embedded under other settings and is rebuilt.
     # Null for rows written before the column existed, which never matches, so they rebuild.
     ingest_fingerprint: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # The document's own link, shown as the citation target. Null: cite the corpus:// URI.
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # Full parsed document text, populated at ingest time (A2). Nullable so
     # documents ingested before this column existed still load. Its reader, the loop

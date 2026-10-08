@@ -20,6 +20,9 @@ class BrandingConfig(BaseModel):
 class ChunkingConfig(BaseModel):
     chunk_size: int = Field(default=800, gt=0)
     overlap: int = Field(default=100, ge=0)
+    # On: each chunk starts "<document title> — <heading path>", before embedding and before
+    # the tsvector sees it. Off keeps today's index byte for byte.
+    prefix_title: bool = False
 
 
 class EmbeddingConfig(BaseModel):
@@ -44,6 +47,9 @@ class CorpusConfig(BaseModel):
     source: str
     embedding: EmbeddingConfig = EmbeddingConfig()
     chunking: ChunkingConfig = ChunkingConfig()
+    # Fallback link for a file with no `url:` in its front matter. `{stem}` and `{path}` (the
+    # relative path without its extension) are filled in. Empty: such files cite as plain text.
+    source_url_template: str = ""
 
     def fingerprint(self) -> str:
         """Hash of every setting that shapes the index. Stored on each document at ingest;
@@ -54,6 +60,13 @@ class CorpusConfig(BaseModel):
             "chunk_size": self.chunking.chunk_size,
             "overlap": self.chunking.overlap,
         }
+        # Added after indexes existed, so each joins the spec only when set: a config that
+        # leaves them at their defaults keeps its fingerprint and nothing rebuilds on deploy.
+        # The template changes no vector, but ingest stores the resulting URL per document.
+        if self.chunking.prefix_title:
+            spec["prefix_title"] = True
+        if self.source_url_template:
+            spec["source_url_template"] = self.source_url_template
         return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
 
 

@@ -273,7 +273,12 @@ function CitationPopover({ part, color }: { part: CitePart; color: string }) {
           </span>
           {/* Source */}
           <span className="flex items-center gap-1.5 px-4 pb-3 text-[11px] text-gray-400 dark:text-white/30">
-            <span className="truncate">{part.source}</span>
+            {/* Only http(s): a corpus:// identity is not a link. */}
+            {/^https?:\/\//.test(part.source) ? (
+              <a href={part.source} target="_blank" rel="noopener" className="truncate underline hover:text-gray-600 dark:hover:text-white/60">{part.source}</a>
+            ) : (
+              <span className="truncate">{part.source}</span>
+            )}
           </span>
         </span>
       )}

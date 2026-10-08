@@ -141,6 +141,7 @@ def _hit_dict(hit: Hit) -> dict:
         "text": hit.text,
         "document_title": hit.document_title,
         "source_uri": hit.source_uri,
+        "url": hit.url,
         "similarity": round(hit.similarity, 4),
     }
 
@@ -277,7 +278,9 @@ def answer_request_kwargs(
     search_results = [
         {
             "type": "search_result",
-            "source": h["source_uri"],
+            # The API echoes `source` back on the citation, so a URL here is a link in the UI.
+            # .get: hits checkpointed before the url field existed have none.
+            "source": h.get("url") or h["source_uri"],
             "title": h["document_title"],
             "content": [{"type": "text", "text": h["text"]}],
             # The API requires citations on all search results or none.
