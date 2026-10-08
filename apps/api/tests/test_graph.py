@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from app.agent import graph
+from app.agent import escalation, platform
+from app.agent.engines import support_graph
 from app.config.registry import get_registry
 from tests.graph_fakes import Harness, grade, hit, named, outcome_of, stages_of, text_of
 
@@ -27,32 +28,32 @@ def h(monkeypatch, cfg):
 
 
 def test_answers_only_when_both_signals_clear(cfg):
-    route, why = graph.decide_level1(top_similarity=0.8, score=grade(0.9), n_hits=3, cfg=cfg)
+    route, why = support_graph.decide_level1(top_similarity=0.8, score=grade(0.9), n_hits=3, cfg=cfg)
     assert route == "answer"
     assert "both above threshold" in why
 
 
 def test_weak_retrieval_is_not_rescued_by_a_confident_model(cfg):
-    route, why = graph.decide_level1(top_similarity=0.31, score=grade(0.99), n_hits=3, cfg=cfg)
+    route, why = support_graph.decide_level1(top_similarity=0.31, score=grade(0.99), n_hits=3, cfg=cfg)
     assert route == "rewrite"
     assert "escalate_below" in why
 
 
 def test_weak_groundedness_is_not_rescued_by_a_strong_match(cfg):
     """The 'retrieved the right document, which doesn't contain the answer' case."""
-    route, why = graph.decide_level1(top_similarity=0.88, score=grade(0.2), n_hits=3, cfg=cfg)
+    route, why = support_graph.decide_level1(top_similarity=0.88, score=grade(0.2), n_hits=3, cfg=cfg)
     assert route == "rewrite"
     assert "confidence_threshold" in why
 
 
 def test_no_passages_goes_to_level_two(cfg):
-    route, why = graph.decide_level1(top_similarity=0.0, score=grade(0.0), n_hits=0, cfg=cfg)
+    route, why = support_graph.decide_level1(top_similarity=0.0, score=grade(0.0), n_hits=0, cfg=cfg)
     assert route == "rewrite"
     assert "no passages" in why
 
 
 def test_a_conversation_leaves_at_level_one(cfg):
-    route, _ = graph.decide_level1(
+    route, _ = support_graph.decide_level1(
         top_similarity=0.0, score=grade(0.0, kind="conversation"), n_hits=0, cfg=cfg
     )
     assert route == "converse"
@@ -60,7 +61,7 @@ def test_a_conversation_leaves_at_level_one(cfg):
 
 def test_strong_evidence_answers_even_if_the_grader_called_it_conversation(cfg):
     """Phrasing is not intent: a casual question the docs answer is still answered."""
-    route, _ = graph.decide_level1(
+    route, _ = support_graph.decide_level1(
         top_similarity=0.8, score=grade(0.9, kind="conversation"), n_hits=3, cfg=cfg
     )
     assert route == "answer"
@@ -68,7 +69,7 @@ def test_strong_evidence_answers_even_if_the_grader_called_it_conversation(cfg):
 
 def test_asking_for_a_human_goes_straight_to_a_proposal(cfg):
     """Even over strong evidence: they asked for a person, and it's only an offer."""
-    route, _ = graph.decide_level1(
+    route, _ = support_graph.decide_level1(
         top_similarity=0.8, score=grade(0.9, kind="handoff"), n_hits=3, cfg=cfg
     )
     assert route == "escalate"
@@ -77,14 +78,14 @@ def test_asking_for_a_human_goes_straight_to_a_proposal(cfg):
 def test_a_missing_kind_is_a_question(cfg):
     """`converse` has to be asked for; a malformed grade must not become small talk."""
     score = {"confidence": 0.1, "reasoning": "?"}
-    route, _ = graph.decide_level1(top_similarity=0.0, score=score, n_hits=0, cfg=cfg)
+    route, _ = support_graph.decide_level1(top_similarity=0.0, score=score, n_hits=0, cfg=cfg)
     assert route == "rewrite"
 
 
 def test_corrective_off_goes_straight_to_a_human(cfg):
     off = cfg.model_copy(deep=True)
     off.agent.corrective.enabled = False
-    route, _ = graph.decide_level1(top_similarity=0.2, score=grade(0.1), n_hits=1, cfg=off)
+    route, _ = support_graph.decide_level1(top_similarity=0.2, score=grade(0.1), n_hits=1, cfg=off)
     assert route == "escalate"
 
 
@@ -92,18 +93,18 @@ def test_corrective_off_goes_straight_to_a_human(cfg):
 
 
 def test_level_two_answers_on_groundedness_without_a_cosine_floor(cfg):
-    route, _ = graph.decide_level2(score=grade(0.85), n_hits=2, cfg=cfg)
+    route, _ = support_graph.decide_level2(score=grade(0.85), n_hits=2, cfg=cfg)
     assert route == "answer"
 
 
 def test_level_two_escalates_on_weak_groundedness(cfg):
-    route, why = graph.decide_level2(score=grade(0.3), n_hits=2, cfg=cfg)
+    route, why = support_graph.decide_level2(score=grade(0.3), n_hits=2, cfg=cfg)
     assert route == "escalate"
     assert "confidence_threshold" in why
 
 
 def test_level_two_escalates_on_no_passages_whatever_the_model_says(cfg):
-    route, _ = graph.decide_level2(score=grade(0.99), n_hits=0, cfg=cfg)
+    route, _ = support_graph.decide_level2(score=grade(0.99), n_hits=0, cfg=cfg)
     assert route == "escalate"
 
 
@@ -111,16 +112,16 @@ def test_level_two_escalates_on_no_passages_whatever_the_model_says(cfg):
 
 
 def test_answer_request_carries_no_tool_definitions(cfg):
-    kwargs = graph.answer_request_kwargs(
-        cfg, hits=[graph._hit_dict(hit(0.8))], question="What is the default CPU?", history=[]
+    kwargs = support_graph.answer_request_kwargs(
+        cfg, hits=[support_graph._hit_dict(hit(0.8))], question="What is the default CPU?", history=[]
     )
     assert "tools" not in kwargs
-    assert graph._TICKET_TOOL not in str(kwargs)
+    assert escalation._TICKET_TOOL not in str(kwargs)
 
 
 def test_answer_request_puts_search_results_in_the_user_message(cfg):
-    hits = [graph._hit_dict(hit(0.8)), graph._hit_dict(hit(0.7, chunk_id=2))]
-    kwargs = graph.answer_request_kwargs(cfg, hits=hits, question="What is the CPU?", history=[])
+    hits = [support_graph._hit_dict(hit(0.8)), support_graph._hit_dict(hit(0.7, chunk_id=2))]
+    kwargs = support_graph.answer_request_kwargs(cfg, hits=hits, question="What is the CPU?", history=[])
     content = kwargs["messages"][-1]["content"]
     blocks = [b for b in content if b["type"] == "search_result"]
     assert len(blocks) == 2
@@ -132,13 +133,13 @@ def test_answer_request_puts_search_results_in_the_user_message(cfg):
 
 
 def test_a_draft_missing_fields_is_completed_rather_than_dropped():
-    out = graph._normalise_draft({}, question="Can you raise my Cloud Run quota in europe-west1?")
+    out = escalation._normalise_draft({}, question="Can you raise my Cloud Run quota in europe-west1?")
     assert (out["category"], out["product_area"], out["priority"]) == ("other", "other", "normal")
     assert "quota" in out["subject"]
 
 
 def test_the_proposal_offers_and_does_not_claim():
-    reply = graph._proposal_reply(
+    reply = escalation._proposal_reply(
         {"subject": "Quota increase in europe-west1", "category": "quota_or_billing"}
     )
     assert "quota or billing" in reply and "europe-west1" in reply
@@ -147,7 +148,7 @@ def test_the_proposal_offers_and_does_not_claim():
 
 
 def test_the_confirmation_names_the_filed_ticket():
-    reply = graph._escalation_reply(
+    reply = escalation._escalation_reply(
         {"ticket_id": "PLATFORM-1042", "queue": "platform-serverless", "eta_hours": 8,
          "url": "https://platform.internal.example/tickets/PLATFORM-1042"},
         ok=True,
@@ -156,7 +157,7 @@ def test_the_confirmation_names_the_filed_ticket():
 
 
 def test_a_failed_filing_does_not_claim_a_ticket_exists():
-    assert "nothing was filed" in graph._escalation_reply({"error": "x"}, ok=False).lower()
+    assert "nothing was filed" in escalation._escalation_reply({"error": "x"}, ok=False).lower()
 
 
 # ── the audit trail ─────────────────────────────────────────────────────────────────
@@ -164,15 +165,15 @@ def test_a_failed_filing_does_not_claim_a_ticket_exists():
 
 def test_crash_injector_only_fires_on_the_named_stage(monkeypatch):
     monkeypatch.setenv("CRASH_AFTER", "grade")
-    graph._maybe_crash("retrieve")
-    with pytest.raises(graph.GraphCrash):
-        graph._maybe_crash("grade")
+    platform._maybe_crash("retrieve")
+    with pytest.raises(platform.GraphCrash):
+        platform._maybe_crash("grade")
 
 
 @pytest.mark.asyncio
 async def test_a_crash_leaves_the_completed_steps_durable(h, monkeypatch):
     monkeypatch.setenv("CRASH_AFTER", "grade")
-    with pytest.raises(graph.GraphCrash):
+    with pytest.raises(platform.GraphCrash):
         await h.turn("What's the default CPU?", hits=[hit(0.8)], grade=grade(0.9))
     assert [s["stage"] for s in h.runs["run-1"].steps] == ["retrieve", "grade"]
 
@@ -181,7 +182,7 @@ async def test_a_crash_leaves_the_completed_steps_durable(h, monkeypatch):
 async def test_a_repeated_stage_replaces_its_step_and_keeps_its_seq():
     """A ticket retried after a failed filing must not duplicate its step, and must keep
     its seq — the idempotency key is built from it (D4)."""
-    recorder = graph.RunRecorder("run-1", "conv-1", "gcp-platform-support")
+    recorder = platform.RunRecorder("run-1", "conv-1", "gcp-platform-support")
 
     async def _no_commit(**_k):
         pass
@@ -335,6 +336,6 @@ async def test_stream_emits_error_instead_of_done_when_a_stage_throws(h, monkeyp
 
 
 def test_the_graph_has_no_checkpointer_until_one_is_installed(monkeypatch):
-    monkeypatch.setattr(graph, "_graph", None)
+    monkeypatch.setattr(platform, "_graph", None)
     with pytest.raises(RuntimeError, match="checkpointer"):
-        graph._compiled()
+        platform._compiled()

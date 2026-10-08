@@ -7,7 +7,7 @@ a retry after the ticket service was down.
 """
 import pytest
 
-from app.agent import graph
+from app.agent import platform
 from app.config.registry import get_registry
 from tests.graph_fakes import Harness, grade, hit, outcome_of
 
@@ -89,7 +89,7 @@ async def test_a_retry_after_a_failed_filing_files_the_same_draft(h):
 async def test_a_run_from_another_client_is_not_confirmable(h):
     """Tenancy is enforced here, not by the database (P8)."""
     await _propose(h)
-    with pytest.raises(graph.RunUnavailable):
+    with pytest.raises(platform.RunUnavailable):
         await h.confirm(client_id="another-client")
     assert h.ticket_calls == []
 
@@ -99,14 +99,14 @@ async def test_confirming_a_turn_that_never_offered_a_ticket_is_refused(h):
     """An answered turn has no pause to resume. The endpoint does not invent a draft —
     which is also what stops a client authoring a ticket by posting a run id."""
     await h.turn("What's the default CPU?", hits=[hit(0.8)], grade=grade(0.9))
-    with pytest.raises(graph.RunUnavailable):
+    with pytest.raises(platform.RunUnavailable):
         await h.confirm()
     assert h.ticket_calls == []
 
 
 @pytest.mark.asyncio
 async def test_an_unknown_run_is_refused(h):
-    with pytest.raises(graph.RunUnavailable):
+    with pytest.raises(platform.RunUnavailable):
         await h.confirm(run_id="nope")
     assert h.ticket_calls == []
 
@@ -123,7 +123,7 @@ async def test_the_endpoint_turns_an_unavailable_run_into_a_404(monkeypatch):
     from app.routers import clients
 
     async def _refuse(**_k):
-        raise graph.RunUnavailable("Run 'run-1' not found")
+        raise platform.RunUnavailable("Run 'run-1' not found")
 
     monkeypatch.setattr(clients, "confirm_ticket", _refuse)
     with pytest.raises(HTTPException) as exc:
