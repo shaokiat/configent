@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -70,7 +70,7 @@ class Engine:
     contribution to the `done` payload."""
 
     name: str
-    graph: StateGraph
+    build: Callable[[], StateGraph]
     first_stage: str
     summary: Callable[[dict], dict]
 
@@ -107,15 +107,14 @@ class RunRecorder:
         self.steps: list[dict] = []
 
     @classmethod
-    async def start(
-        cls, conversation_id: str, client_id: str, first_stage: str
-    ) -> "RunRecorder":
+    async def start(cls, conversation_id: str, client_id: str, engine: Engine) -> "RunRecorder":
         async with checkpoint_session() as db:
             run = Run(
                 conversation_id=conversation_id,
                 client_id=client_id,
+                engine=engine.name,  # confirm_ticket resumes the graph the run was proposed on
                 status="running",
-                current_stage=first_stage,
+                current_stage=engine.first_stage,
                 steps=[],
                 state={},
             )
@@ -252,27 +251,27 @@ def _transcript(history: list[dict], turns: int = 6) -> str:
 
 
 
-_graph = None
+_graphs: dict = {}  # engine name -> graph compiled against the checkpointer
 
 
-def use_checkpointer(saver, engine: Engine) -> None:
-    """Compile the engine's graph against a checkpointer: Postgres in the app, in-memory in
-    tests. One engine for now."""
-    global _graph
-    _graph = engine.graph.compile(checkpointer=saver)
+def use_checkpointer(saver, engines: Iterable[Engine]) -> None:
+    """Compile every engine's graph against a checkpointer: Postgres in the app, in-memory
+    in tests. Thread ids are run ids, so the graphs never share a checkpoint."""
+    _graphs.clear()
+    _graphs.update({e.name: e.build().compile(checkpointer=saver) for e in engines})
 
 
-def _compiled():
-    if _graph is None:
+def _compiled(name: str):
+    if not _graphs:
         raise RuntimeError(
-            "The support graph has no checkpointer: the app lifespan did not run "
+            "No engine has a checkpointer: the app lifespan did not run "
             "postgres_checkpointer(), and the ticket pause cannot work without one."
         )
-    return _graph
+    return _graphs[name]
 
 
 @asynccontextmanager
-async def postgres_checkpointer(database_url: str, engine: Engine):
+async def postgres_checkpointer(database_url: str, engines: Iterable[Engine]):
     """Install the Postgres saver for the app's lifetime. psycopg 3, beside asyncpg, because
     langgraph-checkpoint-postgres is written against it; `setup()` is idempotent."""
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -282,7 +281,7 @@ async def postgres_checkpointer(database_url: str, engine: Engine):
     # concurrent turns contend on it, or if a dropped connection needs to heal itself.
     async with AsyncPostgresSaver.from_conn_string(conninfo) as saver:
         await saver.setup()
-        use_checkpointer(saver, engine)
+        use_checkpointer(saver, engines)
         yield
 
 
@@ -312,7 +311,7 @@ async def stream_turn(
     recorder = None
     try:
         conversation_id, history = await prepare_conversation(db, client_id, conversation_id)
-        recorder = await RunRecorder.start(conversation_id, client_id, engine.first_stage)
+        recorder = await RunRecorder.start(conversation_id, client_id, engine)
         run_id = recorder.run_id
         yield ("run", {"run_id": run_id, "conversation_id": conversation_id})
 
@@ -323,14 +322,14 @@ async def stream_turn(
             "conversation_id": conversation_id,
             "run_id": run_id,
         }
-        async for event, data in _compiled().astream(
+        async for event, data in _compiled(engine.name).astream(
             initial, _thread(run_id), context=deps, stream_mode="custom", durability="sync"
         ):
             yield event, data
             if event == "step":
                 _maybe_crash(data["stage"])
 
-        values = (await _compiled().aget_state(_thread(run_id))).values
+        values = (await _compiled(engine.name).aget_state(_thread(run_id))).values
         db.add(Message(conversation_id=conversation_id, role="user", content=user_message))
         db.add(
             Message(
@@ -395,11 +394,11 @@ async def run_turn(
             run_id = data["run_id"]
         elif event == "error":
             raise RuntimeError(data["message"])
-    return (await _compiled().aget_state(_thread(run_id))).values
+    return (await _compiled(engine.name).aget_state(_thread(run_id))).values
 
 
 async def confirm_ticket(
-    *, engine: Engine, run_id: str, client_id: str, cfg: ClientConfig, db: AsyncSession
+    *, run_id: str, client_id: str, cfg: ClientConfig, db: AsyncSession
 ) -> dict:
     """File the ticket this run proposed, once the user has said yes (D9).
 
@@ -410,7 +409,11 @@ async def confirm_ticket(
     run = await db.get(Run, run_id)
     if run is None or run.client_id != client_id:
         raise RunUnavailable(f"Run {run_id!r} not found")
-    graph, thread = _compiled(), _thread(run_id)
+    # The run's engine, not the client's current one: a config edit between the offer and
+    # the click must not resume a paused thread on a graph that never created it.
+    if run.engine not in _graphs:
+        raise RunUnavailable(f"Run {run_id!r} not found")
+    graph, thread = _compiled(run.engine), _thread(run_id)
     snapshot = await graph.aget_state(thread)
     filed = snapshot.values.get("ticket") or {}
     if filed.get("ticket_id"):

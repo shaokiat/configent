@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.engines import support_graph
+from app.agent.engines import ENGINES
 from app.agent.limits import (
     BudgetExceeded,
     RateLimitExceeded,
@@ -138,7 +138,7 @@ async def chat(
     try:
         state = await run_turn(
             req.message,
-            engine=support_graph.ENGINE,
+            engine=ENGINES[cfg.agent.engine],
             cfg=cfg,
             client_id=client_id,
             conversation_id=req.conversation_id,
@@ -174,7 +174,7 @@ async def chat_stream(client_id: str, req: ChatRequest):
         async with AsyncSessionLocal() as db:
             async for name, data in stream_turn(
                 req.message,
-                engine=support_graph.ENGINE,
+                engine=ENGINES[cfg.agent.engine],
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
@@ -204,7 +204,7 @@ async def file_proposed_ticket(
     cfg = _client(client_id)
     try:
         return await confirm_ticket(
-            engine=support_graph.ENGINE, run_id=run_id, client_id=client_id, cfg=cfg, db=db
+            engine=ENGINES[cfg.agent.engine], run_id=run_id, client_id=client_id, cfg=cfg, db=db
         )
     except RunUnavailable as exc:
         # Also the answer when the run belongs to another client: a 404 leaks nothing

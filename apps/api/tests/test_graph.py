@@ -339,9 +339,9 @@ async def test_stream_emits_error_instead_of_done_when_a_stage_throws(h, monkeyp
 
 
 def test_the_graph_has_no_checkpointer_until_one_is_installed(monkeypatch):
-    monkeypatch.setattr(platform, "_graph", None)
+    monkeypatch.setattr(platform, "_graphs", {})
     with pytest.raises(RuntimeError, match="checkpointer"):
-        platform._compiled()
+        platform._compiled("support_graph")
 
 
 def test_a_converse_with_no_reply_introduces_the_assistant(cfg):

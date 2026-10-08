@@ -362,4 +362,4 @@ def summary(values: dict) -> dict:
     return {"confidence": round(float(values["grade"].get("confidence", 0.0)), 4)}
 
 
-ENGINE = Engine("support_graph", build(), first_stage, summary)
+ENGINE = Engine("support_graph", build, first_stage, summary)
