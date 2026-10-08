@@ -1,6 +1,9 @@
+---
+title: "GKE: cluster autoscaler"
+url: https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler
+---
 # GKE: cluster autoscaler
 
-> Source: https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler
 > Portions of this page are modifications based on work created and shared by Google and
 > used according to terms described in the Creative Commons 4.0 Attribution License.
 

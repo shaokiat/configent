@@ -1,6 +1,9 @@
+---
+title: "GKE: Workload Identity Federation"
+url: https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
+---
 # GKE: Workload Identity Federation
 
-> Source: https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
 > Portions of this page are modifications based on work created and shared by Google and
 > used according to terms described in the Creative Commons 4.0 Attribution License.
 
