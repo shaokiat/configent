@@ -1,6 +1,8 @@
 import hashlib
 import json
+from functools import cached_property
 from pathlib import Path
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -79,11 +81,13 @@ class CorrectiveConfig(BaseModel):
     query_rewrites: int = Field(default=3, ge=1, le=5)
 
 
-class AgentConfig(BaseModel):
+class SupportGraphAgent(BaseModel):
     # An unknown key fails at load. `mode`, `tools` and `effort` belonged to the retired
     # loop engine; left in a YAML they would read like capabilities that do nothing (D11).
+    # It also rejects a key that belongs to another engine's member (D13).
     model_config = ConfigDict(extra="forbid")
 
+    engine: Literal["support_graph"]
     model: str
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
@@ -102,7 +106,7 @@ class AgentConfig(BaseModel):
     corrective: CorrectiveConfig = CorrectiveConfig()
 
     @model_validator(mode="after")
-    def escalation_floor_must_be_reachable(self) -> "AgentConfig":
+    def escalation_floor_must_be_reachable(self) -> "SupportGraphAgent":
         if self.escalate_below <= self.retrieval_drop_floor:
             raise ValueError(
                 f"agent.escalate_below ({self.escalate_below}) must be greater than "
@@ -111,6 +115,61 @@ class AgentConfig(BaseModel):
                 f"discarded every hit below the drop floor."
             )
         return self
+
+
+class TextToSqlAgent(BaseModel):
+    """Stub: only what the shared platform reads. The engine and its keys land with #18."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    engine: Literal["text_to_sql"]
+    model: str
+    system_prompt_file: str
+
+
+# The tag picks the member, so a key from another engine fails at load (D13).
+AgentConfig = Annotated[SupportGraphAgent | TextToSqlAgent, Field(discriminator="engine")]
+
+
+class EscalationConfig(BaseModel):
+    """What the shared escalate node needs to know about this tenant's tickets (D13)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue: str | None = None  # None: the ticket service routes by product area
+    categories: dict[str, str]  # id -> label shown in the offer
+    product_areas: list[str] = []  # empty: the draft has no product_area field
+    preamble: str = "That one needs a human."  # first sentence of the ticket offer
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def list_of_ids(cls, v):
+        return {c: c.replace("_", " ") for c in v} if isinstance(v, list) else v
+
+    @field_validator("categories")
+    @classmethod
+    def other_is_the_fallback(cls, v: dict[str, str]) -> dict[str, str]:
+        if "other" not in v:
+            raise ValueError("categories must include 'other': an incomplete draft falls back to it")
+        return v
+
+    @cached_property
+    def draft_schema(self) -> dict:
+        """The ticket draft's JSON schema: built once per config, so enums are the tenant's."""
+        props: dict = {
+            "subject": {"type": "string"},
+            "category": {"type": "string", "enum": list(self.categories)},
+            "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+            "body": {"type": "string"},
+        }
+        if self.product_areas:
+            props["product_area"] = {"type": "string", "enum": self.product_areas}
+        return {
+            "type": "object",
+            "properties": props,
+            "required": ["subject"],
+            "additionalProperties": False,
+        }
 
 
 class EvalsConfig(BaseModel):
@@ -144,9 +203,10 @@ class ClientConfig(BaseModel):
     client_id: str
     name: str
     branding: BrandingConfig
-    corpus: CorpusConfig
     agent: AgentConfig
-    retrieval: RetrievalConfig = RetrievalConfig()
+    escalation: EscalationConfig
+    corpus: CorpusConfig | None = None
+    retrieval: RetrievalConfig | None = None
     evals: EvalsConfig | None = None
     limits: LimitsConfig = LimitsConfig()
 
@@ -160,6 +220,20 @@ class ClientConfig(BaseModel):
                 f"client_id must be a lowercase slug (letters, digits, hyphens), got {v!r}"
             )
         return v
+
+    @model_validator(mode="after")
+    def blocks_match_the_engine(self) -> "ClientConfig":
+        if self.agent.engine == "support_graph":
+            if self.corpus is None:
+                raise ValueError("corpus: is required by the support_graph engine")
+            self.retrieval = self.retrieval or RetrievalConfig()
+        elif self.corpus is not None or self.retrieval is not None:
+            block = "corpus" if self.corpus is not None else "retrieval"
+            raise ValueError(
+                f"`{block}:` belongs to the support_graph engine; text_to_sql clients take "
+                f"`agent.database` and `agent.context` instead"
+            )
+        return self
 
     def system_prompt_path(self, root: Path) -> Path:
         return root / self.agent.system_prompt_file

@@ -28,7 +28,9 @@ corpus:
     chunk_size: 512
     overlap: 64
 agent:
-  # Runs the three-tier support graph: RAG → corrective RAG → human (D10).
+  # Runs the three-tier support graph: RAG → corrective RAG → human (D10). Required: the
+  # tag picks the engine, and each engine accepts only its own keys (D13).
+  engine: support_graph
   # The model must have a row in config/pricing/claude.yaml (D8).
   model: claude-haiku-4-5-20251001
   # answer.md; grade.md, rewrite.md and ticket_draft.md sit beside it.
@@ -44,6 +46,19 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
+# What the shared escalate node offers and files (D13).
+escalation:
+  categories:
+    account_config: project configuration
+    quota_or_billing: quota or billing
+    incident: suspected incident
+    access_request: access request
+    docs_gap: documentation gap
+    other: other
+  product_areas: [cloud_run, gke, iam, other]
+  preamble: >-
+    That one needs a human: it depends on your own project configuration, and my
+    knowledge base is public Google Cloud documentation only.
 # Optional; these are the defaults. Query-side, so editing needs no re-ingest (D12).
 # retrieval:
 #   top_k: 5

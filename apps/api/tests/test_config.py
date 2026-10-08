@@ -21,7 +21,9 @@ VALID_CONFIG = {
         "assistant_name": "TestBot",
     },
     "corpus": {"source": "corpora/test/", "chunking": {"chunk_size": 800, "overlap": 100}},
+    "escalation": {"categories": ["other"]},
     "agent": {
+        "engine": "support_graph",
         "model": "claude-sonnet-4-6",
         "system_prompt_file": "prompts/test.md",
         "max_tokens": 4096,
@@ -79,9 +81,9 @@ def test_gcp_platform_support_runs_corrective_retrieval():
 
 
 def _agent(**overrides):
-    from app.config.schema import AgentConfig
+    from app.config.schema import SupportGraphAgent
 
-    return AgentConfig(model="m", system_prompt_file="p.md", **overrides)
+    return SupportGraphAgent(engine="support_graph", model="m", system_prompt_file="p.md", **overrides)
 
 
 @pytest.mark.parametrize(
@@ -108,3 +110,55 @@ def test_escalation_floor_below_drop_floor_is_rejected():
     """A floor that can never fire is a silently disabled guardrail, so it fails loudly."""
     with pytest.raises(ValueError, match="can never fire"):
         _agent(retrieval_drop_floor=0.5, escalate_below=0.4)
+
+
+def _load(tmp_path, **changes):
+    raw = {**VALID_CONFIG, **changes}
+    write_yaml(tmp_path, "c.yaml", {k: v for k, v in raw.items() if v is not None})
+    return ConfigRegistry(config_dir=tmp_path)
+
+
+_SQL_AGENT = {"engine": "text_to_sql", "model": "claude-sonnet-4-6", "system_prompt_file": "p.md"}
+
+
+def test_an_agent_with_no_engine_fails_naming_the_field(tmp_path):
+    agent = {k: v for k, v in VALID_CONFIG["agent"].items() if k != "engine"}
+    with pytest.raises(ValueError, match="c.yaml.*engine"):
+        _load(tmp_path, agent=agent)
+
+
+def test_a_text_to_sql_client_cannot_carry_a_corpus(tmp_path):
+    with pytest.raises(ValueError, match="belongs to the support_graph engine"):
+        _load(tmp_path, agent=_SQL_AGENT)  # VALID_CONFIG still has corpus:
+    cfg = _load(tmp_path, agent=_SQL_AGENT, corpus=None).get("test-client")
+    assert cfg.corpus is None and cfg.retrieval is None
+
+
+def test_a_support_graph_key_under_a_text_to_sql_agent_fails(tmp_path):
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _load(tmp_path, agent={**_SQL_AGENT, "corrective": {"enabled": True}}, corpus=None)
+
+
+def test_a_support_graph_client_needs_a_corpus_and_gets_default_retrieval(tmp_path):
+    with pytest.raises(ValueError, match="corpus: is required"):
+        _load(tmp_path, corpus=None)
+    assert _load(tmp_path).get("test-client").retrieval.top_k == 5
+
+
+def test_escalation_must_exist_and_include_other(tmp_path):
+    with pytest.raises(ValueError, match="escalation"):
+        _load(tmp_path, escalation=None)
+    with pytest.raises(ValueError, match="'other'"):
+        _load(tmp_path, escalation={"categories": {"incident": "incident"}})
+
+
+def test_the_draft_schema_follows_the_tenants_escalation_block(tmp_path):
+    esc = _load(tmp_path).get("test-client").escalation
+    props = esc.draft_schema["properties"]
+    assert props["category"]["enum"] == ["other"] and "product_area" not in props
+    assert esc.draft_schema is esc.draft_schema  # built once per config
+    esc = _load(
+        tmp_path, escalation={"categories": ["other", "data_request"], "product_areas": ["a", "other"]}
+    ).get("test-client").escalation
+    assert esc.categories["data_request"] == "data request"
+    assert esc.draft_schema["properties"]["product_area"]["enum"] == ["a", "other"]
