@@ -13,6 +13,7 @@ Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` 
 `escalate` take structured output and `answer` takes citations.
 """
 import time
+
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
@@ -22,6 +23,7 @@ from app.agent.common import attr_or_key, collect_segments, excerpt
 from app.agent.escalation import _after_ticket, converse, escalate, ticket
 from app.agent.platform import Deps, Engine, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig
+from app.ingest import index_mismatch, ingest_client, preflight
 from app.retrieval import search as retrieval
 from app.retrieval.search import Hit
 
@@ -362,4 +364,6 @@ def summary(values: dict) -> dict:
     return {"confidence": round(float(values["grade"].get("confidence", 0.0)), 4)}
 
 
-ENGINE = Engine("support_graph", build, first_stage, summary)
+ENGINE = Engine(
+    "support_graph", build, first_stage, summary, preflight, ingest_client, index_mismatch
+)

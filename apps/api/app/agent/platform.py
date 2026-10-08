@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -30,6 +30,7 @@ from app.agent.common import (
 )
 from app.config.schema import ClientConfig
 from app.database import checkpoint_session
+from app.ingest import IngestReport
 from app.models import Message, Run
 
 logger = logging.getLogger("configent.graph")
@@ -66,13 +67,17 @@ class TurnState(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class Engine:
-    """What an engine hands the platform: its graph, where a turn starts, and its
-    contribution to the `done` payload."""
+    """What an engine hands the platform: its graph, where a turn starts, its contribution
+    to the `done` payload, and what ingestion means for it. The platform owns the callers
+    (CLI, startup reconcile, the chat 409 guard); the engine owns the meaning."""
 
     name: str
     build: Callable[[], StateGraph]
     first_stage: str
     summary: Callable[[dict], dict]
+    check: Callable[[ClientConfig, Path], IngestReport]  # what ingest would do; writes nothing
+    ingest: Callable[..., Awaitable[dict]]  # (db, cfg, repo_root, *, force=False) -> stats
+    ready: Callable[[AsyncSession, ClientConfig], Awaitable[str | None]]  # why not, or None
 
 
 @dataclass

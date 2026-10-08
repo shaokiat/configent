@@ -17,7 +17,6 @@ from app.agent.platform import RunUnavailable, confirm_ticket, run_turn, stream_
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
-from app.ingest import index_mismatch
 from app.models import Conversation, Message, Run
 
 router = APIRouter(prefix="/api")
@@ -68,9 +67,9 @@ async def _check_conversation_ownership(
 
 
 async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
-    """Refuse to answer from an index the config no longer describes: the question would
-    be embedded with one model and compared against chunks embedded with another."""
-    reason = await index_mismatch(db, cfg)
+    """Refuse to answer from evidence the config no longer describes. For the support graph:
+    the question would be embedded with one model and compared against chunks from another."""
+    reason = await ENGINES[cfg.agent.engine].ready(db, cfg)
     if reason is not None:
         raise HTTPException(
             status_code=409,
@@ -78,7 +77,7 @@ async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
                 "error": "index_out_of_date",
                 "message": (
                     f"{reason} Restart the API to reconcile it, or run "
-                    f"`python -m app.cli --client {cfg.client_id}`."
+                    f"`make ingest CLIENT={cfg.client_id}`."
                 ),
             },
         )

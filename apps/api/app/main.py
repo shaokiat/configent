@@ -31,7 +31,7 @@ async def lifespan(_app: FastAPI):
         if os.getenv("RECONCILE_ON_STARTUP", "1") == "0":
             yield
             return
-        reconcile = asyncio.create_task(reconcile_all(get_registry().all(), _REPO_ROOT))
+        reconcile = asyncio.create_task(reconcile_all(get_registry().all(), _REPO_ROOT, ENGINES))
         yield
         # Per-document commits make stopping mid-run safe: the next start picks up the rest.
         reconcile.cancel()
