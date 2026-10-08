@@ -86,10 +86,11 @@ corpus:
 
 ## `agent`
 
-Controls the model, prompts and guardrail thresholds of this client's [support graph](/configent/docs/support-graph).
+Selects the client's engine with `agent.engine` (required, no default) and tunes it. The keys below are the [support graph](/configent/docs/support-graph)'s (`engine: support_graph`). Each engine accepts only its own keys; the [text-to-SQL](/configent/docs/text-to-sql) keys (`database`, `context`, `guard`, `repair_attempts`) are on that page.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `agent.engine` | `string` | — | `support_graph` or `text_to_sql`. A name with no registered engine fails at load. |
 | `agent.model` | `string` | — | Claude model ID. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `claude-haiku-4-5-20251001`. |
 | `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |

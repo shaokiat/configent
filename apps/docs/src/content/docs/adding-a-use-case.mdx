@@ -6,10 +6,25 @@ order: 6
 ---
 
 <div class="lead">
-  A new assistant is a new client: a config file, a corpus, four prompts and a logo. Every client
-  runs <a href="/configent/docs/support-graph">the support graph</a>, so the real work is
-  deciding what the corpus can answer and writing prompts that hold that line.
+  A new assistant is a new client: a config file, a sources folder, prompts and a logo. Each client
+  runs one engine, so the first choice is which. The walkthrough below uses
+  <a href="/configent/docs/support-graph">the support graph</a>; the real work is deciding what the
+  sources can answer and writing prompts that hold that line.
 </div>
+
+---
+
+## Step zero: choose the engine
+
+| If the evidence is | Engine | Sources | Walkthrough |
+|---|---|---|---|
+| Documents | `support_graph` | `corpora/<id>/` | This page |
+| Rows in a SQL database | `text_to_sql` | A SQLite file and a notes folder | [Text-to-SQL](/configent/docs/text-to-sql) |
+| Something else | A new engine | Whatever it needs | [Adding an Engine](/configent/docs/adding-an-engine) |
+
+A new client of an existing engine needs no Python. The anatomy below is the support graph's;
+a text-to-SQL client swaps the corpus for `agent.database` and `agent.context`, and has three
+prompts (`generate.md`, `answer.md`, `ticket_draft.md`).
 
 ---
 
@@ -30,7 +45,7 @@ A model not yet in `config/pricing/claude.yaml` also needs a price row there.
 
 ## The one decision: what can the corpus never know?
 
-The graph answers what the corpus supports and offers a ticket for the rest. Write that
+The support graph answers what the corpus supports and offers a ticket for the rest. Write that
 boundary down before writing a prompt.
 
 | Answerable from documentation | Needs a human |
@@ -151,7 +166,7 @@ The registry checks every config when it first loads:
 
 ---
 
-## New use case in five steps
+## New use case in five steps (support graph)
 
 ```text
 corpora/<id>/            1. Drop in documents, plant a few sentinels
@@ -164,6 +179,7 @@ python -m app.cli        5. --client <id>, then open /c/<id>
 No Python for a client whose tickets go to the same kind of queue. If something doesn't
 validate, the error names the field and the file.
 
-See also: [Configuration Reference](/configent/docs/config-reference) ·
+See also: [Adding an Engine](/configent/docs/adding-an-engine) · [Text-to-SQL](/configent/docs/text-to-sql) ·
+[Configuration Reference](/configent/docs/config-reference) ·
 [The Support Graph](/configent/docs/support-graph) ·
 [Example Configs](/configent/docs/examples)

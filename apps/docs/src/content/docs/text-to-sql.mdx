@@ -1,0 +1,136 @@
+---
+title: Text-to-SQL
+description: The second engine. The model writes one SELECT, code guards and runs it read-only, and the rows are the evidence a cited answer is written from.
+order: 7.6
+group: Engines
+---
+
+<div class="lead">
+  The <code>text_to_sql</code> engine treats rows as evidence. The model writes one SELECT, code
+  decides whether it may run, and the answer is generated from the rows with citations. No
+  vector index is involved. The client is <code>f1-analyst</code> (PitWall), on BIRD's
+  <code>formula_1</code> database.
+</div>
+
+---
+
+## The graph
+
+```
+generate ─┬─ converse / escalate        (the same call classifies the message)
+          └─ guard → execute ─┬─ answer
+                              └─ repair → guard → execute ─┬─ answer
+                                                           └─ escalate → ticket
+```
+
+- **`generate`** classifies the message as `question`, `conversation` or `handoff` and writes the SQL in one structured call.
+- **`guard` and `execute` are separate nodes,** so the step trail tells a rejected query from a failed one.
+- **`answer` is a separate call from `generate`.** Citations cannot be combined with structured output (400), so the query is written without them and the answer is written with them.
+- **The rows are one `search_result` block** with citations enabled, sourced as `sql://<client_id>`. The answering call has no `tools` key (D2).
+- **`converse`, `escalate` and `ticket` are the shared nodes.** See [Adding an Engine](/configent/docs/adding-an-engine).
+
+---
+
+## The guard, in layers
+
+A model-written query is untrusted input. Each layer catches something the one before cannot.
+
+| Layer | Where | What it stops |
+|---|---|---|
+| **Read-only open** | `open_readonly`: `mode=ro` plus `PRAGMA query_only=ON` | Any write to the file |
+| **Authorizer** | `set_authorizer`, allow-list of SELECT, READ, FUNCTION, RECURSIVE | `ATTACH` of another file, `PRAGMA`, every write action, including ones a future SQLite adds |
+| **Parser** | `sqlglot` in `guard.check` | Multiple statements, non-SELECT statements, writes inside a CTE, each with a readable reason |
+| **`EXPLAIN`** | on the read-only connection | Unknown tables and columns, before the query runs |
+| **Timeout** | progress handler, `guard.timeout_ms` (5000) | A runaway query |
+| **Row cap** | `guard.row_limit` (200), one extra row fetched to detect truncation | A huge result set; the answer is told it is partial |
+| **Cell cap** | 500 characters per value; blobs shown as `<N bytes>` | One giant cell dominating the prompt |
+
+- **The connection mode and authorizer are the real guard.** If the parser and the connection ever disagree, the connection wins.
+- **The parser exists for explanations.** A rejection the model can read ("write inside a CTE: DELETE") is what makes the repair step work.
+- **Deny by default.** `mode=ro` alone does not stop `ATTACH`, which could expose another file on disk.
+
+---
+
+## Repair, and `decide_sql`
+
+```python
+def decide_sql(*, verdict, error, attempts, cfg) -> tuple[str, str]:
+    # no failure           -> "answer"
+    # attempts < repair_attempts -> "repair"
+    # otherwise            -> "escalate"
+```
+
+- **Python routes, the model does not.** The nodes store the route; the edges only read it (D2).
+- **A failed query is repaired, not regraded.** `repair` gets the query and the error and writes a corrected one, and it goes back through the guard.
+- **`agent.repair_attempts`** (default 2, at most 3; `f1-analyst` sets 1) bounds the loop. When it is spent, the turn escalates with the last error as `why`.
+- **Zero rows is an answer.** The query ran, and "nothing matches" is true evidence. The answer says "no matching records" and does not guess why, so it never blames the data or invents a cause.
+- **No groundedness grade.** The SQL either ran or it did not, so this engine has no `confidence` in its `done` payload, only `row_count`.
+
+---
+
+## The ingestion contract
+
+The engine's sources are a database file and a notes folder, `corpora/f1-analyst/`.
+
+| Input | Source |
+|---|---|
+| **DDL** | Introspected from the database: tables, columns, types, primary and foreign keys |
+| **Column descriptions** | `descriptions/<table>.csv`, BIRD's own, shown as a comment per column |
+| **Glossary and rules** | `glossary.md` and `rules.md`, written for this project |
+
+- **`ingest` stores one `documents` row,** `schema://<client_id>`, with the rendered text and no chunks. The prompt reads it back for every call.
+- **The fingerprint is a hash of the normalised DDL and every notes file.** Unchanged means skipped; `--force` rebuilds.
+- **`ready` is truthful.** It reports a missing database file (`run make data-bird`), no stored context, an unreadable database, or a fingerprint that no longer matches. Chat answers 409 until it is `None`.
+- **`make ingest CLIENT=f1-analyst CHECK=1`** lists undescribed columns and the context's token count (best effort) without writing.
+- **Undescribed columns are visible.** A description that only repeats the column name counts as missing.
+
+Setup: `make data-bird && make ingest CLIENT=f1-analyst`. The download is checked against a pinned SHA-256; a mismatch fails. See the [README](https://github.com/shaokiat/configent#data-and-attribution) for the BIRD licence and what is and is not redistributed.
+
+---
+
+## Config
+
+`config/f1-analyst.yaml` selects the engine and tunes it. The escalation block is shared with every engine.
+
+```yaml
+agent:
+  engine: text_to_sql
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/f1-analyst/answer.md   # generate.md, ticket_draft.md beside it
+  database: { dialect: sqlite, path: data/bird/formula_1.sqlite }
+  context: { source: corpora/f1-analyst/ }
+  guard: { row_limit: 200, timeout_ms: 5000 }
+  repair_attempts: 1
+escalation:
+  queue: data-team
+  team: data team
+  categories: [missing_data, data_request, other]
+```
+
+- **`corpus:` and `retrieval:` are rejected** for this engine. `extra="forbid"` names the key.
+- **`escalation.team`** is who the offer and the failure text say will take the ticket. It is tenant data, not code.
+- **Three prompts, not four:** `generate.md`, `answer.md` and `ticket_draft.md`. There is nothing to grade or rewrite.
+
+---
+
+## Prompt caching
+
+`generate` and `repair` build the same system text (prompt plus schema context) and put a cache breakpoint after it, so a repair reuses the prefix its own `generate` wrote. The answering call has its own breakpoint after `answer.md`.
+
+> **Measurement pending.** Whether the schema context clears Haiku 4.5's 4,096-token minimum, and the cache-read rate in practice, have not been measured yet. The figures will be added here once measured, from a run's recorded `cache_read` tokens. See [Prompt Caching](/configent/docs/prompt-caching) for how P5 applies.
+
+---
+
+## Eval results
+
+> **Pending.** The text-to-SQL evals have not been run. Results will land in `evals/results/` after the first run, and the numbers will be copied here from that file.
+
+---
+
+## What is deliberately not here
+
+- **No router and no web search.** One engine, one evidence source.
+- **The full schema goes in the prompt.** Schema retrieval comes when a schema no longer fits or stops caching.
+- **No plug-in retrievers.** See Known gaps in the decision log, with the trigger for each.
+
+See also: [Adding an Engine](/configent/docs/adding-an-engine) · [Adding a New Use Case](/configent/docs/adding-a-use-case) · [Escalation Ticket](/configent/docs/escalation-ticket)
