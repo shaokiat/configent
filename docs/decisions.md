@@ -53,6 +53,9 @@ blows the four-breakpoint request limit.
 per-turn breakpoint and `_sorted_tool_defs` went with the loop, so history is not cached.
 On Haiku 4.5 even that breakpoint is inert: `answer.md` is about 750 tokens, under the
 model's 4,096-token minimum cacheable prefix (Part 3).
+The text-to-SQL engine (#19) puts a second breakpoint after the schema-context system prompt
+(`_structured_call(cache_system=True)`). Whether it crosses the minimum on Haiku 4.5 is to be
+measured (`cache_creation_input_tokens` / `cache_read_input_tokens` over two turns); not yet done.
 
 ### P6 — Voyage AI embeddings (`voyage-3`) · LOCKED
 **Why:** asymmetric query/document embeddings, strong retrieval scores on technical

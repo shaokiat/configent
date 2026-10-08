@@ -111,6 +111,10 @@ editing `corpora/` or a `corpus:` setting only needs a restart.
 
 Then open **http://localhost:3000/c/gcp-platform-support**.
 
+The second client, **f1-analyst** (text-to-SQL), needs its database first:
+`make data-bird && make ingest CLIENT=f1-analyst`, then open `/c/f1-analyst`. Without the
+database file the client loads but chat answers 409.
+
 `make up` runs the same stack in Docker instead; `make docs` serves the docs site on
 :4321.
 

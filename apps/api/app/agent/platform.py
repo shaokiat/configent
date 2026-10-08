@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.common import (
     UsageTotals,
     attr_or_key,
+    excerpt,
     model_trace,
     prepare_conversation,
     update_conversation_totals,
@@ -229,12 +230,16 @@ async def _structured_call(
     user_content: str,
     schema: dict,
     max_tokens: int,
+    cache_system: bool = False,
 ) -> tuple[dict, Any]:
-    """One model call constrained to a JSON schema. Never combined with citations (400)."""
+    """One model call constrained to a JSON schema. Never combined with citations (400).
+    `cache_system` puts a cache breakpoint after the system prompt (P5)."""
     response = await aclient.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=system,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if cache_system
+        else system,
         messages=[{"role": "user", "content": user_content}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )
@@ -242,6 +247,30 @@ async def _structured_call(
         attr_or_key(b, "text", "") for b in response.content if attr_or_key(b, "type") == "text"
     )
     return json.loads(text), response
+
+
+async def _stream_answer(d: Deps, kwargs: dict) -> Any:
+    """Stream an answering call as `text` / `citation` events; returns the final message."""
+    write, citation_index = get_stream_writer(), 0
+    async with d.aclient.messages.stream(**kwargs) as stream:
+        async for event in stream:
+            if getattr(event, "type", "") != "content_block_delta":
+                continue
+            if event.delta.type == "text_delta":
+                write(("text", {"delta": event.delta.text}))
+            elif event.delta.type == "citations_delta":
+                citation_index += 1
+                cit = event.delta.citation
+                write((
+                    "citation",
+                    {
+                        "index": citation_index,
+                        "source": attr_or_key(cit, "source"),
+                        "title": attr_or_key(cit, "title"),
+                        "cited_text": excerpt(attr_or_key(cit, "cited_text") or ""),
+                    },
+                ))
+        return await stream.get_final_message()
 
 
 def _transcript(history: list[dict], turns: int = 6) -> str:

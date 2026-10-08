@@ -58,7 +58,7 @@ def _proposal_reply(draft: dict, esc: EscalationConfig) -> str:
     category = esc.categories.get(draft.get("category", "other"), "other")
     return (
         f"{esc.preamble}\n\n"
-        f"I can open a **{category}** ticket for the platform team — "
+        f"I can open a **{category}** ticket for the {esc.team} — "
         f'"{draft.get("subject", "")}". Say the word and I\'ll file it.'
     )
 
@@ -67,7 +67,7 @@ def _escalation_reply(ticket: dict, ok: bool, esc: EscalationConfig) -> str:
     if not ok:
         return (
             "I couldn't reach the ticket system just now, so nothing was filed. Please retry "
-            "shortly or raise it with the platform team directly."
+            f"shortly or raise it with the {esc.team} directly."
         )
     eta = ticket.get("eta_hours")
     return (

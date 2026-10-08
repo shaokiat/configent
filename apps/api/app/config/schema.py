@@ -148,10 +148,11 @@ class TextToSqlAgent(BaseModel):
     engine: Literal["text_to_sql"]
     model: str
     system_prompt_file: str
+    max_tokens: int = Field(default=4096, gt=0)
     database: DatabaseConfig
     context: ContextConfig
     guard: GuardConfig = GuardConfig()
-    repair_attempts: int = Field(default=2, ge=0, le=5)  # used by the graph (#19)
+    repair_attempts: int = Field(default=2, ge=0, le=3)
 
 
 # The tag picks the member, so a key from another engine fails at load (D13).
@@ -167,6 +168,7 @@ class EscalationConfig(BaseModel):
     categories: dict[str, str]  # id -> label shown in the offer
     product_areas: list[str] = []  # empty: the draft has no product_area field
     preamble: str = "That one needs a human."  # first sentence of the ticket offer
+    team: str = "platform team"  # who the offer and the failure text say will take it
 
     @field_validator("categories", mode="before")
     @classmethod
