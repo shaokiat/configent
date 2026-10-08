@@ -141,8 +141,8 @@ async def chat_stream(client_id: str, req: ChatRequest):
 
     async def event_source():
         async with AsyncSessionLocal() as db:
-            async for name, data in stream_graph(
-                req.message, cfg=cfg, client_id=client_id,
+            async for name, data in stream_turn(
+                req.message, engine=support_graph.ENGINE, cfg=cfg, client_id=client_id,
                 conversation_id=req.conversation_id, db=db,
             ):
                 yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
@@ -162,14 +162,14 @@ async def chat_stream(client_id: str, req: ChatRequest):
 
 ## How graph nodes stream
 
-Graph nodes cannot `yield` to the endpoint: LangGraph runs them. They write to LangGraph's custom stream instead, and `stream_graph()` forwards what arrives.
+Graph nodes cannot `yield` to the endpoint: LangGraph runs them. They write to LangGraph's custom stream instead, and `stream_turn()` forwards what arrives.
 
 ```python
 # inside a node
 get_stream_writer()(("step", entry))
 get_stream_writer()(("text", {"delta": event.delta.text}))
 
-# stream_graph()
+# stream_turn()
 async for event, data in graph.astream(
     initial, thread, context=deps, stream_mode="custom", durability="sync"
 ):
@@ -178,14 +178,14 @@ async for event, data in graph.astream(
 
 - **The custom mode, not `updates`.** An `updates` chunk arrives only when a node returns, after all its text deltas. The custom stream carries steps, deltas and proposals in the exact order the nodes wrote them, in one mode.
 - **The tuples are the SSE events.** The endpoint serializes each `(event, data)` pair unchanged, so it needs no per-event code.
-- **`run`, `done` and `error` come from `stream_graph()`, not a node.** They bracket the graph: one before it starts, one after the turn is persisted.
+- **`run`, `done` and `error` come from `stream_turn()`, not a node.** They bracket the graph: one before it starts, one after the turn is persisted.
 
 ---
 
 ## Errors
 
 ```python
-async def stream_graph(user_message, *, cfg, client_id, conversation_id, db):
+async def stream_turn(user_message, *, engine, cfg, client_id, conversation_id, db):
     try:
         ...                                   # prepare, run the graph, persist, commit
         yield ("done", {...})

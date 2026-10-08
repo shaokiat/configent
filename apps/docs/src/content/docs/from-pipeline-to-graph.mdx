@@ -41,7 +41,7 @@ Nine nodes, two decision functions, one pause.
 
 | | Pipeline (retired) | **Graph (built)** |
 |---|---|---|
-| **Engine** | `agent/pipeline.py`, 957 lines, no framework | `agent/graph.py`, 942 lines, LangGraph |
+| **Engine** | `agent/pipeline.py`, 957 lines, no framework | `agent/graph.py`, 942 lines, LangGraph (since split into `platform.py`, `escalation.py` and `engines/support_graph.py`) |
 | **`agent.mode`** | `pipeline` | `graph`. `pipeline` now fails at startup |
 | **Retrieval tiers** | One | Two: dense, then rewrite plus hybrid search |
 | **Routing** | `should_escalate()`, one `if` | `decide_level1` and `decide_level2`, stored on state, read by the edges |
@@ -142,8 +142,8 @@ All fourteen are recorded under D10 in `docs/decisions.md`.
 
 | Pipeline | Graph |
 |---|---|
-| `stream_pipeline()` | `stream_graph()` |
-| `run_pipeline()` returning `PipelineResult` | `run_graph()` returning the final state |
+| `stream_pipeline()` | `stream_turn()` |
+| `run_pipeline()` returning `PipelineResult` | `run_turn()` returning the final state |
 | `should_escalate()` | `decide_level1()`, plus `decide_level2()` for the new tier |
 | `stage_score()` and `score.md` | The `grade` node and `grade.md` |
 | `route` and `reply` on the draft call | `kind` and `reply` on the grade call |
@@ -163,7 +163,7 @@ All fourteen are recorded under D10 in `docs/decisions.md`.
 - **Level 2 answers rest on the grader alone.** The deterministic half of the guardrail applies at Level 1 only.
 - **A second Postgres driver, and checkpoint tables that are never pruned.**
 - **Framework rules to know.** An `interrupt()` node re-runs from the top. A `SystemExit` raised in a node is fatal to the event loop, which is why the crash injector moved. `durability="sync"` is what writes a checkpoint before the next node starts.
-- **No code saved.** `graph.py` is about the size `pipeline.py` was, while carrying a whole extra tier.
+- **No code saved.** `graph.py` (before the split) was about the size `pipeline.py` was, while carrying a whole extra tier.
 
 ---
 

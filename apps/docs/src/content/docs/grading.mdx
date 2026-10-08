@@ -5,7 +5,7 @@ order: 10
 group: The Support Graph
 ---
 
-`grade` is the guardrail's model call. It hands the message, the recent conversation and the passages to a cheap model, and gets back two judgements: how well the passages support an answer, and whether the message is a question or conversation. The same function runs twice in the graph, as `grade` at Level 1 and `regrade` at Level 2. It lives in `agent/graph.py`.
+`grade` is the guardrail's model call. It hands the message, the recent conversation and the passages to a cheap model, and gets back two judgements: how well the passages support an answer, and whether the message is a question or conversation. The same function runs twice in the graph, as `grade` at Level 1 and `regrade` at Level 2. It lives in `agent/engines/support_graph.py`.
 
 Similarity says *close*. Groundedness says *sufficient*. They fail differently, which is the reason this node exists.
 

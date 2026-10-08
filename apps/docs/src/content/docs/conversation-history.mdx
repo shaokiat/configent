@@ -72,7 +72,7 @@ There is no sliding window or summarization. The history is not cached; see [Pro
 
 ## Persisting a turn
 
-After the graph stops, `stream_graph()` adds two rows and commits once:
+After the graph stops, `stream_turn()` adds two rows and commits once:
 
 - **The user message**, as sent.
 - **The assistant reply**, with its `segments` and the `run_id`.
@@ -102,7 +102,7 @@ POST /api/c/:client_id/chat/stream
         │
         ├─ ownership + budget check          own short-lived session, before streaming
         │
-        └─ stream_graph()
+        └─ stream_turn()
               ├─ prepare_conversation()       new → INSERT + commit · else SELECT history
               ├─ RunRecorder.start()          INSERT runs row
               ├─ graph.astream(...)           nodes stream steps, text, citations

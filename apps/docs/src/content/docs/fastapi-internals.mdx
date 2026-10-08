@@ -18,7 +18,7 @@ app.include_router(health.router)    # /healthz, /healthz/db
 app.include_router(clients.router)   # /api/...
 ```
 
-The lifespan opens LangGraph's Postgres saver and compiles the support graph against it. Without it, `stream_graph()` raises: the ticket pause cannot work with no checkpointer.
+The lifespan opens LangGraph's Postgres saver and compiles the support graph against it. Without it, `stream_turn()` raises: the ticket pause cannot work with no checkpointer.
 
 `ConfigRegistry` is still lazy. `get_registry()` builds it on first call, so a bad YAML file, an unknown key or an unpriced model surfaces on the first request rather than at process start.
 
@@ -45,7 +45,7 @@ Request
 
 ## Graph integration
 
-The router delegates to `agent/graph.py`. No background tasks, no worker queue: the graph runs inline with `async`/`await`.
+The router delegates to `agent/platform.py`. No background tasks, no worker queue: the graph runs inline with `async`/`await`.
 
 **Streaming path (`/chat/stream`):**
 
@@ -53,16 +53,16 @@ The router delegates to `agent/graph.py`. No background tasks, no worker queue: 
 return StreamingResponse(event_source(), media_type="text/event-stream", ...)
 ```
 
-`event_source()` iterates `stream_graph()` and re-yields each `(name, data)` tuple as an SSE frame. FastAPI flushes each `yield` immediately.
+`event_source()` iterates `stream_turn()` and re-yields each `(name, data)` tuple as an SSE frame. FastAPI flushes each `yield` immediately.
 
 **Sync path (`/chat`):**
 
 ```python
-state = await run_graph(req.message, cfg=cfg, ...)
+state = await run_turn(req.message, engine=support_graph.ENGINE, cfg=cfg, ...)
 return ChatResponse(conversation_id=state["conversation_id"], reply=state["answer"], ...)
 ```
 
-`run_graph()` drains `stream_graph()` and returns the final state, so the two paths cannot drift.
+`run_turn()` drains `stream_turn()` and returns the final state, so the two paths cannot drift.
 
 See [The Support Graph](/configent/docs/support-graph) for what runs inside, and [SSE Streaming](/configent/docs/sse-streaming) for the event contract.
 
@@ -75,7 +75,7 @@ See [The Support Graph](/configent/docs/support-graph) for what runs inside, and
 | Unknown `client_id` | `registry.get()` raises `KeyError` → caught in router → `HTTPException(404)` |
 | Conversation owned by another client | `_check_conversation_ownership()` → `404`, before the stream starts |
 | Rate limit or daily budget exceeded | `HTTPException(429)` with a JSON body, before the stream starts |
-| Anthropic API error | `stream_graph()` rolls back, marks the run `failed`, yields `error` naming the exception class |
+| Anthropic API error | `stream_turn()` rolls back, marks the run `failed`, yields `error` naming the exception class |
 | Any other exception in a turn | Same, with a generic message. `/chat` turns the `error` into a `500` |
 | Confirming an unknown, foreign or unpaused run | `RunUnavailable` → `404` that reveals nothing about which |
 | DB unreachable (`/healthz/db`) | SQLAlchemy raises → FastAPI returns `500` |
@@ -146,7 +146,7 @@ LangGraph's saver creates its own checkpoint tables on startup.
 | `ChatRequest` | `message: str`, `conversation_id: str \| None` |
 | `ChatResponse` | `conversation_id`, `reply`, `citations: list[dict]`, `segments: list[dict]` |
 
-**Internal types (`agent/common.py`, `agent/graph.py`):**
+**Internal types (`agent/common.py`, `agent/platform.py`, `agent/engines/support_graph.py`):**
 
 | Type | Purpose |
 |---|---|

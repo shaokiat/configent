@@ -117,7 +117,7 @@ fire), any unknown `agent` key, and a model with no price.
 
 ## 4. The support graph
 
-The turn is a LangGraph `StateGraph` in `apps/api/app/agent/graph.py`:
+The turn is a LangGraph `StateGraph` in `apps/api/app/agent/engines/support_graph.py` (the platform that runs it is `agent/platform.py`):
 
 ```
 Level 1 · RAG             retrieve → grade ─┬─ answer | converse

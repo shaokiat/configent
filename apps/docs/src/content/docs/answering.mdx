@@ -5,7 +5,7 @@ order: 13
 group: The Support Graph
 ---
 
-`answer` runs when either level's route says the evidence holds. It sends that level's passages and the question to the model with citations enabled, and streams the reply. `answer_request_kwargs()` in `agent/graph.py` assembles the request.
+`answer` runs when either level's route says the evidence holds. It sends that level's passages and the question to the model with citations enabled, and streams the reply. `answer_request_kwargs()` in `agent/engines/support_graph.py` assembles the request.
 
 The interesting part of that request is what is missing from it.
 
@@ -68,7 +68,7 @@ Prompting a model not to do something it can do is a request. Removing the capab
 - **Passages first, question last.** The evidence is context; the question is the instruction.
 - **Citations are enabled on every passage.** The API requires them on all search results in a request or none.
 - **The system prompt carries a cache breakpoint.** It is inert on Haiku 4.5, whose minimum cacheable prefix is longer than `answer.md`. See [Prompt Caching](/configent/docs/prompt-caching).
-- **Deltas go through LangGraph's stream writer.** The node writes `("text", …)` and `("citation", …)` tuples, and `stream_graph()` forwards them unchanged. See [SSE Streaming](/configent/docs/sse-streaming#how-graph-nodes-stream).
+- **Deltas go through LangGraph's stream writer.** The node writes `("text", …)` and `("citation", …)` tuples, and `stream_turn()` forwards them unchanged. See [SSE Streaming](/configent/docs/sse-streaming#how-graph-nodes-stream).
 - **The response is assembled, not generated.** Citations and `output_config.format` cannot be combined, so Python builds the final response from state.
 - **This node never sees empty retrieval.** Both decide functions require at least one passage before they route here.
 - **An answer that cites nothing is visible, not blocked.** `n_citations: 0` on the step reads as a corpus problem rather than a wiring one.
