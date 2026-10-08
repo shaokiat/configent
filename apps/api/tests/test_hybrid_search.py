@@ -127,5 +127,5 @@ async def test_full_text_search_finds_an_exact_permission_name():
     from app.retrieval.search import _keyword
 
     async with AsyncSessionLocal() as db:
-        hits = await _keyword(db, "gcp-platform-support", "iam.serviceAccounts.actAs", k=5, rrf_k=60)
+        hits = await _keyword(db, "gcp-platform-support", "iam.serviceAccounts.actAs", k=5)
     assert any("cloud-run-troubleshooting" in h.source_uri for h in hits)
