@@ -23,12 +23,13 @@ corpora/<client_id>/            corpus:  (client YAML)
                            commit per document
 ```
 
-1. **Hash** every file's raw bytes. Nothing is parsed yet.
+0. **Preflight.** Parse and chunk every file in the folder and account for each one: will ingest, will skip (unsupported extension), will fail (with the error). `--check` stops here. The real ingest prints the same table, from the same `preflight()` call.
+1. **Hash** every supported file's raw bytes.
 2. **Plan.** Rebuild a file whose content hash *or* ingest fingerprint differs from the stored row. Prune a stored document whose file is gone. Skip the rest.
 3. **Rebuild** each planned file: parse, chunk, embed, then replace the old row. Each document commits on its own.
 4. **Prune**, then commit.
 
-A failed embed leaves the previous version of that document indexed. Documents committed earlier in the run stay.
+A failed file does not stop the run. It is recorded as `{path, reason}`, the rest still commit, and the CLI exits non-zero so a script or CI step notices. A failed embed leaves the previous version of that document indexed. A file that fails to parse is not pruned if it was indexed before.
 
 ---
 
@@ -39,10 +40,18 @@ A failed embed leaves the previous version of that document indexed. Documents c
 | Extension | Parser | Title extraction |
 |-----------|--------|-----------------|
 | `.pdf` | pypdf page extraction | `path.stem` (titlecased) |
-| `.md`, `.markdown` | plain text read | First `# heading`, else `path.stem` |
+| `.md`, `.markdown` | plain text read, front matter stripped | `title:` front matter → first `# heading` → `path.stem` |
+| `.docx` | `python-docx`; "Heading N" styles become `#` levels | First heading, else `path.stem` |
+| `.txt` | plain text read | `path.stem` (titlecased) |
 | `.html`, `.htm` | BeautifulSoup, strips `<script>`/`<style>` | `<title>` → `<h1>` → `path.stem` |
 
-Unsupported extensions are silently skipped by `iter_corpus()`. All parsers return a `ParsedDocument(title, text, source_path)`.
+- **Every file is accounted for.** `iter_corpus()` returns all files; the preflight sorts them. `.xlsx`, `.csv`, `.pptx` and the rest are listed as unsupported by name, not dropped.
+- **Front matter** (`---` block at the top of a Markdown file): `title:` overrides the heading, `url:` becomes the document's link. The block is stripped from `text`, or it would be embedded as content.
+- **Scanned PDFs** (under ~50 characters of text per page) fail with "needs OCR, not supported" instead of becoming empty documents.
+- **Flags, not decisions:** documents under ~50 tokens (stubs) and files with identical text (the `.md` + `.pdf` double-index) are named in the report but still ingested.
+- **Estimates:** total chunks, embedding tokens, cost (a dated constant in `ingest.py`) and a free-tier worst-case time, so the operator hears it before starting.
+
+All parsers return a `ParsedDocument(title, text, source_path, url, pages, markdown)`.
 
 ---
 
@@ -62,7 +71,10 @@ corpus:
   chunking:
     chunk_size: 800   # tokens per chunk (default: 800)
     overlap: 100      # overlap tokens between chunks (default: 100)
+    prefix_title: false   # default: off
 ```
+
+`prefix_title: true` starts every chunk with `<document title> — <heading path>`, before it is embedded and before the keyword index sees it. The heading path is the Markdown (and `.docx`) headings in force where the chunk starts, joined with ` › `; other formats get the title alone. It changes vectors and the tsvector, so it joins the fingerprint and turning it on rebuilds the index.
 
 ---
 
@@ -132,7 +144,7 @@ Each document carries two hashes:
 | Column | Hash of | Moves when |
 |--------|---------|------------|
 | `content_hash` | the file's raw bytes | the file is edited |
-| `ingest_fingerprint` | `corpus.embedding.model`, `chunk_size`, `overlap` | a setting that shapes the index changes |
+| `ingest_fingerprint` | `corpus.embedding.model`, `chunk_size`, `overlap`, and `prefix_title` / `source_url_template` when set | a setting that shapes the index changes |
 
 `plan()` compares both against the stored row:
 
@@ -145,6 +157,7 @@ Each document carries two hashes:
 
 - **Edit one file:** that file is rebuilt.
 - **Change a setting:** every file is rebuilt. No `--force` needed.
+- **`prefix_title` and `source_url_template` join the spec only when non-default,** so an existing config keeps its fingerprint and nothing rebuilds on deploy. `source_url_template` moves no vector, but the URL is stored per document, so editing it must rebuild.
 - **`corpus.source` is not in the fingerprint.** Moving the folder changes no vector.
 
 ### The index guard
@@ -176,7 +189,7 @@ git show 498355c:apps/api/app/retrieval/embed.py # hardcoded voyage-3
 | Trigger | How | Use it for |
 |---------|-----|------------|
 | API startup | `reconcile_all()` in a background task | Deploys and restarts. Edit files or settings, restart, done |
-| CLI | `python -m app.cli --client <id>` | Local work without a restart, and `--force` |
+| CLI | `make ingest CLIENT=<id>` | Local work without a restart, and `--force` |
 
 - **Startup runs in the background.** A full rebuild on Voyage's free tier takes minutes. Chat answers `409` for that client until it finishes, and the web app shows "The knowledge base isn't ready."
 - **A normal restart costs nothing.** Unchanged files are skipped by hash, so no embedding calls are made.
@@ -191,15 +204,12 @@ The Docker image copies `corpora/` so the container can reconcile itself.
 ## Running the CLI
 
 ```bash
-cd apps/api
-uv run python -m app.cli --client gcp-platform-support
+make ingest CLIENT=gcp-platform-support            # ingest
+make ingest CLIENT=gcp-platform-support CHECK=1    # preflight only: embeds nothing, writes nothing
+make ingest CLIENT=gcp-platform-support FORCE=1    # rebuild every document
 ```
 
-`--force` rebuilds every document, even when both hashes match:
-
-```bash
-uv run python -m app.cli --client gcp-platform-support --force
-```
+`make ingest` runs `cd apps/api && uv run python -m app.cli --client <id> [--check] [--force]`. Both modes print the file accounting and exit non-zero if any file failed.
 
 The CLI has one command, so it takes no `ingest` subcommand.
 
@@ -241,6 +251,7 @@ documents
   title         VARCHAR(512)
   content_hash  VARCHAR(64)       — SHA256(raw bytes)[:32]
   ingest_fingerprint VARCHAR(16)  — CorpusConfig.fingerprint(); null on pre-0006 rows
+  url           VARCHAR(1024)     — front matter `url:` or source_url_template; null = no link
   ingested_at   DATETIME
 
 chunks

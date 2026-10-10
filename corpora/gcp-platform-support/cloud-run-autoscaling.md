@@ -1,6 +1,9 @@
+---
+title: "Cloud Run: instance autoscaling"
+url: https://cloud.google.com/run/docs/about-instance-autoscaling
+---
 # Cloud Run: instance autoscaling
 
-> Source: https://cloud.google.com/run/docs/about-instance-autoscaling
 > Portions of this page are modifications based on work created and shared by Google and
 > used according to terms described in the Creative Commons 4.0 Attribution License.
 

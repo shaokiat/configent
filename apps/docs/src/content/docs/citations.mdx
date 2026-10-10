@@ -57,6 +57,15 @@ The attribution is the API's, not ours. Each citation comes back with its source
 ]
 ```
 
+### Linkable sources
+
+A citation's `source` is the document's URL when it has one, else the `corpus://` identity. The URL is passed as the `search_result` `source`, and the API echoes it back, so there is no extra SSE field.
+
+- **Where the URL comes from:** `url:` in the file's YAML front matter, else `corpus.source_url_template` (`{stem}` and `{path}`, the relative path without extension), else none.
+- **Stored on the document** (`documents.url`), carried on `Hit`, sent by `_hit_dict` and `answer_request_kwargs`. `source_uri` stays the stable identity that prune and the fingerprint key on.
+- **The UI** renders a `source` starting with `http://` or `https://` as a link (new tab, `rel="noopener"`), anything else as plain text.
+- **The GCP corpus** carries `title:` and `url:` in front matter, so DeployBot's citations open the upstream Google Cloud page. The CC BY 4.0 attribution stays in the body.
+
 Segments with empty `citations` are plain text. Segments with citations render with inline source links in the frontend.
 
 ---

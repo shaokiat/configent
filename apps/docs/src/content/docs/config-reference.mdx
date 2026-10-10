@@ -59,10 +59,12 @@ Configures the document source and chunking settings.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `corpus.source` | `string` | — | Path to the document directory, relative to the repo root. All `.pdf`, `.md`, `.html`, and `.htm` files in the directory are ingested recursively. |
+| `corpus.source` | `string` | — | Path to the document directory, relative to the repo root. `.md`, `.markdown`, `.txt`, `.docx`, `.pdf`, `.html` and `.htm` files are ingested recursively; other files are listed as unsupported in the ingest report. |
+| `corpus.source_url_template` | `string` | `""` | Fallback citation link for a file with no `url:` front matter. `{stem}` and `{path}` (relative path, no extension) are filled in. Empty means plain-text citations. Joins the fingerprint when set. |
 | `corpus.embedding.model` | `string` | `voyage-3` | Voyage AI model for chunks and questions alike. Must emit 1024 dimensions: `voyage-3`, `voyage-3-large` or `voyage-3.5`. Anything else fails at load. |
 | `corpus.chunking.chunk_size` | `int` | `800` | Maximum tokens per chunk. Larger values preserve more context per retrieval hit. |
 | `corpus.chunking.overlap` | `int` | `100` | Token overlap between adjacent chunks. Prevents mid-sentence splits from degrading retrieval quality. |
+| `corpus.chunking.prefix_title` | `bool` | `false` | Start each chunk with `<title> — <heading path>`, before embedding and keyword indexing. Joins the fingerprint when on: turning it on rebuilds the index. |
 
 ```yaml
 corpus:
@@ -78,7 +80,7 @@ corpus:
 
 **Embedding:** requires a `VOYAGE_API_KEY` environment variable.
 
-**Incremental ingestion:** ingest skips a file when its bytes and the `embedding` + `chunking` settings are unchanged. Edit a file and only that file is rebuilt. Change a setting and every file is rebuilt. Delete a file and its document is pruned. Until ingest runs after a settings change, chat answers `409 index_out_of_date`. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline).
+**Incremental ingestion:** ingest skips a file when its bytes and the `embedding`, `chunking` and `source_url_template` settings are unchanged. Edit a file and only that file is rebuilt. Change a setting and every file is rebuilt. Delete a file and its document is pruned. Until ingest runs after a settings change, chat answers `409 index_out_of_date`. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline).
 
 ---
 

@@ -17,6 +17,7 @@ class Hit:
     text: str
     similarity: float
     chunk_index: int
+    url: str | None = None
 
 
 def _columns():
@@ -27,6 +28,7 @@ def _columns():
         Chunk.chunk_index,
         Document.title.label("document_title"),
         Document.source_uri,
+        Document.url,
     )
 
 
@@ -39,6 +41,7 @@ def _hit(row, similarity: float) -> Hit:
         text=row.text,
         similarity=similarity,
         chunk_index=row.chunk_index,
+        url=row.url,
     )
 
 

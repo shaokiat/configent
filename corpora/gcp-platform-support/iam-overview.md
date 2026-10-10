@@ -1,6 +1,9 @@
+---
+title: "IAM: roles, policies, and the resource hierarchy"
+url: https://cloud.google.com/iam/docs/overview
+---
 # IAM: roles, policies, and the resource hierarchy
 
-> Source: https://cloud.google.com/iam/docs/overview
 > Portions of this page are modifications based on work created and shared by Google and
 > used according to terms described in the Creative Commons 4.0 Attribution License.
 
