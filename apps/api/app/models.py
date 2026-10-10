@@ -171,6 +171,9 @@ class Run(Base):
     )
     # Denormalised from the conversation so run lookups can be scoped without a join.
     client_id: Mapped[str] = mapped_column(String(64), index=True)
+    # The engine whose graph owns this run's checkpoint thread; null only on rows from
+    # before engines were tagged (migration 0008 backfills those).
+    engine: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="running")
     current_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     steps: Mapped[list] = mapped_column(JSON, default=list)

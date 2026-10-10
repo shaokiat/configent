@@ -138,26 +138,29 @@ def test_a_draft_missing_fields_is_completed_rather_than_dropped():
     assert "quota" in out["subject"]
 
 
-def test_the_proposal_offers_and_does_not_claim():
+def test_the_proposal_offers_and_does_not_claim(cfg):
     reply = escalation._proposal_reply(
-        {"subject": "Quota increase in europe-west1", "category": "quota_or_billing"}
+        {"subject": "Quota increase in europe-west1", "category": "quota_or_billing"},
+        cfg.escalation,
     )
     assert "quota or billing" in reply and "europe-west1" in reply
     assert "I can open" in reply
     assert "PLATFORM-" not in reply
 
 
-def test_the_confirmation_names_the_filed_ticket():
+def test_the_confirmation_names_the_filed_ticket(cfg):
     reply = escalation._escalation_reply(
         {"ticket_id": "PLATFORM-1042", "queue": "platform-serverless", "eta_hours": 8,
          "url": "https://platform.internal.example/tickets/PLATFORM-1042"},
         ok=True,
+        esc=cfg.escalation,
     )
     assert "PLATFORM-1042" in reply and "platform-serverless" in reply and "8 hours" in reply
 
 
-def test_a_failed_filing_does_not_claim_a_ticket_exists():
-    assert "nothing was filed" in escalation._escalation_reply({"error": "x"}, ok=False).lower()
+def test_a_failed_filing_does_not_claim_a_ticket_exists(cfg):
+    reply = escalation._escalation_reply({"error": "x"}, ok=False, esc=cfg.escalation)
+    assert "nothing was filed" in reply.lower()
 
 
 # ── the audit trail ─────────────────────────────────────────────────────────────────
@@ -336,6 +339,11 @@ async def test_stream_emits_error_instead_of_done_when_a_stage_throws(h, monkeyp
 
 
 def test_the_graph_has_no_checkpointer_until_one_is_installed(monkeypatch):
-    monkeypatch.setattr(platform, "_graph", None)
+    monkeypatch.setattr(platform, "_graphs", {})
     with pytest.raises(RuntimeError, match="checkpointer"):
-        platform._compiled()
+        platform._compiled("support_graph")
+
+
+def test_a_converse_with_no_reply_introduces_the_assistant(cfg):
+    text = escalation._converse_fallback(cfg)
+    assert text.startswith("I'm DeployBot.") and "Cloud Run" in text

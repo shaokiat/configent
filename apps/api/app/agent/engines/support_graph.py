@@ -13,7 +13,6 @@ Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` 
 `escalate` take structured output and `answer` takes citations.
 """
 import time
-from typing import TypedDict
 
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
@@ -24,30 +23,20 @@ from app.agent.common import attr_or_key, collect_segments, excerpt
 from app.agent.escalation import _after_ticket, converse, escalate, ticket
 from app.agent.platform import Deps, Engine, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig
+from app.ingest import index_mismatch, ingest_client, preflight
 from app.retrieval import search as retrieval
 from app.retrieval.search import Hit
 
 
-class TurnState(TypedDict, total=False):
-    """What the checkpointer saves. Plain JSON: hits are dicts, not `Hit`."""
+class TurnState(platform.TurnState, total=False):
+    """The shared state plus what only this engine keeps. Hits are dicts, not `Hit`."""
 
-    question: str
-    history: list[dict]
-    conversation_id: str
-    run_id: str
-    level: int  # the tier the current evidence came from
     hits: list[dict]
     top_similarity: float
     grade: dict
     queries: list[str]
     keywords: str
     route: str  # chosen by decide_level1 / decide_level2; the edges only read it
-    why: str
-    draft: dict
-    ticket: dict
-    outcome: str  # "answer" | "converse" | "ticket"
-    answer: str
-    segments: list[dict]
     citations: list[dict]
 
 
@@ -213,7 +202,7 @@ async def grade(state: TurnState, runtime: Runtime[Deps]) -> dict:
         confidence=round(float(score.get("confidence", 0.0)), 4),
         kind=score.get("kind"),
     )
-    return {"grade": score, "route": route, "why": why}
+    return {"grade": score, "route": route, "why": why, "reply": score.get("reply")}
 
 
 
@@ -375,4 +364,6 @@ def summary(values: dict) -> dict:
     return {"confidence": round(float(values["grade"].get("confidence", 0.0)), 4)}
 
 
-ENGINE = Engine("support_graph", build(), first_stage, summary)
+ENGINE = Engine(
+    "support_graph", build, first_stage, summary, preflight, ingest_client, index_mismatch
+)

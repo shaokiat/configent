@@ -9,7 +9,8 @@ import pytest
 
 from app.agent import platform
 from app.config.registry import get_registry
-from tests.graph_fakes import Harness, grade, hit, outcome_of
+from app.config.schema import TextToSqlAgent
+from tests.graph_fakes import CLIENT, Harness, grade, hit, outcome_of
 
 _DRAFT = {
     "subject": "Cloud Run instance quota increase in europe-west1",
@@ -142,3 +143,25 @@ async def test_the_endpoint_rejects_an_unknown_client():
     with pytest.raises(HTTPException) as exc:
         await clients.file_proposed_ticket(client_id="no-such-client", run_id="run-1", db=None)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_confirming_resumes_the_engine_the_run_was_proposed_on(h):
+    """A config edit between the offer and the click must not move the thread to another graph."""
+    await _propose(h)
+    edited = h.cfg.model_copy(
+        update={
+            "agent": TextToSqlAgent(engine="text_to_sql", model="m", system_prompt_file="p.md"),
+            "corpus": None,
+        }
+    )
+    out = await platform.confirm_ticket(run_id="run-1", client_id=CLIENT, cfg=edited, db=h.db)
+    assert out["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_engine_is_not_compiled_is_unavailable(h):
+    await _propose(h)
+    h.runs["run-1"].engine = "gone"
+    with pytest.raises(platform.RunUnavailable):
+        await h.confirm()

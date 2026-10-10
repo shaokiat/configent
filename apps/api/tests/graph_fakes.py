@@ -110,9 +110,10 @@ def _recorder_class(runs: dict):
         """The real step logic; only the checkpoint session is replaced by a dict."""
 
         @classmethod
-        async def start(cls, conversation_id, client_id, first_stage):
+        async def start(cls, conversation_id, client_id, engine):
             recorder = cls(f"run-{len(runs) + 1}", conversation_id, client_id)
-            await recorder._persist(status="running", current_stage=first_stage)
+            await recorder._persist(status="running", current_stage=engine.first_stage)
+            runs[recorder.run_id].engine = engine.name  # _persist carries it forward
             return recorder
 
         async def _persist(self, *, status, current_stage):
@@ -120,6 +121,7 @@ def _recorder_class(runs: dict):
                 id=self.run_id,
                 conversation_id=self.conversation_id,
                 client_id=self.client_id,
+                engine=getattr(runs.get(self.run_id), "engine", None),
                 steps=list(self.steps),
                 status=status,
             )
@@ -146,9 +148,8 @@ class Harness:
         self.ticket_calls: list[dict] = []
         self.ticket_failures = 0
 
-        monkeypatch.setattr(
-            platform, "_graph", support_graph.ENGINE.graph.compile(checkpointer=InMemorySaver())
-        )
+        monkeypatch.setattr(platform, "_graphs", {})
+        platform.use_checkpointer(InMemorySaver(), [support_graph.ENGINE])
         monkeypatch.setattr(platform, "RunRecorder", _recorder_class(self.runs))
         monkeypatch.setattr(platform, "prepare_conversation", self._prepare)
         monkeypatch.setattr(retrieval, "retrieve", self._retrieve)
@@ -173,11 +174,9 @@ class Harness:
         return list(self.scenario.get("l2_hits") or [])
 
     async def _structured(self, _aclient, *, schema, user_content, **_k):
-        name = {
-            id(support_graph._GRADE_SCHEMA): "grade",
-            id(support_graph._REWRITE_SCHEMA): "rewrite",
-            id(escalation._DRAFT_SCHEMA): "draft",
-        }[id(schema)]
+        # By shape: the draft schema is built per client, so object identity can't name it.
+        props = schema["properties"]
+        name = "grade" if "confidence" in props else "rewrite" if "queries" in props else "draft"
         self.calls.append((name, user_content))
         if name == "grade":
             first = sum(1 for n, _ in self.calls if n == "grade") == 1
@@ -224,7 +223,7 @@ class Harness:
 
     async def confirm(self, run_id: str = "run-1", client_id: str = CLIENT) -> dict:
         return await platform.confirm_ticket(
-            engine=support_graph.ENGINE, run_id=run_id, client_id=client_id, cfg=self.cfg, db=self.db
+            run_id=run_id, client_id=client_id, cfg=self.cfg, db=self.db
         )
 
     def call_names(self) -> list[str]:

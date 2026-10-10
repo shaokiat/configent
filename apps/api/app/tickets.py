@@ -37,9 +37,11 @@ async def create_ticket(draft: dict[str, Any], *, run_id: str, stage_seq: int) -
     payload = {
         "subject": subject,
         "category": draft["category"],
-        "product_area": draft["product_area"],
+        "product_area": draft.get("product_area", "other"),
         "priority": draft.get("priority", "normal"),
     }
+    if draft.get("queue"):
+        payload["queue"] = draft["queue"]
     if draft.get("body"):
         payload["body"] = str(draft["body"]).strip()
 

@@ -1,10 +1,9 @@
 """The outcomes every engine shares: converse, escalate to a human, and file on confirmation.
 
-Engine-agnostic in intent, support-graph-shaped in fact for now: `converse` reads
-`state["grade"]` and the nodes log fixed levels. #17 decouples them.
+They read only `platform.TurnState`. An engine that wants `converse` to say something sets
+`reply`; one that has tiers sets `level`.
 """
 import time
-from typing import TYPE_CHECKING
 
 from langgraph.config import get_stream_writer
 from langgraph.graph import END
@@ -14,50 +13,23 @@ from langgraph.types import interrupt
 from app import tickets
 from app.agent import platform
 from app.agent.common import excerpt, trace_payload
-from app.agent.platform import Deps, _model_step, _prompt, _step, _transcript
+from app.agent.platform import Deps, TurnState, _model_step, _prompt, _step, _transcript
+from app.config.schema import ClientConfig, EscalationConfig
 from app.models import Trace
-
-if TYPE_CHECKING:  # annotation only: the engine imports this module, not the reverse
-    from app.agent.engines.support_graph import TurnState
 
 _TICKET_TOOL = "create_escalation_ticket"
 
-_DRAFT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "subject": {"type": "string"},
-        "category": {
-            "type": "string",
-            "enum": [
-                "account_config",
-                "quota_or_billing",
-                "incident",
-                "access_request",
-                "docs_gap",
-                "other",
-            ],
-        },
-        "product_area": {"type": "string", "enum": ["cloud_run", "gke", "iam", "other"]},
-        "priority": {"type": "string", "enum": ["low", "normal", "high"]},
-        "body": {"type": "string"},
-    },
-    "required": ["subject"],
-    "additionalProperties": False,
-}
+
+def _converse_fallback(cfg: ClientConfig) -> str:
+    b = cfg.branding
+    return f"I'm {b.assistant_name}. {b.tagline or 'What are you working on?'}"
 
 
-_CONVERSE_FALLBACK = (
-    "I answer Cloud Run, GKE and IAM questions from public Google Cloud documentation, with "
-    "citations — and when something depends on your own project, I can raise it with the "
-    "platform team. What are you working on?"
-)
-
-
-async def converse(state: "TurnState", runtime: Runtime[Deps]) -> dict:
-    """The one path with no passages behind the reply; `grade.md` forbids platform facts in it."""
+async def converse(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    """The one path with no evidence behind the reply; the grading prompt forbids tenant facts in it."""
     d, t = runtime.context, time.monotonic()
-    text = (state["grade"].get("reply") or "").strip() or _CONVERSE_FALLBACK
-    await _step(d, "converse", t, level=1, reasoning=state["why"])
+    text = (state.get("reply") or "").strip() or _converse_fallback(d.cfg)
+    await _step(d, "converse", t, level=state.get("level"), reasoning=state["why"])
     get_stream_writer()(("text", {"delta": text}))
     return {"outcome": "converse", "answer": text, "segments": [{"text": text, "citations": []}]}
 
@@ -65,15 +37,6 @@ async def converse(state: "TurnState", runtime: Runtime[Deps]) -> dict:
 # ── Level 3 ──────────────────────────────────────────────────────────────────────────
 
 _TICKET_DEFAULTS = {"category": "other", "product_area": "other", "priority": "normal"}
-
-_CATEGORY_LABEL = {
-    "account_config": "project configuration",
-    "quota_or_billing": "quota or billing",
-    "incident": "suspected incident",
-    "access_request": "access request",
-    "docs_gap": "documentation gap",
-    "other": "other",
-}
 
 
 def _normalise_draft(draft: dict, *, question: str) -> dict:
@@ -91,17 +54,16 @@ def _proposal_payload(draft: dict) -> dict:
     return {k: draft.get(k, "") for k in ("subject", "category", "product_area", "priority", "body")}
 
 
-def _proposal_reply(draft: dict) -> str:
-    category = _CATEGORY_LABEL.get(draft.get("category", "other"), "other")
+def _proposal_reply(draft: dict, esc: EscalationConfig) -> str:
+    category = esc.categories.get(draft.get("category", "other"), "other")
     return (
-        "That one needs a human: it depends on your own project configuration, and my "
-        "knowledge base is public Google Cloud documentation only.\n\n"
+        f"{esc.preamble}\n\n"
         f"I can open a **{category}** ticket for the platform team — "
         f'"{draft.get("subject", "")}". Say the word and I\'ll file it.'
     )
 
 
-def _escalation_reply(ticket: dict, ok: bool) -> str:
+def _escalation_reply(ticket: dict, ok: bool, esc: EscalationConfig) -> str:
     if not ok:
         return (
             "I couldn't reach the ticket system just now, so nothing was filed. Please retry "
@@ -110,13 +72,13 @@ def _escalation_reply(ticket: dict, ok: bool) -> str:
     eta = ticket.get("eta_hours")
     return (
         f"Done — I've opened **{ticket.get('ticket_id')}** with the "
-        f"{ticket.get('queue', 'platform')} team"
+        f"{ticket.get('queue') or esc.queue or 'support'} team"
         + (f", who aim to respond within {eta} hours" if eta else "")
         + f". You can follow it at {ticket.get('url')}."
     )
 
 
-async def escalate(state: "TurnState", runtime: Runtime[Deps]) -> dict:
+async def escalate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     """Draft the ticket and offer it. The model never places the call."""
     d, t = runtime.context, time.monotonic()
     raw, response = await platform._structured_call(
@@ -124,24 +86,26 @@ async def escalate(state: "TurnState", runtime: Runtime[Deps]) -> dict:
         model=d.cfg.agent.model,
         system=_prompt(d.cfg, "ticket_draft"),
         user_content=(
-            f"The assistant could not answer this from its documentation.\n"
+            f"The assistant could not answer this from its evidence.\n"
             f"Reason: {state['why']}\n\n"
             f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
             f"User's message:\n{state['question']}"
         ),
-        schema=_DRAFT_SCHEMA,
+        schema=d.cfg.escalation.draft_schema,
         max_tokens=768,
     )
     draft = _normalise_draft(raw, question=state["question"])
+    if d.cfg.escalation.queue:
+        draft["queue"] = d.cfg.escalation.queue  # sent with the ticket; the service honours it
     await _model_step(
         d, state, "escalate", t, response,
-        level=3,
+        level=3,  # "Level 3 is a human" holds for every engine
         reasoning=state["why"],
         category=draft["category"],
         product_area=draft["product_area"],
         priority=draft["priority"],
     )
-    text = _proposal_reply(draft)
+    text = _proposal_reply(draft, d.cfg.escalation)
     write = get_stream_writer()
     write(("ticket_proposal", {"run_id": state["run_id"], **_proposal_payload(draft)}))
     write(("text", {"delta": text}))
@@ -158,7 +122,7 @@ async def stage_ticket(draft: dict, *, run_id: str, stage_seq: int) -> dict:
     return await tickets.create_ticket(draft, run_id=run_id, stage_seq=stage_seq)
 
 
-async def ticket(state: "TurnState", runtime: Runtime[Deps]) -> dict:
+async def ticket(state: TurnState, runtime: Runtime[Deps]) -> dict:
     """Wait for the user, then file.
 
     Its own node because `interrupt()` re-runs its node from the top on resume: anything

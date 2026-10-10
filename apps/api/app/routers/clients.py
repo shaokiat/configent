@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.engines import support_graph
+from app.agent.engines import ENGINES
 from app.agent.limits import (
     BudgetExceeded,
     RateLimitExceeded,
@@ -17,7 +17,6 @@ from app.agent.platform import RunUnavailable, confirm_ticket, run_turn, stream_
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
-from app.ingest import index_mismatch
 from app.models import Conversation, Message, Run
 
 router = APIRouter(prefix="/api")
@@ -68,9 +67,9 @@ async def _check_conversation_ownership(
 
 
 async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
-    """Refuse to answer from an index the config no longer describes: the question would
-    be embedded with one model and compared against chunks embedded with another."""
-    reason = await index_mismatch(db, cfg)
+    """Refuse to answer from evidence the config no longer describes. For the support graph:
+    the question would be embedded with one model and compared against chunks from another."""
+    reason = await ENGINES[cfg.agent.engine].ready(db, cfg)
     if reason is not None:
         raise HTTPException(
             status_code=409,
@@ -78,7 +77,7 @@ async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
                 "error": "index_out_of_date",
                 "message": (
                     f"{reason} Restart the API to reconcile it, or run "
-                    f"`python -m app.cli --client {cfg.client_id}`."
+                    f"`make ingest CLIENT={cfg.client_id}`."
                 ),
             },
         )
@@ -138,7 +137,7 @@ async def chat(
     try:
         state = await run_turn(
             req.message,
-            engine=support_graph.ENGINE,
+            engine=ENGINES[cfg.agent.engine],
             cfg=cfg,
             client_id=client_id,
             conversation_id=req.conversation_id,
@@ -174,7 +173,7 @@ async def chat_stream(client_id: str, req: ChatRequest):
         async with AsyncSessionLocal() as db:
             async for name, data in stream_turn(
                 req.message,
-                engine=support_graph.ENGINE,
+                engine=ENGINES[cfg.agent.engine],
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
@@ -204,7 +203,7 @@ async def file_proposed_ticket(
     cfg = _client(client_id)
     try:
         return await confirm_ticket(
-            engine=support_graph.ENGINE, run_id=run_id, client_id=client_id, cfg=cfg, db=db
+            engine=ENGINES[cfg.agent.engine], run_id=run_id, client_id=client_id, cfg=cfg, db=db
         )
     except RunUnavailable as exc:
         # Also the answer when the run belongs to another client: a 404 leaks nothing

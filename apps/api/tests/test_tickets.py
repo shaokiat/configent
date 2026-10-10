@@ -44,12 +44,20 @@ async def test_escalation_ticket_reports_5xx_as_retryable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_escalation_ticket_rejects_bad_category_without_retrying():
+async def test_escalation_ticket_rejects_bad_input_without_retrying():
     """A 4xx is our bug. Retrying a validation failure is not resilience."""
     result = await tickets.create_ticket(
-        {"subject": "x", "category": "not_a_category", "product_area": "gke"},
+        {"subject": "x", "category": "other", "product_area": "gke", "priority": "urgent"},
         run_id="run-e",
         stage_seq=4,
     )
     assert result["retryable"] is False
     assert result["status_code"] == 422
+
+
+@pytest.mark.asyncio
+async def test_another_tenants_category_and_queue_are_accepted():
+    result = await tickets.create_ticket(
+        {"subject": "x", "category": "data_request", "queue": "race-data"}, run_id="run-f", stage_seq=1
+    )
+    assert (result["queue"], result["eta_hours"]) == ("race-data", 48)

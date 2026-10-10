@@ -334,7 +334,7 @@ pronoun follow-up or an exact identifier like `iam.serviceAccounts.actAs` could 
 - Web search is deliberately not in Level 2. Under D1, the questions that reach Level 3
   depend on the user's own project, which no public page can answer.
 
-### D11 — The loop engine is retired · LOCKED (decided and built 2026-09-11, #8)
+### D11 — The loop engine is retired · LOCKED, SUPERSEDED-IN-PART (decided and built 2026-09-11, #8; several engines return in D13)
 The free-form tool-use loop, its tool registry and tools, and the two clients that used it
 (Acme Fab Equipment, Meridian Insurance) are deleted. Every client runs the support graph.
 `AgentConfig` drops `mode`, `tools` and `effort`, and forbids unknown keys.
@@ -387,6 +387,57 @@ existed, so a YAML without it retrieves identically.
 `retrieve()`. That is deliberate: it gets its own engine (D13) until two engines share a
 source. `keyword.language` is deferred: the text-search configuration is baked into
 `chunks.text_search` as `'english'` for every tenant.
+
+### D13 — Engines return; config selects one, code defines it · LOCKED (decided and built 2026-10-08, #17)
+`agent.engine` picks one engine from `ENGINES` (`app/agent/engines/__init__.py`). The agent
+config is a union tagged by `engine`, so each engine accepts only its own keys. An engine is
+an `Engine`: a graph builder, a first stage, a `done`-payload summary, and the ingestion
+contract (`check`, `ingest`, `ready`).
+
+- **A new client of an existing pattern is a YAML file plus a sources folder; a new pattern
+  is code behind a stable seam.** Config selects and tunes an engine; it never describes
+  control flow.
+- **`engine` is required, no default.** A default would let the one existing YAML load
+  without saying which engine it runs.
+- **The platform owns the callers, the engine owns the meaning.** The CLI, startup
+  reconcile and the chat 409 guard call `check` / `ingest` / `ready`; the support graph
+  supplies `preflight`, `ingest_client` and `index_mismatch` unchanged.
+- **`corpus:` and `retrieval:` stay top-level and optional.** `support_graph` requires
+  `corpus:`; `text_to_sql` rejects both.
+- **Tenant data left platform code.** `escalation:` (required) holds the ticket categories,
+  product areas, queue and offer preamble; the draft schema is built from it once per
+  config. The mock ticket service takes any category and an optional queue.
+- **Shared nodes read `platform.TurnState`,** not the support graph's state: `converse`
+  reads `reply` and logs `level` if set; `escalate` and `ticket` log level 3.
+- **Runs remember their engine** (`runs.engine`, migration 0008). `confirm_ticket` resumes
+  the graph the run was proposed on, so a config edit between the offer and the click
+  cannot move a paused thread to a graph that never created it.
+- **The seam is tested by a second engine.** `tests/echo_engine.py` runs a full turn and a
+  propose-and-confirm round trip through the platform's entry points; it is test-only and
+  registered by a fixture.
+
+**Why:** the support graph's shape (grade, rewrite, regrade) is wrong for evidence that is
+not documents; a SQL query that fails is repaired, not regraded. Tenancy, limits, the step
+trail, checkpoints, cost, SSE, history and the outcome nodes are the same either way.
+
+**Alternatives rejected:**
+- Graphs declared in YAML: config would describe control flow, and every route D2 put in an
+  `if` becomes a string in a file.
+- A repo per use case: the platform claim is one codebase (P1).
+- Text-to-SQL as a Level 2 tool inside the support graph: DeployBot has no database, and a
+  query is repaired, not regraded.
+
+**What it supersedes:** D11 in part. Several engines, selected by config. The loop stays
+retired; no engine config has a `tools` key. D11 retired an engine nothing used; D13 adds
+one only together with a client that does (`f1-analyst`, #19).
+
+**Consequence:**
+- Two engines to keep tested; the echo test guards the seam.
+- Per-client customisation is content, not code. When a client needs more than notes, the
+  remedies in order are views in the client's database, more notes, then a code hook;
+  repeated hooks mean a new engine is due.
+- `TextToSqlAgent` is a stub until #18. A `text_to_sql` YAML loads but has no entry in
+  `ENGINES`.
 
 ---
 

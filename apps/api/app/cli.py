@@ -56,8 +56,8 @@ def ingest(
 
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+        from app.agent.engines import ENGINES
         from app.config.registry import ConfigRegistry
-        from app.ingest import ingest_client, preflight
 
         registry = ConfigRegistry(config_dir=_REPO_ROOT / "config")
         try:
@@ -66,8 +66,9 @@ def ingest(
             console.print(f"[red]Unknown client_id: {client!r}[/red]")
             raise typer.Exit(1)
 
+        engine = ENGINES[cfg.agent.engine]
         if check:
-            report = preflight(cfg, _REPO_ROOT)
+            report = engine.check(cfg, _REPO_ROOT)
             _print_report(report, report.failed)
             raise typer.Exit(1 if report.failed else 0)
 
@@ -81,7 +82,7 @@ def ingest(
         console.print(f"[bold]Ingesting corpus for [cyan]{client}[/cyan]...[/bold]")
 
         async with AsyncSession() as db:
-            stats = await ingest_client(db, cfg, repo_root=_REPO_ROOT, force=force)
+            stats = await engine.ingest(db, cfg, _REPO_ROOT, force=force)
 
         await engine.dispose()
 
