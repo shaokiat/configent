@@ -15,7 +15,7 @@ branding:
     - "Can you add the 2024 season?"
 agent:
   template: database
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   # answer.md; generate.md and ticket_draft.md sit beside it.
   system_prompt_file: prompts/f1-analyst/answer.md
   max_tokens: 2048

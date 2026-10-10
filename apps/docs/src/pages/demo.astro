@@ -19,7 +19,7 @@ corpus:
 
 agent:
   # Must have a row in config/pricing/claude.yaml, or startup fails.
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   # Retrieval below this similarity is discarded before the model sees it.
@@ -136,7 +136,7 @@ const conversedRun = {
           </div>
           <div class="meta-row">
             <span class="meta-key">Model</span>
-            <code class="meta-val">claude-haiku-4-5-20251001</code>
+            <code class="meta-val">anthropic/claude-haiku-4.5</code>
           </div>
           <div class="meta-row">
             <span class="meta-key">Corpus</span>

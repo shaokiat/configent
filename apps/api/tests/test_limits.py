@@ -14,7 +14,7 @@ from app.config.pricing import price_for
 from app.config.schema import LimitsConfig
 
 CLIENT = "gcp-platform-support"
-HAIKU = "claude-haiku-4-5-20251001"
+HAIKU = "anthropic/claude-haiku-4.5"
 _MTOK = 1_000_000
 
 
@@ -29,7 +29,7 @@ def test_cost_prices_each_token_kind_at_the_models_own_rate():
 def test_the_same_tokens_cost_less_on_haiku_than_on_sonnet():
     """The bug D8 fixed: every call was priced at Sonnet rates, whichever model ran."""
     haiku = UsageTotals(HAIKU, input_tokens=_MTOK, output_tokens=_MTOK)
-    sonnet = UsageTotals("claude-sonnet-4-6", input_tokens=_MTOK, output_tokens=_MTOK)
+    sonnet = UsageTotals("anthropic/claude-sonnet-4.6", input_tokens=_MTOK, output_tokens=_MTOK)
     assert haiku.cost_usd < sonnet.cost_usd
 
 

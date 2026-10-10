@@ -30,7 +30,7 @@ agent:
   # tag picks the template, and each template accepts only its own keys (D13).
   template: documents
   # The model must have a row in config/pricing/claude.yaml (D8).
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   # answer.md; grade.md, rewrite.md and ticket_draft.md sit beside it.
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -67,7 +67,7 @@ handoff:
 #     enabled: true
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
-  judge_model: claude-sonnet-4-6
+  judge_model: anthropic/claude-sonnet-4.6
 limits:
   rate_limit_per_minute: 60
   daily_budget_usd: 2.00

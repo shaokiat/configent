@@ -156,9 +156,9 @@ class Harness:
         monkeypatch.setattr(platform, "_structured_call", self._structured)
         monkeypatch.setattr(handoff, "stage_ticket", self._file)
         monkeypatch.setattr(
-            platform.anthropic,
-            "AsyncAnthropic",
-            lambda *_a, **_k: SimpleNamespace(messages=SimpleNamespace(stream=self._stream)),
+            platform.llm,
+            "async_client",
+            lambda: SimpleNamespace(messages=SimpleNamespace(stream=self._stream)),
         )
 
     # ── fakes ──────────────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ Citations flow through three layers:
 
 ```
 retrieved chunks
-  └─ search_result content blocks   → sent to Anthropic API
+  └─ search_result content blocks   → sent to Claude via OpenRouter
         └─ citations in response    → extracted from API response
               └─ segments           → stored in DB + sent to frontend
 ```

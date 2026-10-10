@@ -217,7 +217,7 @@ HandoffConfig = Annotated[MessageHandoff | TicketHandoff, Field(discriminator="m
 
 class EvalsConfig(BaseModel):
     golden_set: str
-    judge_model: str = "claude-sonnet-4-6"
+    judge_model: str = "anthropic/claude-sonnet-4.6"
 
 
 class LimitsConfig(BaseModel):

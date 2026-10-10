@@ -15,7 +15,7 @@ group: Getting Started
 
 - Python 3.12 and [uv](https://docs.astral.sh/uv/)
 - Docker (for Postgres + pgvector)
-- An [Anthropic API key](https://console.anthropic.com/)
+- An [OpenRouter API key](https://openrouter.ai/keys): every model call goes through it (D14)
 - A [Voyage AI API key](https://dash.voyageai.com/) — used for document and query embeddings (`voyage-3`)
 
 ## 1. Clone and install
@@ -53,7 +53,7 @@ with the `pgvector` extension enabled.
 Create `apps/api/.env`:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
+OPENROUTER_API_KEY=sk-or-...
 VOYAGE_API_KEY=pa-...
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/configent
 TICKET_API_URL=http://localhost:9000
@@ -83,7 +83,7 @@ corpus:
     overlap: 100
 
 agent:
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/my-assistant/answer.md
   max_tokens: 2048
 

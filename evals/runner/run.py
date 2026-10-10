@@ -1,6 +1,6 @@
 """Eval runner (#20). Drives real turns through `run_turn` and scores them with a suite.
 
-    cd apps/api && uv run python ../../evals/runner/run.py --client f1-analyst --suite bird --model claude-haiku-4-5-20251001
+    cd apps/api && uv run python ../../evals/runner/run.py --client f1-analyst --suite bird --model anthropic/claude-haiku-4.5
     ... --suite bird --dry-run     no model, no Postgres: gold SQL against itself
 
 Real runs call the Anthropic API and cost money; they are run by hand and the results committed.

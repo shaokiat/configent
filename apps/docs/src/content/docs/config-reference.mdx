@@ -93,7 +93,7 @@ Selects the client's template with `agent.template` (required, no default) and t
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `agent.template` | `string` | — | `documents` or `database`. A name with no registered template fails at load. |
-| `agent.model` | `string` | — | Claude model ID. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `claude-haiku-4-5-20251001`. |
+| `agent.model` | `string` | — | OpenRouter model id for a Claude model, such as `anthropic/claude-haiku-4.5` (D14). Only Claude models read `search_result` blocks, so another model cannot answer or cite. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `anthropic/claude-haiku-4.5`. |
 | `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |
 | `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. Applied by `retrieve` and the dense half of Level 2. |
@@ -105,7 +105,7 @@ Selects the client's template with `agent.template` (required, no default) and t
 ```yaml
 agent:
   template: documents
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   retrieval_drop_floor: 0.3
@@ -142,7 +142,7 @@ The [text-to-SQL template](/configent/docs/text-to-sql)'s keys (`template: datab
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `agent.model` | `string` | — | Claude model ID, priced in `config/pricing/claude.yaml` like any other. |
+| `agent.model` | `string` | — | OpenRouter id of a Claude model, priced in `config/pricing/claude.yaml` like any other. |
 | `agent.system_prompt_file` | `string` | — | Path to `answer.md`; `generate.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. |
 | `agent.database.dialect` | `string` | — | `sqlite` only. A Postgres client would be a second dialect, not another template. |
@@ -155,7 +155,7 @@ The [text-to-SQL template](/configent/docs/text-to-sql)'s keys (`template: datab
 ```yaml
 agent:
   template: database
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/f1-analyst/answer.md
   database:
     dialect: sqlite
@@ -230,7 +230,7 @@ The drop floor and `escalate_below` stay under `agent:`: they are a validated pa
 
 ```yaml
 # config/pricing/claude.yaml — USD per million tokens
-claude-haiku-4-5-20251001:
+anthropic/claude-haiku-4.5:
   input: 1.00
   output: 5.00
   cache_write: 1.25   # the 5-minute TTL
@@ -270,12 +270,12 @@ Configures automated evaluation against a golden set. Omit if not using evals.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `evals.golden_set` | `string` | — | Path to a `.jsonl` golden set, relative to the repo root. |
-| `evals.judge_model` | `string` | `claude-sonnet-4-6` | Claude model used as the LLM judge for eval scoring. |
+| `evals.judge_model` | `string` | `anthropic/claude-sonnet-4.6` | Claude model used as the LLM judge for eval scoring. |
 
 ```yaml
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
-  judge_model: claude-sonnet-4-6
+  judge_model: anthropic/claude-sonnet-4.6
 ```
 
 ---
@@ -307,7 +307,7 @@ corpus:
 
 agent:
   template: documents
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   retrieval_drop_floor: 0.3
@@ -333,7 +333,7 @@ handoff:
 
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
-  judge_model: claude-sonnet-4-6
+  judge_model: anthropic/claude-sonnet-4.6
 
 limits:
   rate_limit_per_minute: 60

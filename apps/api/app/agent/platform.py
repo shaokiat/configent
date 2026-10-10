@@ -21,6 +21,7 @@ from langgraph.graph import StateGraph
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import llm
 from app.agent.common import (
     UsageTotals,
     attr_or_key,
@@ -350,7 +351,7 @@ async def stream_turn(
         run_id = recorder.run_id
         yield ("run", {"run_id": run_id, "conversation_id": conversation_id})
 
-        deps = Deps(cfg, client_id, db, anthropic.AsyncAnthropic(), recorder)
+        deps = Deps(cfg, client_id, db, llm.async_client(), recorder)
         initial = {
             "question": user_message,
             "history": history,

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "79ffae22-4b11-4ebd-b5d7-94ad6b64e37d",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/shaokiat/Desktop/configent/.archify/architecture-deploybot-20261010-230744/candidate.json",
+  "output": "/Users/shaokiat/Desktop/configent/.archify/architecture-deploybot-20261010-230744/deploybot.html",
+  "specification": {
+    "sha256": "b3c318220f7175e52e37cc044533f573845f929cb6627ac1f41bf5b84ff1db3b",
+    "bytes": 6641
+  },
+  "artifact": {
+    "sha256": "a76014a7d078cf643fe2c1de266d5a699bc4b5e8e017770211f60d2fc034fd16",
+    "bytes": 776190
+  }
+}

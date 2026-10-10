@@ -24,7 +24,7 @@ VALID_CONFIG = {
     "handoff": {"message": "I couldn't find that. Email support@example.com."},
     "agent": {
         "template": "documents",
-        "model": "claude-sonnet-4-6",
+        "model": "anthropic/claude-sonnet-4.6",
         "system_prompt_file": "prompts/test.md",
         "max_tokens": 4096,
     },
@@ -120,7 +120,7 @@ def _load(tmp_path, **changes):
 
 _SQL_AGENT = {
     "template": "database",
-    "model": "claude-sonnet-4-6",
+    "model": "anthropic/claude-sonnet-4.6",
     "system_prompt_file": "p.md",
     "database": {"dialect": "sqlite", "path": "data/x.sqlite"},
     "context": {"source": "corpora/x/"},

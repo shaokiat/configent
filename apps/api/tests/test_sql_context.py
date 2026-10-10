@@ -24,7 +24,7 @@ def cfg():
             "handoff": {"message": "Ask the data team."},
             "agent": {
                 "template": "database",
-                "model": "claude-sonnet-4-6",
+                "model": "anthropic/claude-sonnet-4.6",
                 "system_prompt_file": "p.md",
                 "database": {"dialect": "sqlite", "path": "d.sqlite"},
                 "context": {"source": "notes/"},

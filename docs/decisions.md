@@ -480,6 +480,35 @@ trail is identical.
 **Why:** a client reads its YAML, and the word there should be the pitch's word. "Engine"
 named the mechanism; what a client chooses is the kind of source, documents or a database.
 
+### D14 — Model calls go through OpenRouter's Anthropic-compatible endpoint · LOCKED (decided and built 2026-10-10)
+Every model call uses the Anthropic SDK pointed at `https://openrouter.ai/api`, built in one
+place (`app/llm.py`) from `OPENROUTER_API_KEY`. Model ids are OpenRouter's
+(`anthropic/claude-haiku-4.5`), and `config/pricing/claude.yaml` is keyed by them.
+
+- **Nothing else changed.** Structured output (`output_config`), `search_result` citations,
+  `citations_delta` streaming and `cache_control` all pass through; verified live on Haiku 4.5.
+- **Claude only.** A non-Claude model on the same endpoint (GPT-4.1 nano, Gemini 2.5 Flash
+  Lite were tried) gets none of a `search_result` block's text, so it cannot answer or cite.
+  The cheap structured calls would work on one, but P4 is the product, so every call stays Claude.
+- **Haiku 4.5 is the default; Haiku 5.5 is priced and one YAML line away.** It is a tenth
+  of the price per token but always thinks first (`thinking: disabled` is not honoured
+  through OpenRouter), so output runs longer and a tight `max_tokens` can truncate.
+- **`count_tokens` is unavailable** through OpenRouter (404). The schema-context token count
+  in `--check` was already best-effort and now reports none.
+
+**Why:** one key and one bill for any model, while keeping the Anthropic request shape the
+whole answering path depends on. The direct Anthropic client needed only a base URL changed.
+
+**Alternatives rejected:**
+- OpenRouter's OpenAI-compatible API: loses `search_result` citations and structured output
+  in the Anthropic shape, so every answering and grading call would be rewritten.
+- Both providers behind a switch: model ids differ per provider, so it would need an id map
+  for no current user.
+
+**Consequence:** cost is still estimated from the checked-in table (D8); OpenRouter's own
+billing is the bill. Recoverable: `git show 21e863d:apps/api/app/agent/platform.py` has the
+direct `anthropic.AsyncAnthropic()` call.
+
 ---
 
 ## Part 3 — Known gaps
