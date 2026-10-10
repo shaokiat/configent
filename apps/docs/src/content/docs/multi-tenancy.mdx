@@ -7,9 +7,9 @@ order: 5
 
 Drop a YAML file in `config/`, documents in `corpora/<client_id>/` and prompts in `prompts/<client_id>/`, and a branded, isolated assistant goes live. No code changes, no redeployment.
 
-> **Two clients ship today,** one per engine: `gcp-platform-support` (support graph) and
+> **Two clients ship today,** one per template: `gcp-platform-support` (support graph) and
 > `f1-analyst` (text-to-SQL). Every boundary on this page is enforced on every request, and a
-> new tenant of an existing engine needs only its own files.
+> new tenant of an existing template needs only its own files.
 
 ---
 
@@ -117,7 +117,7 @@ The Next.js shell applies `primary_color` as the accent and renders `assistant_n
 |---------|-----------|
 | `branding` | `logo`, `primary_color`, `assistant_name`, `tagline`, `suggested_questions` |
 | `corpus` | `source`, `chunking.chunk_size`, `chunking.overlap` (support graph only) |
-| `agent` | `engine`, `model`, `system_prompt_file`, `max_tokens`, then the engine's own keys |
+| `agent` | `template`, `model`, `system_prompt_file`, `max_tokens`, then the template's own keys |
 | `escalation` | `queue`, `team`, `categories`, `product_areas`, `preamble` |
 | `evals` | `golden_set`, `judge_model` |
 | `limits` | `rate_limit_per_minute`, `daily_budget_usd` |

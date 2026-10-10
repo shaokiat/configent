@@ -6,7 +6,7 @@
 **Engagement type:** Internal deployment-support assistant (`gcp-platform-support` / **DeployBot**)
 
 > Written 2026-09-08, after week 1 shipped. It is dated deliberately: the pipeline was built
-> from `docs/support-agent-plan.md` without a brief, and the gap showed up as a product bug —
+> from a four-week plan without a brief (`git show ee1d326:docs/support-agent-plan.md`), and the gap showed up as a product bug —
 > see *Pain Points 4* and D9 in [`docs/decisions.md`](../docs/decisions.md).
 
 ---
@@ -108,7 +108,7 @@ Turns 1, 3 and 5 are the ones the week-1 pipeline gets wrong, and none of them a
   absent from a cited passage. Measured on the golden set, not asserted.
 - **Escalation recall over precision:** of the questions that genuinely need a human, ≥ 95%
   reach one. A false answer costs more than a false escalate (see the asymmetry section in
-  `docs/support-agent-plan.md`) — but "escalate everything" is not how it is bought.
+  the deleted support-agent plan) — but "escalate everything" is not how it is bought.
 - **Time to answer:** P90 < 10s for answerable questions; non-questions answer immediately.
 - **Consent:** no ticket is filed without the user seeing the draft and agreeing.
 

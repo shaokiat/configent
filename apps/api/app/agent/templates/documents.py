@@ -1,13 +1,15 @@
-"""The support graph: three tiers of escalation, each route chosen in Python (D10).
+"""The documents template, also called the support graph: three tiers, each route chosen in
+Python (D10).
 
     Level 1 · RAG             retrieve → grade ─┬─ answer | converse
     Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
-    Level 3 · human           escalate → ticket   (interrupt: the user confirms, then it files)
+    Level 3 · handoff         decline                 (handoff.mode: message)
+                              escalate → ticket       (handoff.mode: ticket; the user confirms, then it files)
 
 LangGraph owns two mechanisms: a checkpoint after every node, and the pause while a proposed
 ticket waits for the user (`interrupt()`). It owns no decisions. `decide_level1` and
 `decide_level2` are plain functions over YAML thresholds; the node stores the route and the
-edge only reads it. The answering model is never sent a tool, so it cannot escalate (D2).
+edge only reads it; `handoff.route` picks the client's handoff. The answering model is never sent a tool, so it cannot escalate (D2).
 
 Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` and
 `escalate` take structured output and `answer` takes citations.
@@ -19,8 +21,8 @@ from langgraph.runtime import Runtime
 
 from app.agent import platform
 from app.agent.common import collect_segments
-from app.agent.escalation import _after_ticket, converse, escalate, ticket
-from app.agent.platform import Deps, Engine, _model_step, _prompt, _step, _transcript
+from app.agent.handoff import _after_ticket, converse, decline, escalate, route, ticket
+from app.agent.platform import Deps, Template, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig
 from app.ingest import index_mismatch, ingest_client, preflight
 from app.retrieval import search as retrieval
@@ -28,7 +30,7 @@ from app.retrieval.search import Hit
 
 
 class TurnState(platform.TurnState, total=False):
-    """The shared state plus what only this engine keeps. Hits are dicts, not `Hit`."""
+    """The shared state plus what only this template keeps. Hits are dicts, not `Hit`."""
 
     hits: list[dict]
     top_similarity: float
@@ -82,7 +84,7 @@ def decide_level1(
     # Asked for a human: skip the search for an answer they didn't want. Still only a
     # proposal — nothing files until they confirm, so a misread costs one offer.
     if score.get("kind") == "handoff":
-        return "escalate", "the user asked for the platform team"
+        return "escalate", "the user asked for a person"
     if n_hits and top_similarity >= agent.escalate_below and confidence >= agent.confidence_threshold:
         return "answer", (
             f"similarity {top_similarity:.2f} and groundedness {confidence:.2f} both above "
@@ -307,10 +309,6 @@ async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
 # ── the graph ────────────────────────────────────────────────────────────────────────
 
 
-def _route(state: TurnState) -> str:
-    return state["route"]
-
-
 def build() -> StateGraph:
     g = StateGraph(TurnState, context_schema=Deps)
     g.add_node("retrieve", retrieve)
@@ -322,14 +320,16 @@ def build() -> StateGraph:
     g.add_node("answer", answer)
     g.add_node("escalate", escalate)
     g.add_node("ticket", ticket)
+    g.add_node("decline", decline)
     g.add_edge(START, "retrieve")
     g.add_edge("retrieve", "grade")
-    g.add_conditional_edges("grade", _route, ["answer", "converse", "rewrite", "escalate"])
+    g.add_conditional_edges("grade", route, ["answer", "converse", "rewrite", "escalate", "decline"])
     g.add_edge("rewrite", "hybrid_retrieve")
     g.add_edge("hybrid_retrieve", "regrade")
-    g.add_conditional_edges("regrade", _route, ["answer", "escalate"])
+    g.add_conditional_edges("regrade", route, ["answer", "escalate", "decline"])
     g.add_edge("answer", END)
     g.add_edge("converse", END)
+    g.add_edge("decline", END)
     g.add_edge("escalate", "ticket")
     g.add_conditional_edges("ticket", _after_ticket, ["ticket", END])
     return g
@@ -339,10 +339,10 @@ first_stage = "retrieve"
 
 
 def summary(values: dict) -> dict:
-    """What this engine adds to the `done` payload."""
+    """What this template adds to the `done` payload."""
     return {"confidence": round(float(values["grade"].get("confidence", 0.0)), 4)}
 
 
-ENGINE = Engine(
-    "support_graph", build, first_stage, summary, preflight, ingest_client, index_mismatch
+TEMPLATE = Template(
+    "documents", build, first_stage, summary, preflight, ingest_client, index_mismatch
 )

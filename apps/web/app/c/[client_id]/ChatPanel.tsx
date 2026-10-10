@@ -14,7 +14,7 @@ interface TurnMeta {
   cost_usd: number;
   latency_ms: number;
   cache_read_input_tokens: number;
-  // "answer" | "converse" | "ticket" (D9). Three-way, because a boolean cannot express
+  // "answer" | "converse" | "decline" | "ticket" (D9). Not a boolean, because a boolean cannot express
   // "this was not a support question" — the case that used to file a ticket.
   outcome?: string;
   confidence?: number;
@@ -325,6 +325,7 @@ const STAGE_LABEL: Record<string, string> = {
   answer: "Answered from sources",
   escalate: "Drafted a ticket for review",
   ticket: "Filed a ticket",
+  decline: "Couldn't answer from sources",
   generate: "Wrote a query",
   guard: "Checked the query",
   execute: "Ran the query",
@@ -355,6 +356,8 @@ function stageDetail(step: RunStep): string | null {
       );
     case "converse":
       return "no ticket";
+    case "decline":
+      return "handed off by message · no ticket";
     case "answer":
       return step.n_citations !== undefined ? `${step.n_citations} citations` : null;
     case "escalate":

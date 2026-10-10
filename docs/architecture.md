@@ -117,16 +117,18 @@ fire), any unknown `agent` key, and a model with no price.
 
 ## 4. The support graph
 
-The turn is a LangGraph `StateGraph` in `apps/api/app/agent/engines/support_graph.py` (the platform that runs it is `agent/platform.py`):
+The turn is a LangGraph `StateGraph` in `apps/api/app/agent/templates/documents.py` (the platform that runs it is `agent/platform.py`):
 
 ```
 Level 1 · RAG             retrieve → grade ─┬─ answer | converse
 Level 2 · corrective RAG  rewrite → hybrid_retrieve → regrade ─┬─ answer
-Level 3 · human           escalate → ticket   (interrupt → user confirms → file)
+Level 3 · handoff         decline                 (handoff.mode: message)
+                          escalate → ticket       (handoff.mode: ticket; interrupt → user confirms → file)
 ```
 
 - **Python decides every route.** `decide_level1` and `decide_level2` are plain functions
-  over config thresholds; the node stores the route and the edge only reads it.
+  over config thresholds; the node stores the route and the edge only reads it. The shared
+  edge, `handoff.route`, sends a can't-answer turn to the client's handoff (D9, amended).
 - **LangGraph owns mechanism only:** a Postgres checkpoint after every node, and the
   `interrupt()` pause while a ticket offer waits for the user.
 - **The answering call is sent no tools,** so escalation is unreachable from inside the model.

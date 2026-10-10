@@ -1,8 +1,7 @@
 # Decision log
 
 Every non-obvious choice in Configent, with the reasoning that produced it. Decisions
-are referenced by ID from [`docs/support-agent-plan.md`](support-agent-plan.md) and from
-code comments.
+are referenced by ID from code comments and the docs site.
 
 **Status key:** LOCKED — settled, build to it. OPEN — must be settled before the task
 that depends on it. SUPERSEDED — kept for the reasoning, no longer in force.
@@ -286,6 +285,24 @@ step costs a blocked user one extra turn — an accepted trade, listed as open q
 the brief. Tuning `escalate_below` is explicitly *not* the fix and is sequenced after this
 (W2-8), since a follow-up turn is a conversation-state problem, not a threshold problem.
 
+**Amended 2026-10-10 — "can't answer" now has a per-client action.** `handoff.mode` picks it:
+
+- **`message`, the default:** a `decline` node replies with configured text. No model call, no
+  ticket.
+- **`ticket`:** today's draft → offer → file once on confirmation (D4), unchanged. Both demo
+  clients keep it.
+- **The decision does not move.** `decide_level1`, `decide_level2` and `decide_sql` still
+  return `escalate`. The shared edge (`handoff.route`) turns that into `decline` for a
+  `message` client. The mode travels in the turn's state, because one compiled graph serves
+  every client of a template.
+- **The model's part, stated exactly:** the model reports what it saw (a `kind`, a confidence,
+  an error); Python picks the route. A `kind: handoff`, including the database template's
+  "data newer than 2017", is a signal like any other.
+- `outcome` gains `decline`.
+
+**Why:** most clients have no ticket queue. A fixed sentence that names a contact is the
+honest default, and it costs nothing per turn.
+
 ### D10 — The support agent is a LangGraph graph with three tiers of escalation · LOCKED (decided and built 2026-09-11, #4)
 `agent.mode: graph` replaces `pipeline`. The turn is a LangGraph `StateGraph`:
 
@@ -391,7 +408,11 @@ existed, so a YAML without it retrieves identically.
 source. `keyword.language` is deferred: the text-search configuration is baked into
 `chunks.text_search` as `'english'` for every tenant.
 
-### D13 — Engines return; config selects one, code defines it · LOCKED (decided and built 2026-10-08, #17)
+### D13 — Templates: config selects one, code defines it · LOCKED, AMENDED (decided and built 2026-10-08, #17; renamed from "Engines return" 2026-10-10)
+
+> The entry below is as decided, in the words of the time: read "engine" as "template". The
+> amendment at its end records the rename.
+
 `agent.engine` picks one engine from `ENGINES` (`app/agent/engines/__init__.py`). The agent
 config is a union tagged by `engine`, so each engine accepts only its own keys. An engine is
 an `Engine`: a graph builder, a first stage, a `done`-payload summary, and the ingestion
@@ -442,6 +463,23 @@ one only together with a client that does (`f1-analyst`, #19).
 - A config naming an `agent.engine` with no `ENGINES` entry fails at load. `text_to_sql`
   is registered with its ingestion contract (#18) and its graph (#19): generate → guard → execute, with one repair.
 
+**Amended 2026-10-10 — "engine" is now "template".** Behaviour unchanged; every pinned step
+trail is identical.
+
+- `agent.engine` → `agent.template`; `support_graph` → `documents`, `text_to_sql` → `database`.
+  A template is named for the evidence it reads, not for its method.
+- `ENGINES` → `TEMPLATES` (`app/agent/templates/`), `Engine` → `Template`,
+  `escalation.py` → `handoff.py`, `runs.engine` → `runs.template` (migration 0009 rewrites
+  the stored names, so a ticket offer pending across the deploy still resumes).
+- The rule is unchanged: **templates find evidence; the platform decides what to do with it.**
+- `escalation:` became `handoff:`, with a mode (D9, amended). The config now forbids unknown
+  top-level keys, so a leftover `escalation:` fails at load instead of sitting there inert.
+- **Recoverable:** the engine-named code is at `ee1d326`
+  (`git show ee1d326:apps/api/app/agent/engines/__init__.py`, `git ls-tree -r --name-only ee1d326 apps/api/app/agent/engines`).
+
+**Why:** a client reads its YAML, and the word there should be the pitch's word. "Engine"
+named the mechanism; what a client chooses is the kind of source, documents or a database.
+
 ---
 
 ## Part 3 — Known gaps
@@ -467,9 +505,9 @@ what it would take" is a better answer than a half-built version of it.
 | **No multi-hop engine** (D11). A question that needs one search to inform the next gets one extra search at most. | The loop that could chain searches served no loaded client. | A tool-holding research node inside the graph, still sent no ticket tool. |
 | **Nothing is prompt-cached on Haiku 4.5** (P5). The answering call's one breakpoint covers a ~750-token system prompt, under the model's 4,096-token minimum, and history has no breakpoint. | Haiku input is $1/MTok and support conversations are a few turns; caching a prompt this size would save a fraction of a cent per turn. | A breakpoint on the last history message for long conversations, or a model with a lower minimum. |
 | **No web search.** | No loaded client needs fresher data than its sources; DeployBot's unanswerable questions depend on the user's own project, which no public page holds (D1, D10). | A client-side search API normalised into a shared `Evidence` shape and graded like any other evidence. **Trigger:** a client needs fresher data than its sources hold. Design in #22. |
-| **No plug-in retrievers or shared `Evidence` type** (D12). | Each engine has one evidence source; an interface with one implementation per engine is ceremony. | Named slots per engine, filled by retriever ids in config. **Trigger:** a second engine needs the same evidence source (web search is the likely first). |
+| **No plug-in retrievers or shared `Evidence` type** (D12). | Each template has one evidence source; an interface with one implementation per engine is ceremony. | Named slots per engine, filled by retriever ids in config. **Trigger:** a second engine needs the same evidence source (web search is the likely first). |
 | **The full schema goes in the prompt.** | `formula_1`'s context fits comfortably and caches. | Schema retrieval: select tables per question before generating. **Trigger:** a schema no longer fits the context or stops caching economically. |
-| **No hybrid SQL + vector + rules engine.** | No client needs one; the accident-case pattern was considered and not built. | A third engine. **Trigger:** a hybrid use case is wanted. |
+| **No hybrid SQL + vector + rules template.** | No client needs one; the accident-case pattern was considered and not built. | A third engine. **Trigger:** a hybrid use case is wanted. |
 | **The text-search language is `english` for every tenant.** | One English corpus. The language is baked into the generated `chunks.text_search` column. | A per-client column or index (or a per-language generated column) and a validated `retrieval.keyword.language`. **Trigger:** a non-English corpus. |
 | **One embedding dimension for every tenant.** | One `Vector(1024)` column (P2); the config refuses models of another width. | A column or table per dimension, and a migration per new width. **Trigger:** a client needs a model of another width. |
 | **The ticket service is a mock in this repo.** | It exercises the real integration shape — HTTP, schema, idempotency key, retries, failure injection — without a vendor account. | A real ticketing API. The client swaps; the retry and idempotency paths don't. |

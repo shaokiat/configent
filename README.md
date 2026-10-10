@@ -2,21 +2,25 @@
 
 [![API CI](https://github.com/shaokiat/configent/actions/workflows/api-ci.yml/badge.svg)](https://github.com/shaokiat/configent/actions/workflows/api-ci.yml)
 
-**A platform for grounded assistants: one codebase, one YAML file per client.**
+**Configent turns a client's documents or database into an assistant that answers with
+sources and says so when it can't, optionally handing off to a human.**
 
-A grounded assistant retrieves evidence before it answers, answers only from it with
-citations, and escalates to a human when the evidence falls short. Python decides which of
-those happens, never the model. Documents are one kind of evidence and rows from a SQL
-database are another, so text-to-SQL counts as retrieval, with no vector index.
+One codebase; each client is one YAML file plus its sources. The config picks a **template**
+(the only per-use-case code: it prepares the sources and finds evidence) and a **handoff**
+(what happens when the evidence falls short: a fixed message, or a ticket the user
+confirms). Everything else (cited answers, the can't-answer decision, the run trail,
+checkpoints, cost, limits, streaming) is the shared platform. Python picks every route; the
+model only reports what it saw. Templates find evidence; the platform decides what to do
+with it.
 
-Two engines ship, each a LangGraph graph in its own module:
+Two templates ship, each a LangGraph graph in its own module:
 
-- **`support_graph`** (DeployBot): documents, a groundedness grade, corrective retrieval.
-- **`text_to_sql`** (PitWall, the `f1-analyst` client): the schema in the prompt, a guarded
+- **`documents`** (DeployBot): documents, a groundedness grade, corrective retrieval.
+- **`database`** (PitWall, the `f1-analyst` client): the schema in the prompt, a guarded
   read-only SELECT, the rows as evidence.
 
 A new client of an existing pattern is a YAML file plus a sources folder. A new pattern is
-code behind a stable seam: [Adding an engine](https://shaokiat.github.io/configent/docs/adding-an-engine/).
+code behind a stable seam: [Adding a template](https://shaokiat.github.io/configent/docs/adding-a-template/).
 
 Enterprise AI demos are usually generic — the prospect asks "does it know our
 documents?" and the honest answer is "not yet, give us a few weeks." The gap between
@@ -43,6 +47,7 @@ corpus:
     chunk_size: 512
     overlap: 64
 agent:
+  template: documents
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -52,13 +57,16 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
+handoff:
+  mode: ticket          # or omit for `mode: message`: reply with fixed text, no ticket
+  categories: [account_config, quota_or_billing, incident, access_request, docs_gap, other]
 limits:
   rate_limit_per_minute: 60
   daily_budget_usd: 2.00
 ```
 
-This file *is* the client: its branding, its documents, its prompts, its guardrail
-thresholds, its spend limits. Nothing else changes between tenants — same code, same
+This file *is* the client: its template, its branding, its documents, its prompts, its
+guardrail thresholds, its handoff, its spend limits. Nothing else changes between tenants — same code, same
 deployment, different YAML.
 
 ## Architecture
@@ -192,30 +200,26 @@ and rationale are in
 [From Pipeline to Graph](https://shaokiat.github.io/configent/docs/from-pipeline-to-graph/).
 The free-form tool-use loop that shipped beside it was then deleted:
 [Retiring the Loop](https://shaokiat.github.io/configent/docs/retiring-the-loop/).
-The original plan and exit gates: [`docs/support-agent-plan.md`](docs/support-agent-plan.md).
 
-**Text-to-SQL:** a second engine for the `f1-analyst` client (D13). The model writes one
+**Text-to-SQL:** a second template for the `f1-analyst` client (D13). The model writes one
 SELECT; a read-only connection with a deny-by-default authorizer runs it; the rows are the
 evidence for a cited answer. Eval results are not in yet (see
 [Text-to-SQL](https://shaokiat.github.io/configent/docs/text-to-sql/)).
 
 **In progress / planned:**
 - Resume for interrupted runs (checkpoints are written after every node; no endpoint yet)
-- Eval harness — golden sets + LLM judge (10 golden rows for the support client,
-  no runner or judge yet)
+- LLM judge for the eval runner (`make eval` runs the BIRD and triage suites; no judge yet)
 - Admin console for cost/latency/conversation observability
 - Live deployment (no hosted URL yet)
-- PDF ingestion (corpora are markdown-only today)
 
 ## Docs
 
 - [Architecture](docs/architecture.md)
-- [Support agent plan](docs/support-agent-plan.md) · [week-1 pipeline diagram](docs/support-agent-pipeline.html) (both superseded by D10)
 - [Decision log](docs/decisions.md) — including what this deliberately does not build
 - [Full docs site](https://shaokiat.github.io/configent/)
 - [Config reference](https://shaokiat.github.io/configent/docs/config-reference/)
 - [Examples](https://shaokiat.github.io/configent/docs/examples/)
-- [Adding an engine](https://shaokiat.github.io/configent/docs/adding-an-engine/) · [Text-to-SQL](https://shaokiat.github.io/configent/docs/text-to-sql/)
+- [Adding a template](https://shaokiat.github.io/configent/docs/adding-a-template/) · [Text-to-SQL](https://shaokiat.github.io/configent/docs/text-to-sql/)
 
 ## Data and attribution
 

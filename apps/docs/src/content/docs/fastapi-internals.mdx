@@ -58,7 +58,7 @@ return StreamingResponse(event_source(), media_type="text/event-stream", ...)
 **Sync path (`/chat`):**
 
 ```python
-state = await run_turn(req.message, engine=support_graph.ENGINE, cfg=cfg, ...)
+state = await run_turn(req.message, template=documents.TEMPLATE, cfg=cfg, ...)
 return ChatResponse(conversation_id=state["conversation_id"], reply=state["answer"], ...)
 ```
 
@@ -146,7 +146,7 @@ LangGraph's saver creates its own checkpoint tables on startup.
 | `ChatRequest` | `message: str`, `conversation_id: str \| None` |
 | `ChatResponse` | `conversation_id`, `reply`, `citations: list[dict]`, `segments: list[dict]` |
 
-**Internal types (`agent/common.py`, `agent/platform.py`, `agent/engines/support_graph.py`):**
+**Internal types (`agent/common.py`, `agent/platform.py`, `agent/templates/documents.py`):**
 
 | Type | Purpose |
 |---|---|

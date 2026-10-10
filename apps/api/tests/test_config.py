@@ -21,9 +21,9 @@ VALID_CONFIG = {
         "assistant_name": "TestBot",
     },
     "corpus": {"source": "corpora/test/", "chunking": {"chunk_size": 800, "overlap": 100}},
-    "escalation": {"categories": ["other"]},
+    "handoff": {"message": "I couldn't find that. Email support@example.com."},
     "agent": {
-        "engine": "support_graph",
+        "template": "documents",
         "model": "claude-sonnet-4-6",
         "system_prompt_file": "prompts/test.md",
         "max_tokens": 4096,
@@ -64,7 +64,7 @@ def test_a_model_with_no_price_fails_at_load(tmp_path):
 
 
 def test_gcp_platform_support_config_loads():
-    """The support-agent build's primary client (docs/support-agent-plan.md)."""
+    """The support-agent build's primary client (D1, D9)."""
     from app.config.registry import get_registry
 
     cfg = get_registry().get("gcp-platform-support")
@@ -81,9 +81,9 @@ def test_gcp_platform_support_runs_corrective_retrieval():
 
 
 def _agent(**overrides):
-    from app.config.schema import SupportGraphAgent
+    from app.config.schema import DocumentsAgent
 
-    return SupportGraphAgent(engine="support_graph", model="m", system_prompt_file="p.md", **overrides)
+    return DocumentsAgent(template="documents", model="m", system_prompt_file="p.md", **overrides)
 
 
 @pytest.mark.parametrize(
@@ -92,7 +92,7 @@ def _agent(**overrides):
     ids=["mode-loop", "mode-pipeline", "tools", "effort"],
 )
 def test_a_retired_engine_key_fails_loudly(stale):
-    """D11: a key from a retired engine must not load and read like a live capability."""
+    """D11: a key from a retired template must not load and read like a live capability."""
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         _agent(**stale)
 
@@ -119,7 +119,7 @@ def _load(tmp_path, **changes):
 
 
 _SQL_AGENT = {
-    "engine": "text_to_sql",
+    "template": "database",
     "model": "claude-sonnet-4-6",
     "system_prompt_file": "p.md",
     "database": {"dialect": "sqlite", "path": "data/x.sqlite"},
@@ -127,52 +127,73 @@ _SQL_AGENT = {
 }
 
 
-def test_an_agent_with_no_engine_fails_naming_the_field(tmp_path):
-    agent = {k: v for k, v in VALID_CONFIG["agent"].items() if k != "engine"}
-    with pytest.raises(ValueError, match="c.yaml.*engine"):
+def test_an_agent_with_no_template_fails_naming_the_field(tmp_path):
+    agent = {k: v for k, v in VALID_CONFIG["agent"].items() if k != "template"}
+    with pytest.raises(ValueError, match="c.yaml.*template"):
         _load(tmp_path, agent=agent)
 
 
-def test_a_text_to_sql_client_cannot_carry_a_corpus(tmp_path):
-    with pytest.raises(ValueError, match="belongs to the support_graph engine"):
+def test_a_database_client_cannot_carry_a_corpus(tmp_path):
+    with pytest.raises(ValueError, match="belongs to the documents template"):
         _load(tmp_path, agent=_SQL_AGENT)  # VALID_CONFIG still has corpus:
     cfg = _load(tmp_path, agent=_SQL_AGENT, corpus=None).get("test-client")
     assert cfg.corpus is None and cfg.retrieval is None
 
 
-def test_a_support_graph_key_under_a_text_to_sql_agent_fails(tmp_path):
+def test_a_documents_key_under_a_database_agent_fails(tmp_path):
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         _load(tmp_path, agent={**_SQL_AGENT, "corrective": {"enabled": True}}, corpus=None)
 
 
-def test_a_support_graph_client_needs_a_corpus_and_gets_default_retrieval(tmp_path):
+def test_a_documents_client_needs_a_corpus_and_gets_default_retrieval(tmp_path):
     with pytest.raises(ValueError, match="corpus: is required"):
         _load(tmp_path, corpus=None)
     assert _load(tmp_path).get("test-client").retrieval.top_k == 5
 
 
-def test_escalation_must_exist_and_include_other(tmp_path):
+_TICKET = {"mode": "ticket", "categories": ["other"]}
+
+
+def test_handoff_is_required_and_defaults_to_a_message(tmp_path):
+    with pytest.raises(ValueError, match="handoff"):
+        _load(tmp_path, handoff=None)
+    h = _load(tmp_path).get("test-client").handoff
+    assert h.mode == "message" and "support@example.com" in h.message
+
+
+def test_a_message_handoff_needs_its_text_and_takes_no_ticket_keys(tmp_path):
+    with pytest.raises(ValueError, match="handoff.message.message"):
+        _load(tmp_path, handoff={"mode": "message"})
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _load(tmp_path, handoff={"message": "x", "queue": "support"})
+
+
+def test_the_old_escalation_block_fails_at_load(tmp_path):
     with pytest.raises(ValueError, match="escalation"):
-        _load(tmp_path, escalation=None)
+        _load(tmp_path, escalation=_TICKET)
+
+
+def test_a_ticket_handoff_must_include_other(tmp_path):
     with pytest.raises(ValueError, match="'other'"):
-        _load(tmp_path, escalation={"categories": {"incident": "incident"}})
+        _load(tmp_path, handoff={"mode": "ticket", "categories": {"incident": "incident"}})
 
 
-def test_the_draft_schema_follows_the_tenants_escalation_block(tmp_path):
-    esc = _load(tmp_path).get("test-client").escalation
+def test_the_draft_schema_follows_the_tenants_handoff_block(tmp_path):
+    esc = _load(tmp_path, handoff=_TICKET).get("test-client").handoff
     props = esc.draft_schema["properties"]
     assert props["category"]["enum"] == ["other"] and "product_area" not in props
     assert esc.draft_schema is esc.draft_schema  # built once per config
     esc = _load(
-        tmp_path, escalation={"categories": ["other", "data_request"], "product_areas": ["a", "other"]}
-    ).get("test-client").escalation
+        tmp_path,
+        handoff={"mode": "ticket", "categories": ["other", "data_request"], "product_areas": ["a", "other"]},
+    ).get("test-client").handoff
     assert esc.categories["data_request"] == "data request"
     assert esc.draft_schema["properties"]["product_area"]["enum"] == ["a", "other"]
 
 
-def test_an_engine_with_no_registry_entry_fails_at_load(tmp_path, monkeypatch):
-    from app.agent.engines import ENGINES
+def test_a_template_with_no_registry_entry_fails_at_load(tmp_path, monkeypatch):
+    from app.agent.templates import TEMPLATES
 
-    monkeypatch.delitem(ENGINES, "text_to_sql")
-    with pytest.raises(ValueError, match="c.yaml.*text_to_sql.*no engine registered"):
+    monkeypatch.delitem(TEMPLATES, "database")
+    with pytest.raises(ValueError, match="c.yaml.*database.*no template registered"):
         _load(tmp_path, agent=_SQL_AGENT, corpus=None)

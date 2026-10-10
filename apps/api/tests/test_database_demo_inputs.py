@@ -1,4 +1,4 @@
-"""The text-to-SQL engine end to end with the model faked: the real guard, the real SQLite
+"""The text-to-SQL template end to end with the model faked: the real guard, the real SQLite
 (a small fixture database), the real graph, checkpointer and recorder."""
 import sqlite3
 
@@ -6,8 +6,8 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent import platform
-from app.agent.engines import text_to_sql
-from app.agent.engines.text_to_sql import decide_sql
+from app.agent.templates import database
+from app.agent.templates.database import decide_sql
 from app.config.registry import get_registry
 from app.sql.guard import Verdict
 from tests.graph_fakes import Harness, _response, named, outcome_of, stages_of, text_of
@@ -36,7 +36,7 @@ def h(monkeypatch, tmp_path):
         update={"agent": cfg.agent.model_copy(update={"database": cfg.agent.database.model_copy(update={"path": str(path)})})}
     )
     h = Harness(monkeypatch, cfg)
-    platform.use_checkpointer(InMemorySaver(), [text_to_sql.ENGINE])
+    platform.use_checkpointer(InMemorySaver(), [database.TEMPLATE])
     h.generate_calls: list[dict] = []
     h.executed: list[str] = []
 
@@ -52,15 +52,15 @@ def h(monkeypatch, tmp_path):
             return dict(h.scenario["repair"]), _response()
         return dict(h.scenario.get("draft") or {"subject": "Add the 2024 season", "category": "missing_data"}), _response()
 
-    real_run = text_to_sql.run_query
+    real_run = database.run_query
 
     async def run(path, sql, **kw):
         h.executed.append(sql)
         return await real_run(path, sql, **kw)
 
-    monkeypatch.setattr(text_to_sql, "_system", system)
+    monkeypatch.setattr(database, "_system", system)
     monkeypatch.setattr(platform, "_structured_call", structured)
-    monkeypatch.setattr(text_to_sql, "run_query", run)
+    monkeypatch.setattr(database, "run_query", run)
     return h
 
 
@@ -68,7 +68,7 @@ async def turn(h, message, **scenario):
     h.scenario = scenario
     return [
         e async for e in platform.stream_turn(
-            message, engine=text_to_sql.ENGINE, cfg=h.cfg, client_id=CLIENT, conversation_id=None, db=h.db
+            message, template=database.TEMPLATE, cfg=h.cfg, client_id=CLIENT, conversation_id=None, db=h.db
         )
     ]
 
@@ -127,6 +127,16 @@ async def test_a_handoff_offers_a_ticket_and_files_once_on_confirm(h):
     assert len(h.ticket_calls) == 1 and h.ticket_calls[0]["draft"]["queue"] == "data-team"
 
 
+async def test_a_message_handoff_declines_with_no_model_call_after_generate(h):
+    from app.config.schema import MessageHandoff
+
+    h.cfg = h.cfg.model_copy(update={"handoff": MessageHandoff(mode="message", message="The data stops in 2017.")})
+    events = await turn(h, "Can you add the 2024 season?", generate={"kind": "handoff", "sql": "", "reasoning": "newer data", "reply": ""})
+    assert outcome_of(events) == "decline" and stages_of(events) == ["generate", "decline"]
+    assert text_of(events) == "The data stops in 2017."
+    assert [name for name, _ in h.calls] == ["generate"] and not h.ticket_calls
+
+
 async def test_an_empty_sql_question_escalates_when_no_repairs_remain(h):
     h.cfg = h.cfg.model_copy(update={"agent": h.cfg.agent.model_copy(update={"repair_attempts": 0})})
     events = await turn(h, "?", generate=q(""))
@@ -140,7 +150,7 @@ async def test_zero_rows_still_answers(h):
 
 
 def test_the_answer_request_has_no_tools_and_rows_in_a_search_result(h):
-    kw = text_to_sql.answer_request_kwargs(
+    kw = database.answer_request_kwargs(
         h.cfg, client_id=CLIENT, sql="SELECT 1", reasoning="one", columns=["a"], rows=[[1]],
         truncated=False, question="q", history=[],
     )
@@ -172,4 +182,4 @@ def test_decide_sql(h):
 async def test_a_missing_database_makes_ready_refuse_not_the_load_fail(h):
     cfg = get_registry().get(CLIENT)  # loaded fine although data/bird may be absent
     cfg = cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"database": cfg.agent.database.model_copy(update={"path": "nope.sqlite"})})})
-    assert "make data-bird" in await text_to_sql.ENGINE.ready(None, cfg)
+    assert "make data-bird" in await database.TEMPLATE.ready(None, cfg)

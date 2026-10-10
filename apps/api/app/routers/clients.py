@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.engines import ENGINES
 from app.agent.limits import (
     BudgetExceeded,
     RateLimitExceeded,
@@ -14,6 +13,7 @@ from app.agent.limits import (
     check_rate_limit,
 )
 from app.agent.platform import RunUnavailable, confirm_ticket, run_turn, stream_turn
+from app.agent.templates import TEMPLATES
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
@@ -69,7 +69,7 @@ async def _check_conversation_ownership(
 async def _enforce_index_current(db: AsyncSession, cfg: ClientConfig) -> None:
     """Refuse to answer from evidence the config no longer describes. For the support graph:
     the question would be embedded with one model and compared against chunks from another."""
-    reason = await ENGINES[cfg.agent.engine].ready(db, cfg)
+    reason = await TEMPLATES[cfg.agent.template].ready(db, cfg)
     if reason is not None:
         raise HTTPException(
             status_code=409,
@@ -137,7 +137,7 @@ async def chat(
     try:
         state = await run_turn(
             req.message,
-            engine=ENGINES[cfg.agent.engine],
+            template=TEMPLATES[cfg.agent.template],
             cfg=cfg,
             client_id=client_id,
             conversation_id=req.conversation_id,
@@ -173,7 +173,7 @@ async def chat_stream(client_id: str, req: ChatRequest):
         async with AsyncSessionLocal() as db:
             async for name, data in stream_turn(
                 req.message,
-                engine=ENGINES[cfg.agent.engine],
+                template=TEMPLATES[cfg.agent.template],
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
@@ -202,9 +202,7 @@ async def file_proposed_ticket(
     """
     cfg = _client(client_id)
     try:
-        return await confirm_ticket(
-            engine=ENGINES[cfg.agent.engine], run_id=run_id, client_id=client_id, cfg=cfg, db=db
-        )
+        return await confirm_ticket(run_id=run_id, client_id=client_id, cfg=cfg, db=db)
     except RunUnavailable as exc:
         # Also the answer when the run belongs to another client: a 404 leaks nothing
         # about whether that run exists (P8 — tenancy is enforced here, not by the DB).

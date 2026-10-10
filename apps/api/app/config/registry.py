@@ -42,14 +42,14 @@ def _load_all(config_dir: Path) -> dict[str, ClientConfig]:
                 f"Duplicate client_id {cfg.client_id!r} in {path.name} and {existing.name}"
             )
 
-        # Imported here: the engines import the config schema. A tag in the schema union with
-        # no engine behind it would only fail on the first chat request.
-        from app.agent.engines import ENGINES
+        # Imported here: the templates import the config schema. A tag in the schema union with
+        # no template behind it would only fail on the first chat request.
+        from app.agent.templates import TEMPLATES
 
-        if cfg.agent.engine not in ENGINES:
+        if cfg.agent.template not in TEMPLATES:
             raise ValueError(
-                f"Config error in {path.name}: agent.engine {cfg.agent.engine!r} has no engine "
-                f"registered (known: {sorted(ENGINES)})"
+                f"Config error in {path.name}: agent.template {cfg.agent.template!r} has no template "
+                f"registered (known: {sorted(TEMPLATES)})"
             )
 
         # An unpriced model would report every turn as free (D8)

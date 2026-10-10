@@ -1,6 +1,6 @@
 """The schema context (#18): the DDL introspected from the client's database, merged with the
 column descriptions, glossary and rules the notes folder holds, rendered as one prompt block.
-This engine's ingestion contract lives here: check, ingest, ready."""
+This template's ingestion contract lives here: check, ingest, ready."""
 import asyncio
 import csv
 import hashlib

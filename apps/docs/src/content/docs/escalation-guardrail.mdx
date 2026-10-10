@@ -9,7 +9,7 @@ import Mermaid from '@/components/Mermaid.astro';
 
 The guardrail is every route in the graph, and it is plain Python. `decide_level1` and `decide_level2` read the signals from [retrieval](/configent/docs/retrieval) and [grading](/configent/docs/grading), compare them to configured thresholds, and return the route **and the reason for it**. The grade node writes both to state; the edge only reads the route.
 
-No model is consulted, and none can override it. This is the component the whole engine exists to make possible.
+No model is consulted, and none can override it. This is the component the whole graph exists to make possible.
 
 ---
 
@@ -96,7 +96,7 @@ The trade is stated in the trail: a Level 2 answer's reason names groundedness o
 - **The route is a string on state.** The grade node calls the decide function and writes `route`; the conditional edge is a one-line `state["route"]` lookup. LangGraph never evaluates a condition.
 - **The answer check runs first.** Strong evidence answers even when the grader called the message conversation.
 - **`converse` has to be asked for.** A missing or malformed `kind` is a question, so a broken grade can never become small talk.
-- **No model is asked whether to escalate.** The `escalate` node drafts ticket fields *after* the route is chosen. See [Escalation & Ticket](/configent/docs/escalation-ticket).
+- **No model is asked whether to escalate.** The `escalate` node drafts ticket fields *after* the route is chosen. See [Handoff & Ticket](/configent/docs/escalation-ticket).
 - **"Escalate" is not "file a ticket".** It is an offer the user confirms. Nothing reaches the queue unrequested.
 - **There is no decision step in the trail.** The reason is recorded on the step the route produced, which keeps the trail one entry per unit of work.
 

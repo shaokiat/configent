@@ -76,7 +76,7 @@ One Postgres holds the relational data, the vectors, the full-text index and the
 
 ## A graph, not a tool loop
 
-The reference client runs the support graph. A client chooses one engine with `agent.engine`; the second is [text-to-SQL](/configent/docs/text-to-sql), and [adding one](/configent/docs/adding-an-engine) is code behind a stable seam. The alternative, a model looping over tools until it stops, shipped beside it until D11.
+The reference client runs the support graph. A client chooses one template with `agent.template`; the second is [text-to-SQL](/configent/docs/text-to-sql), and [adding one](/configent/docs/adding-a-template) is code behind a stable seam. The alternative, a model looping over tools until it stops, shipped beside it until D11.
 
 | | Tool-use loop (retired) | Support graph |
 |---|---|---|
@@ -98,7 +98,7 @@ A model holding the ticket tool cannot make this project's claim, that escalatio
 | Embeddings | Voyage `voyage-3` | Anthropic has no embeddings API, so a third party is required either way. Voyage exposes `input_type` query/document, a [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
 | Vector and keyword search | pgvector + Postgres full-text | Already inside the Postgres we need. A dedicated search service would be a [second system for no gain at this scale](/configent/docs/ingestion-pipeline#voyage-ai-vs-pgvector) |
 | Backend | FastAPI + async SQLAlchemy | Native `async` all the way down, which is what makes I/O-bound nodes and SSE cheap |
-| Agent runtime | LangGraph, for checkpoints and the ticket pause | Model calls, routing and citations stay plain code. [Why a framework](/configent/docs/from-pipeline-to-graph) · [Why one engine](/configent/docs/retiring-the-loop) |
+| Agent runtime | LangGraph, for checkpoints and the ticket pause | Model calls, routing and citations stay plain code. [Why a framework](/configent/docs/from-pipeline-to-graph) · [Why the loop was retired](/configent/docs/retiring-the-loop) |
 | Transport | SSE | One-way server push over plain HTTP. WebSockets buy nothing when only the server talks. [Details](/configent/docs/sse-streaming) |
 | Frontend | Next.js + Tailwind | Client-agnostic; branding comes from the API, not the build |
 
@@ -116,7 +116,7 @@ The questions worth asking about this project, and the page that answers each.
 | Why two escalation signals rather than one? | [The Guardrail](/configent/docs/escalation-guardrail) |
 | Why search a second time before involving a human, and why not the web? | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
 | How do you stop the model from escalating on its own? | [Answering](/configent/docs/answering) |
-| How do you avoid filing the same ticket twice? | [Escalation & Ticket](/configent/docs/escalation-ticket) |
+| How do you avoid filing the same ticket twice? | [Handoff & Ticket](/configent/docs/escalation-ticket) |
 | Why adopt LangGraph after building without it? | [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph) |
 | Why delete the free-form agent loop? | [Retiring the Loop](/configent/docs/retiring-the-loop) |
 | What happens if the process dies mid-turn? | [Runs & Durability](/configent/docs/runs-and-durability) |
@@ -135,8 +135,8 @@ The terms the rest of the docs use without re-defining.
 - **Chunk:** a passage of a document (512 tokens for the support agent), embedded and stored as a row in pgvector. Retrieval returns chunks, not documents, so a citation can point at a paragraph.
 - **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. Ranges 0 to 1; the support agent discards anything below `0.3`.
 - **Groundedness:** a cheap-model score for whether the retrieved passages actually support an answer. Similarity says "close"; groundedness says "sufficient".
-- **Node:** one unit of the graph engine: `retrieve`, `grade`, `converse`, `rewrite`, `hybrid_retrieve`, `regrade`, `answer`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
-- **Level / tier:** Level 1 is RAG, Level 2 is corrective RAG, Level 3 is a human. A turn only moves down when the level above falls short.
+- **Node:** one unit of the graph: `retrieve`, `grade`, `converse`, `rewrite`, `hybrid_retrieve`, `regrade`, `answer`, `decline`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
+- **Level / tier:** Level 1 is RAG, Level 2 is corrective RAG, Level 3 is the client's handoff: a message, or a ticket for a human. A turn only moves down when the level above falls short.
 - **The two signals:** retrieval similarity (is anything in the corpus close?) and groundedness (is it enough?). One catches a corpus with nothing relevant; the other catches a corpus with something close but wrong.
 - **The routes:** `decide_level1` and `decide_level2`, the plain functions that choose every edge. Nodes do work; only these decide.
 - **Corrective retrieval:** Level 2. A rewrite of the question with the conversation in view, then hybrid search.

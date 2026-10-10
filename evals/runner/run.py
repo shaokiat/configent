@@ -40,7 +40,7 @@ async def one_turn(cfg, case, db):
     from sqlalchemy import func, select
 
     from app.agent import platform
-    from app.agent.engines import ENGINES
+    from app.agent.templates import TEMPLATES
     from app.models import Conversation, Message, Trace
 
     conv_id = None
@@ -52,7 +52,7 @@ async def one_turn(cfg, case, db):
         await db.commit()
         conv_id = conv.id
     state = await platform.run_turn(
-        case["message"], engine=ENGINES[cfg.agent.engine], cfg=cfg,
+        case["message"], template=TEMPLATES[cfg.agent.template], cfg=cfg,
         client_id=cfg.client_id, conversation_id=conv_id, db=db,
     )
     t = (
@@ -77,7 +77,7 @@ async def main(args) -> int:
     from langgraph.checkpoint.memory import InMemorySaver
 
     from app.agent import platform
-    from app.agent.engines import ENGINES, text_to_sql
+    from app.agent.templates import TEMPLATES, database
     from app.config.registry import ConfigRegistry
     from app.database import AsyncSessionLocal
     from app.models import EvalRun
@@ -88,12 +88,12 @@ async def main(args) -> int:
     if args.variant == "naive":
         async def no_schema(d):  # the same prompt with the schema section left out
             return f"{platform._prompt(d.cfg, 'generate')}\n\n## Database schema and notes\n\n(none)"
-        text_to_sql._system = no_schema
-    platform.use_checkpointer(InMemorySaver(), ENGINES.values())  # evals need no durable pause
+        database._system = no_schema
+    platform.use_checkpointer(InMemorySaver(), TEMPLATES.values())  # evals need no durable pause
 
     results = []
     async with AsyncSessionLocal() as db:
-        if args.variant == "schema" and (why := await ENGINES[cfg.agent.engine].ready(db, cfg)):
+        if args.variant == "schema" and (why := await TEMPLATES[cfg.agent.template].ready(db, cfg)):
             sys.exit(f"not ready: {why}")
         for i, case in enumerate(cases, 1):
             t0 = time.monotonic()

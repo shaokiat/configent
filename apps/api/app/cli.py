@@ -56,7 +56,7 @@ def ingest(
 
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        from app.agent.engines import ENGINES
+        from app.agent.templates import TEMPLATES
         from app.config.registry import ConfigRegistry
         from app.ingest import IngestReport
 
@@ -67,13 +67,13 @@ def ingest(
             console.print(f"[red]Unknown client_id: {client!r}[/red]")
             raise typer.Exit(1)
 
-        eng = ENGINES[cfg.agent.engine]
+        eng = TEMPLATES[cfg.agent.template]
         if check:
             report = eng.check(cfg, _REPO_ROOT)
             if isinstance(report, IngestReport):
                 _print_report(report, report.failed)
             else:
-                report.show(console)  # a text_to_sql client has no corpus folder
+                report.show(console)  # a database client has no corpus folder
             raise typer.Exit(1 if report.failed else 0)
 
         db_url = os.getenv(

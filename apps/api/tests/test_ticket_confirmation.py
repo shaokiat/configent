@@ -9,7 +9,7 @@ import pytest
 
 from app.agent import platform
 from app.config.registry import get_registry
-from app.config.schema import TextToSqlAgent
+from app.config.schema import DatabaseAgent
 from tests.graph_fakes import CLIENT, Harness, grade, hit, outcome_of
 
 _DRAFT = {
@@ -123,7 +123,7 @@ async def test_the_endpoint_turns_an_unavailable_run_into_a_404(monkeypatch):
 
     from app.routers import clients
 
-    async def _refuse(**_k):
+    async def _refuse(*, run_id, client_id, cfg, db):  # the real signature, so a stray kwarg fails
         raise platform.RunUnavailable("Run 'run-1' not found")
 
     monkeypatch.setattr(clients, "confirm_ticket", _refuse)
@@ -151,8 +151,8 @@ async def test_confirming_resumes_the_engine_the_run_was_proposed_on(h):
     await _propose(h)
     edited = h.cfg.model_copy(
         update={
-            "agent": TextToSqlAgent(
-                engine="text_to_sql",
+            "agent": DatabaseAgent(
+                template="database",
                 model="m",
                 system_prompt_file="p.md",
                 database={"dialect": "sqlite", "path": "d"},
@@ -168,6 +168,6 @@ async def test_confirming_resumes_the_engine_the_run_was_proposed_on(h):
 @pytest.mark.asyncio
 async def test_a_run_whose_engine_is_not_compiled_is_unavailable(h):
     await _propose(h)
-    h.runs["run-1"].engine = "gone"
+    h.runs["run-1"].template = "gone"
     with pytest.raises(platform.RunUnavailable):
         await h.confirm()

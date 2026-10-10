@@ -1,12 +1,12 @@
-"""The seam holds: a second engine runs a full turn and a propose-and-confirm ticket round
+"""The seam holds: a second template runs a full turn and a propose-and-confirm ticket round
 trip through the platform's own entry points, with no platform or escalation edits (D13)."""
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent import platform
-from app.agent.engines import ENGINES
+from app.agent.templates import TEMPLATES
 from app.config.registry import get_registry
-from tests import echo_engine
+from tests import echo_template
 from tests.graph_fakes import CLIENT, Harness, named, outcome_of, stages_of, text_of
 
 
@@ -14,13 +14,13 @@ from tests.graph_fakes import CLIENT, Harness, named, outcome_of, stages_of, tex
 def h(monkeypatch):
     gcp = get_registry().get(CLIENT)
     h = Harness(monkeypatch, gcp)
-    monkeypatch.setitem(ENGINES, "echo", echo_engine.ENGINE)
-    platform.use_checkpointer(InMemorySaver(), ENGINES.values())
+    monkeypatch.setitem(TEMPLATES, "echo", echo_template.TEMPLATE)
+    platform.use_checkpointer(InMemorySaver(), TEMPLATES.values())
     # model_copy does not validate: the config union is closed, and the echo agent is not in it.
     h.cfg = gcp.model_copy(
         update={
-            "agent": echo_engine.EchoAgent(
-                engine="echo", model=gcp.agent.model, system_prompt_file=gcp.agent.system_prompt_file
+            "agent": echo_template.EchoAgent(
+                template="echo", model=gcp.agent.model, system_prompt_file=gcp.agent.system_prompt_file
             ),
             "corpus": None,
         }
@@ -33,7 +33,7 @@ async def _turn(h: Harness, message: str) -> list:
     return [
         e
         async for e in platform.stream_turn(
-            message, engine=ENGINES["echo"], cfg=h.cfg, client_id=CLIENT, conversation_id=None, db=h.db
+            message, template=TEMPLATES["echo"], cfg=h.cfg, client_id=CLIENT, conversation_id=None, db=h.db
         )
     ]
 
@@ -43,7 +43,7 @@ async def test_a_full_turn_on_another_engine(h):
     events = await _turn(h, "hello")
     assert stages_of(events) == ["echo"]
     assert text_of(events) == "hello" and outcome_of(events) == "answer"
-    assert h.runs["run-1"].engine == "echo" and h.runs["run-1"].status == "completed"
+    assert h.runs["run-1"].template == "echo" and h.runs["run-1"].status == "completed"
 
 
 @pytest.mark.asyncio

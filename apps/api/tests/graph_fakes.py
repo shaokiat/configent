@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app.agent import escalation, platform
-from app.agent.engines import support_graph
+from app.agent import handoff, platform
+from app.agent.templates import documents
 from app.retrieval import search as retrieval
 from app.retrieval.search import Hit
 
@@ -110,10 +110,10 @@ def _recorder_class(runs: dict):
         """The real step logic; only the checkpoint session is replaced by a dict."""
 
         @classmethod
-        async def start(cls, conversation_id, client_id, engine):
+        async def start(cls, conversation_id, client_id, template):
             recorder = cls(f"run-{len(runs) + 1}", conversation_id, client_id)
-            await recorder._persist(status="running", current_stage=engine.first_stage)
-            runs[recorder.run_id].engine = engine.name  # _persist carries it forward
+            await recorder._persist(status="running", current_stage=template.first_stage)
+            runs[recorder.run_id].template = template.name  # _persist carries it forward
             return recorder
 
         async def _persist(self, *, status, current_stage):
@@ -121,7 +121,7 @@ def _recorder_class(runs: dict):
                 id=self.run_id,
                 conversation_id=self.conversation_id,
                 client_id=self.client_id,
-                engine=getattr(runs.get(self.run_id), "engine", None),
+                template=getattr(runs.get(self.run_id), "template", None),
                 steps=list(self.steps),
                 status=status,
             )
@@ -149,12 +149,12 @@ class Harness:
         self.ticket_failures = 0
 
         monkeypatch.setattr(platform, "_graphs", {})
-        platform.use_checkpointer(InMemorySaver(), [support_graph.ENGINE])
+        platform.use_checkpointer(InMemorySaver(), [documents.TEMPLATE])
         monkeypatch.setattr(platform, "RunRecorder", _recorder_class(self.runs))
         monkeypatch.setattr(platform, "prepare_conversation", self._prepare)
         monkeypatch.setattr(retrieval, "retrieve", self._retrieve)
         monkeypatch.setattr(platform, "_structured_call", self._structured)
-        monkeypatch.setattr(escalation, "stage_ticket", self._file)
+        monkeypatch.setattr(handoff, "stage_ticket", self._file)
         monkeypatch.setattr(
             platform.anthropic,
             "AsyncAnthropic",
@@ -217,7 +217,7 @@ class Harness:
         return [
             event
             async for event in platform.stream_turn(
-                message, engine=support_graph.ENGINE, cfg=self.cfg, client_id=CLIENT, conversation_id=None, db=self.db
+                message, template=documents.TEMPLATE, cfg=self.cfg, client_id=CLIENT, conversation_id=None, db=self.db
             )
         ]
 
