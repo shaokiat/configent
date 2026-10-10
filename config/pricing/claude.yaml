@@ -32,8 +32,7 @@ anthropic/claude-sonnet-4.6:
   cache_write: 3.75
   cache_read: 0.30
 
-# Not Claude: it cannot read `search_result` blocks, so it is only ever an
-# `agent.structured_model` (D14). A cache write bills as plain input.
+# A cache write bills as plain input.
 deepseek/deepseek-v4.1-flash:
   input: 0.30
   output: 1.20

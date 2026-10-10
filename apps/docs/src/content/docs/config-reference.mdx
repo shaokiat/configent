@@ -93,8 +93,8 @@ Selects the client's template with `agent.template` (required, no default) and t
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `agent.template` | `string` | — | `documents` or `database`. A name with no registered template fails at load. |
-| `agent.model` | `string` | — | OpenRouter model id for a Claude model, such as `anthropic/claude-haiku-4.5` (D14). Only Claude models read `search_result` blocks, so another model cannot answer or cite. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `anthropic/claude-haiku-4.5`. |
-| `agent.structured_model` | `string` | `agent.model` | Model for every structured-output call: grading, rewriting, SQL generation and repair, the ticket draft. Any model that follows a JSON schema, such as `deepseek/deepseek-v4.1-flash`; the cited answer stays on `agent.model`. Must have a price row (D14). |
+| `agent.model` | `string` | — | OpenRouter model id, such as `anthropic/claude-haiku-4.5` or `deepseek/deepseek-v4.1-flash` (D14). It writes the cited answer, citing numbered passages as `[n]` (D15). Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `anthropic/claude-haiku-4.5`. |
+| `agent.structured_model` | `string` | `agent.model` | Model for every structured-output call: grading, rewriting, SQL generation and repair, the ticket draft. Any model that follows a JSON schema, such as `deepseek/deepseek-v4.1-flash`; the cited answer runs on `agent.model`. Must have a price row (D14). |
 | `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |
 | `agent.retrieval_drop_floor` | `float` | `0.3` | Similarity below which a retrieved chunk is **discarded** before the model sees it. Applied by `retrieve` and the dense half of Level 2. |
@@ -144,7 +144,7 @@ The [text-to-SQL template](/configent/docs/text-to-sql)'s keys (`template: datab
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `agent.model` | `string` | — | OpenRouter id of a Claude model, priced in `config/pricing/claude.yaml` like any other. |
-| `agent.structured_model` | `string` | `agent.model` | Model for every structured-output call: grading, rewriting, SQL generation and repair, the ticket draft. Any model that follows a JSON schema, such as `deepseek/deepseek-v4.1-flash`; the cited answer stays on `agent.model`. Must have a price row (D14). |
+| `agent.structured_model` | `string` | `agent.model` | Model for every structured-output call: grading, rewriting, SQL generation and repair, the ticket draft. Any model that follows a JSON schema, such as `deepseek/deepseek-v4.1-flash`; the cited answer runs on `agent.model`. Must have a price row (D14). |
 | `agent.system_prompt_file` | `string` | — | Path to `answer.md`; `generate.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. |
 | `agent.database.dialect` | `string` | — | `sqlite` only. A Postgres client would be a second dialect, not another template. |

@@ -10,7 +10,7 @@ The handoff is `decline` or `escalate → ticket`, per the client's `handoff.mod
 
 Python decides every route (`decide_sql`, D2); the nodes store it and the edges only read it.
 `guard` and `execute` are separate nodes so the trail tells a rejected query from a failed one.
-Citations cannot be combined with structured output, so `generate` and `answer` stay apart.
+`generate` takes structured output and `answer` writes cited prose, so they stay apart.
 """
 import asyncio
 import time
@@ -21,7 +21,7 @@ from langgraph.runtime import Runtime
 from sqlalchemy import select
 
 from app.agent import platform
-from app.agent.common import collect_segments, excerpt
+from app.agent.common import excerpt
 from app.agent.handoff import _after_ticket, converse, decline, escalate, route, ticket
 from app.agent.platform import _REPO_ROOT, Deps, Template, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig, DatabaseAgent
@@ -48,14 +48,17 @@ class TurnState(platform.TurnState, total=False):
 
 
 _SQL_FIELDS = {
-    "sql": {"type": "string"},
+    # Reasoning first: fields are written in order, and a model that committed to `kind`
+    # first was seen marking "2008 Monaco" a handoff, then noting 2008 is in range (D15).
     "reasoning": {"type": "string"},
+    "sql": {"type": "string"},
 }
 _GENERATE_SCHEMA = {
     "type": "object",
     "properties": {
+        "reasoning": _SQL_FIELDS["reasoning"],
         "kind": {"type": "string", "enum": ["question", "conversation", "handoff"]},
-        **_SQL_FIELDS,
+        "sql": _SQL_FIELDS["sql"],
         "reply": {"type": "string"},  # what converse says; "" otherwise
     },
     "required": ["kind", "sql", "reasoning", "reply"],
@@ -196,34 +199,36 @@ def _rows_text(columns: list[str], rows: list[list], truncated: bool, limit: int
 def answer_request_kwargs(
     cfg: ClientConfig, *, client_id: str, sql: str, reasoning: str,
     columns: list[str], rows: list[list], truncated: bool, question: str, history: list[dict],
-) -> dict:
-    """Assemble the answering call: the rows are one search_result, and `tools` is absent (D2)."""
-    result = {
-        "type": "search_result",
+) -> tuple[dict, list[dict]]:
+    """Assemble the answering call and its passages: the rows are passage [1] (D15), and
+    `tools` is absent (D2)."""
+    passages = [{
         "source": f"sql://{client_id}",
         "title": excerpt(reasoning or sql, 120),
-        "content": [{"type": "text", "text": _rows_text(columns, rows, truncated, cfg.agent.guard.row_limit)}],
-        "citations": {"enabled": True},
-    }
-    return {
+        "text": _rows_text(columns, rows, truncated, cfg.agent.guard.row_limit),
+    }]
+    kwargs = {
         "model": cfg.agent.model,
         "max_tokens": cfg.agent.max_tokens,
-        "system": [{"type": "text", "text": _prompt(cfg, "answer"), "cache_control": {"type": "ephemeral"}}],
-        "messages": history + [{"role": "user", "content": [result, {"type": "text", "text": question}]}],
+        "messages": [platform._system(_prompt(cfg, "answer"), cache=True), *history,
+                     {"role": "user", "content": f"{platform.numbered(passages)}\n\nQuestion: {question}"}],
     }
+    return kwargs, passages
 
 
 async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
-    kwargs = answer_request_kwargs(
+    kwargs, passages = answer_request_kwargs(
         d.cfg, client_id=d.client_id, sql=state["sql"], reasoning=state.get("reasoning", ""),
         columns=state["columns"], rows=state["rows"], truncated=state["truncated"],
         question=state["question"], history=state.get("history", []),
     )
-    response = await platform._stream_answer(d, kwargs)
-    text, citations, segments = collect_segments(response)
-    await _model_step(d, state, "answer", t, response, reasoning=state["why"], n_citations=len(citations))
-    return {"outcome": "answer", "answer": text, "citations": citations, "segments": segments}
+    a = await platform._stream_answer(d, kwargs, passages)
+    await _model_step(
+        d, state, "answer", t, a, reasoning=state["why"],
+        n_citations=len(a.citations), bad_citations=a.bad_citations or None,
+    )
+    return {"outcome": "answer", "answer": a.text, "citations": a.citations, "segments": a.segments}
 
 
 def build() -> StateGraph:

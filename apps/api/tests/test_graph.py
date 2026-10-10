@@ -112,21 +112,21 @@ def test_level_two_escalates_on_no_passages_whatever_the_model_says(cfg):
 
 
 def test_answer_request_carries_no_tool_definitions(cfg):
-    kwargs = documents.answer_request_kwargs(
+    kwargs, _ = documents.answer_request_kwargs(
         cfg, hits=[documents._hit_dict(hit(0.8))], question="What is the default CPU?", history=[]
     )
     assert "tools" not in kwargs
     assert handoff._TICKET_TOOL not in str(kwargs)
 
 
-def test_answer_request_puts_search_results_in_the_user_message(cfg):
+def test_answer_request_numbers_the_passages_in_the_user_message(cfg):
     hits = [documents._hit_dict(hit(0.8)), documents._hit_dict(hit(0.7, chunk_id=2))]
-    kwargs = documents.answer_request_kwargs(cfg, hits=hits, question="What is the CPU?", history=[])
+    kwargs, passages = documents.answer_request_kwargs(cfg, hits=hits, question="What is the CPU?", history=[])
     content = kwargs["messages"][-1]["content"]
-    blocks = [b for b in content if b["type"] == "search_result"]
-    assert len(blocks) == 2
-    assert all(b["citations"] == {"enabled": True} for b in blocks)
-    assert content[-1]["type"] == "text"
+    assert len(passages) == 2
+    assert content.startswith("[1] Cloud Run: CPU and memory limits (corpus://")
+    assert "\n\n[2] " in content and content.endswith("Question: What is the CPU?")
+    assert kwargs["messages"][0]["role"] == "system"
 
 
 # ── Level 3 copy ────────────────────────────────────────────────────────────────────
@@ -276,8 +276,7 @@ async def test_level_two_recovers_what_level_one_missed(h):
     assert h.hybrid_requests[0]["queries"][0].startswith("deploy says")
     assert h.hybrid_requests[0]["keywords"] == "iam.serviceAccounts.actAs"
     # The answer is grounded in the Level 2 passages, not the Level 1 ones.
-    blocks = h.answer_requests[0]["messages"][-1]["content"]
-    assert "actAs" in blocks[0]["content"][0]["text"]
+    assert "actAs" in h.answer_requests[0]["messages"][-1]["content"]
 
 
 @pytest.mark.asyncio

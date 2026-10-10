@@ -28,7 +28,7 @@ handoff = decline (mode: message) or escalate → ticket (mode: ticket)
 - **`generate`** classifies the message as `question`, `conversation` or `handoff` and writes the SQL in one structured call.
 - **`guard` and `execute` are separate nodes,** so the step trail tells a rejected query from a failed one.
 - **`answer` is a separate call from `generate`.** Citations cannot be combined with structured output (400), so the query is written without them and the answer is written with them.
-- **The rows are one `search_result` block** with citations enabled, sourced as `sql://<client_id>`. The answering call has no `tools` key (D2).
+- **The rows are passage `[1]`,** sourced as `sql://<client_id>`, and the answer cites them as `[1]` (D15). The answering call has no `tools` key (D2).
 - **`converse`, `decline`, `escalate` and `ticket` are the shared nodes.** See [Adding a Template](/configent/docs/adding-a-template).
 
 ---

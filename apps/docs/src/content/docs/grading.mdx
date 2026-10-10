@@ -128,7 +128,7 @@ The schema returns both. Only `confidence` is wired to a route, because a thresh
 - **The threshold cuts the middling band in half.** `confidence_threshold: 0.6` sits inside `0.4` to `0.7`, so the prompt's bands and the config's threshold have to be tuned together.
 - **Its own prompt file.** A mega-prompt covering grading and answering makes the guardrail unauditable.
 - **The cheap model.** Grading took 2.6 s to 6.5 s per call in the live run, the slowest node on an answerable turn.
-- **Structured output, never citations.** The Messages API returns 400 when `output_config.format` and citations are combined.
+- **Structured output, never citations.** Grading returns JSON (`response_format: json_schema`); only the answer writes prose with `[n]` markers.
 - **A malformed judgement fails safe.** A missing `confidence` reads as `0`, and a missing `kind` reads as a question. Neither can produce an answer or a silent conversation.
 - **Zero passages are still graded.** The retired pipeline skipped the call. The graph needs the `kind`, so it makes the call and discards the number.
 

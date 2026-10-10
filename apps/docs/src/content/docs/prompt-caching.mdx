@@ -31,10 +31,10 @@ The minimum is not monotonic across generations: the cheapest model has one of t
 
 ```python
 # templates/documents.py · answer_request_kwargs()
-"system": [
-    {"type": "text", "text": _prompt(cfg, "answer"), "cache_control": {"type": "ephemeral"}}
-],
-"messages": history + [{"role": "user", "content": search_results + [question]}],
+"messages": [platform._system(_prompt(cfg, "answer"), cache=True), *history,
+             {"role": "user", "content": f"{platform.numbered(passages)}\n\nQuestion: {question}"}],
+# _system() puts {"cache_control": {"type": "ephemeral"}} on the system text; OpenRouter
+# honours it for Claude, and other models ignore it.
 ```
 
 - **It covers the system prompt only.** The request carries no tools, so the cached prefix would be `answer.md` and nothing else.

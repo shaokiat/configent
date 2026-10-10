@@ -172,18 +172,9 @@ def fingerprint(cfg: ClientConfig, root: Path) -> str:
 
 
 def _count_tokens(model: str, text: str) -> int | None:
-    """Claude's own tokenizer via the API. Best-effort: no key, no network, or a gateway without
-    the endpoint (OpenRouter has none, D14) gives None."""
-    try:
-        from app import llm
-
-        r = llm.client().messages.count_tokens(
-            model=model, messages=[{"role": "user", "content": text}]
-        )
-        return r.input_tokens
-    except Exception as e:
-        logger.warning("token count unavailable: %s", e)
-        return None
+    """A rough estimate, four characters a token. OpenRouter has no tokenizer endpoint (D14),
+    and the figure only has to say whether the schema fits the prompt comfortably."""
+    return len(text) // 4
 
 
 def check(cfg: ClientConfig, root: Path) -> SchemaReport:

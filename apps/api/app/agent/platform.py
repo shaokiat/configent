@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
-import anthropic
+import openai
 from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph
 from langgraph.types import Command
@@ -23,11 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import llm
 from app.agent.common import (
+    Markers,
     UsageTotals,
-    attr_or_key,
-    excerpt,
+    citation,
     model_trace,
     prepare_conversation,
+    segments_from,
     update_conversation_totals,
 )
 from app.config.schema import ClientConfig
@@ -90,7 +91,7 @@ class Deps:
     cfg: ClientConfig
     client_id: str
     db: AsyncSession
-    aclient: anthropic.AsyncAnthropic | None
+    aclient: openai.AsyncOpenAI | None
     recorder: "RunRecorder"
     usage: UsageTotals = field(init=False)
 
@@ -226,8 +227,16 @@ def _prompt(cfg: ClientConfig, name: str) -> str:
     return (cfg.system_prompt_path(_REPO_ROOT).parent / f"{name}.md").read_text()
 
 
+def _system(text: str, cache: bool) -> dict:
+    """The system message. `cache` adds a breakpoint after it (P5); OpenRouter honours
+    `cache_control` for Claude and other models ignore it."""
+    if not cache:
+        return {"role": "system", "content": text}
+    return {"role": "system", "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]}
+
+
 async def _structured_call(
-    aclient: anthropic.AsyncAnthropic,
+    aclient: openai.AsyncOpenAI,
     *,
     model: str,
     system: str,
@@ -236,45 +245,69 @@ async def _structured_call(
     max_tokens: int,
     cache_system: bool = False,
 ) -> tuple[dict, Any]:
-    """One model call constrained to a JSON schema. Never combined with citations (400).
-    `cache_system` puts a cache breakpoint after the system prompt (P5)."""
-    response = await aclient.messages.create(
+    """One model call constrained to a JSON schema.
+
+    Reasoning is off: a model that reasons by default (DeepSeek) spent the whole `max_tokens`
+    on it and returned no JSON in 2 of 18 benchmark turns. `strict` stops a runaway string
+    field doing the same. Off and strict, 0 of 16 failed (D15)."""
+    response = await aclient.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        if cache_system
-        else system,
-        messages=[{"role": "user", "content": user_content}],
-        output_config={"format": {"type": "json_schema", "schema": schema}},
+        messages=[_system(system, cache_system), {"role": "user", "content": user_content}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "output", "strict": True, "schema": schema},
+        },
+        extra_body={"reasoning": {"enabled": False}},
     )
-    text = "".join(
-        attr_or_key(b, "text", "") for b in response.content if attr_or_key(b, "type") == "text"
-    )
-    return json.loads(text), response
+    return json.loads(response.choices[0].message.content or ""), response
 
 
-async def _stream_answer(d: Deps, kwargs: dict) -> Any:
-    """Stream an answering call as `text` / `citation` events; returns the final message."""
-    write, citation_index = get_stream_writer(), 0
-    async with d.aclient.messages.stream(**kwargs) as stream:
-        async for event in stream:
-            if getattr(event, "type", "") != "content_block_delta":
-                continue
-            if event.delta.type == "text_delta":
-                write(("text", {"delta": event.delta.text}))
-            elif event.delta.type == "citations_delta":
-                citation_index += 1
-                cit = event.delta.citation
-                write((
-                    "citation",
-                    {
-                        "index": citation_index,
-                        "source": attr_or_key(cit, "source"),
-                        "title": attr_or_key(cit, "title"),
-                        "cited_text": excerpt(attr_or_key(cit, "cited_text") or ""),
-                    },
-                ))
-        return await stream.get_final_message()
+@dataclass
+class Answer:
+    """A streamed, cited answer: what the step records and the turn stores."""
+
+    text: str
+    citations: list[dict]
+    segments: list[dict]
+    bad_citations: int  # markers naming no passage, left in the text as written
+    usage: Any
+
+
+def numbered(passages: list[dict]) -> str:
+    """The evidence as the answering model sees it: `[n] title (source)` then the text (D15)."""
+    return "\n\n".join(
+        f"[{i}] {p['title']} ({p['source']})\n{p['text']}" for i, p in enumerate(passages, 1)
+    )
+
+
+async def _stream_answer(d: Deps, kwargs: dict, passages: list[dict]) -> Answer:
+    """Stream an answering call as `text` / `citation` events. The model cites with `[n]`;
+    `Markers` swaps each valid one for a citation event, so the UI sees what it always has."""
+    write, markers, pieces, usage = get_stream_writer(), Markers(len(passages)), [], None
+    index = 0
+
+    def emit(new: list) -> None:
+        nonlocal index
+        for kind, value in new:
+            pieces.append((kind, value))
+            if kind == "text":
+                write(("text", {"delta": value}))
+            else:
+                index += 1
+                write(("citation", {"index": index, **citation(passages[value - 1])}))
+
+    stream = await d.aclient.chat.completions.create(
+        **kwargs, stream=True, stream_options={"include_usage": True}
+    )
+    async for chunk in stream:
+        if chunk.usage:
+            usage = chunk.usage
+        if chunk.choices and chunk.choices[0].delta.content:
+            emit(markers.feed(chunk.choices[0].delta.content))
+    emit(markers.flush())
+    text, citations, segments = segments_from(pieces, passages)
+    return Answer(text, citations, segments, markers.bad, usage)
 
 
 def _transcript(history: list[dict], turns: int = 6) -> str:
@@ -408,7 +441,7 @@ async def stream_turn(
         # Detail stays in the logs; the client only ever sees a generic message.
         message = (
             f"Upstream API error: {exc.__class__.__name__}"
-            if isinstance(exc, anthropic.APIError)
+            if isinstance(exc, openai.APIError)
             else "An internal error occurred. Please try again."
         )
         yield ("error", {"message": message})

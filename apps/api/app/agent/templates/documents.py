@@ -11,8 +11,8 @@ ticket waits for the user (`interrupt()`). It owns no decisions. `decide_level1`
 `decide_level2` are plain functions over YAML thresholds; the node stores the route and the
 edge only reads it; `handoff.route` picks the client's handoff. The answering model is never sent a tool, so it cannot escalate (D2).
 
-Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` and
-`escalate` take structured output and `answer` takes citations.
+`grade`, `rewrite` and `escalate` take structured output; `answer` writes prose that cites
+numbered passages as `[n]`, which Python parses into citations (D15).
 """
 import time
 
@@ -20,7 +20,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from app.agent import platform
-from app.agent.common import collect_segments
 from app.agent.handoff import _after_ticket, converse, decline, escalate, route, ticket
 from app.agent.platform import Deps, Template, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig
@@ -44,13 +43,15 @@ class TurnState(platform.TurnState, total=False):
 _GRADE_SCHEMA = {
     "type": "object",
     "properties": {
+        # First, because fields are written in this order: a model that commits to `kind`
+        # before reasoning argues itself out of it afterwards (seen with DeepSeek, D15).
+        "reasoning": {"type": "string"},
         # Triage rides on the grade call (D9): no extra call, and made with the passages in
         # view rather than by a router that sees only the question.
         "kind": {"type": "string", "enum": ["question", "conversation", "handoff"]},
         "supported": {"type": "boolean"},
         "confidence": {"type": "number"},
         "missing_info": {"type": "string"},
-        "reasoning": {"type": "string"},
         "reply": {"type": "string"},
     },
     "required": ["kind", "supported", "confidence", "reasoning"],
@@ -263,47 +264,43 @@ async def hybrid_retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
 
 def answer_request_kwargs(
     cfg: ClientConfig, *, hits: list[dict], question: str, history: list[dict]
-) -> dict:
-    """Assemble the answering call. Note what is absent: `tools` (D2)."""
-    search_results = [
+) -> tuple[dict, list[dict]]:
+    """Assemble the answering call and its numbered passages (D15). Note what is absent:
+    `tools` (D2)."""
+    passages = [
         {
-            "type": "search_result",
-            # The API echoes `source` back on the citation, so a URL here is a link in the UI.
+            # The citation carries `source`, so a URL here is a link in the UI.
             # .get: hits checkpointed before the url field existed have none.
             "source": h.get("url") or h["source_uri"],
             "title": h["document_title"],
-            "content": [{"type": "text", "text": h["text"]}],
-            # The API requires citations on all search results or none.
-            "citations": {"enabled": True},
+            "text": h["text"],
         }
         for h in hits
     ]
-    return {
+    kwargs = {
         "model": cfg.agent.model,
         "max_tokens": cfg.agent.max_tokens,
-        "system": [
-            {"type": "text", "text": _prompt(cfg, "answer"), "cache_control": {"type": "ephemeral"}}
-        ],
-        "messages": history
-        + [{"role": "user", "content": search_results + [{"type": "text", "text": question}]}],
+        "messages": [platform._system(_prompt(cfg, "answer"), cache=True), *history,
+                     {"role": "user", "content": f"{platform.numbered(passages)}\n\nQuestion: {question}"}],
     }
+    return kwargs, passages
 
 
 async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
     """Stream a cited answer from whichever tier's passages cleared the guardrail."""
     d, t = runtime.context, time.monotonic()
-    kwargs = answer_request_kwargs(
+    kwargs, passages = answer_request_kwargs(
         d.cfg, hits=state["hits"], question=state["question"], history=state.get("history", [])
     )
-    response = await platform._stream_answer(d, kwargs)
-    text, citations, segments = collect_segments(response)
+    a = await platform._stream_answer(d, kwargs, passages)
     await _model_step(
-        d, state, "answer", t, response,
+        d, state, "answer", t, a,
         level=state["level"],
         reasoning=state["why"],
-        n_citations=len(citations),
+        n_citations=len(a.citations),
+        bad_citations=a.bad_citations or None,
     )
-    return {"outcome": "answer", "answer": text, "citations": citations, "segments": segments}
+    return {"outcome": "answer", "answer": a.text, "citations": a.citations, "segments": a.segments}
 
 
 # ── the graph ────────────────────────────────────────────────────────────────────────

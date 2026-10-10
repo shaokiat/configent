@@ -33,13 +33,15 @@ output enforcement) are hand-built — which is the point of the support-agent p
 **Superseded:** the support graph uses LangGraph for checkpoints and the ticket pause (D10),
 and the loop itself was deleted (D11). Model calls, cost and tracing are still plain code.
 
-### P4 — Citations via `search_result` blocks · LOCKED
+### P4 — Citations via `search_result` blocks · SUPERSEDED (2026-10-10, D15)
 `search_docs` returns Anthropic `search_result` content blocks with `citations.enabled`,
 so the API attaches `search_result_location` citations at generation time.
 **Why:** citations parsed by the API cannot reference a document that wasn't retrieved.
 Prompt-based quoting can, and does.
 **Consequence:** citations are all-or-nothing per request — every search result in a
 request must enable them, which `search_docs` does unconditionally.
+_Superseded 2026-10-10 by D15:_ citations are numbered markers the model writes and Python
+parses. The "why" above is the cost D15 accepts, and Part 3 lists it.
 
 ### P5 — Prompt caching with a per-turn breakpoint · SUPERSEDED-IN-PART (2026-09-11, D11)
 System prompt cached once; a cache breakpoint is applied to the last content block of
@@ -480,7 +482,10 @@ trail is identical.
 **Why:** a client reads its YAML, and the word there should be the pitch's word. "Engine"
 named the mechanism; what a client chooses is the kind of source, documents or a database.
 
-### D14 — Model calls go through OpenRouter's Anthropic-compatible endpoint · LOCKED (decided and built 2026-10-10)
+### D14 — Model calls go through OpenRouter · LOCKED, AMENDED (decided and built 2026-10-10; the SDK and "Claude only" changed the same day, D15)
+
+> Written for the Anthropic SDK on OpenRouter's Anthropic-compatible endpoint. D15 moved
+> every call to the OpenAI SDK on `https://openrouter.ai/api/v1`, which ends "Claude only".
 Every model call uses the Anthropic SDK pointed at `https://openrouter.ai/api`, built in one
 place (`app/llm.py`) from `OPENROUTER_API_KEY`. Model ids are OpenRouter's
 (`anthropic/claude-haiku-4.5`), and `config/pricing/claude.yaml` is keyed by them.
@@ -512,8 +517,57 @@ whole answering path depends on. The direct Anthropic client needed only a base 
   for no current user.
 
 **Consequence:** cost is still estimated from the checked-in table (D8); OpenRouter's own
-billing is the bill. Recoverable: `git show 21e863d:apps/api/app/agent/platform.py` has the
-direct `anthropic.AsyncAnthropic()` call.
+billing is the bill. Recoverable: the pre-OpenRouter code has the
+direct `anthropic.AsyncAnthropic()` call (`git show c251f91:apps/api/app/agent/platform.py`);
+the Anthropic SDK on OpenRouter is at `b0835d9`.
+
+### D15 — One SDK; citations are numbered markers parsed in Python · LOCKED (decided and built 2026-10-10)
+Every model call uses the OpenAI SDK on OpenRouter's OpenAI-compatible endpoint
+(`https://openrouter.ai/api/v1`, `app/llm.py`). The answering model sees its evidence as
+numbered passages, `[n] title (source)` then the text, and cites with `[n]`. Python turns each
+marker into the citation the UI has always rendered.
+
+- **`Markers` parses the stream** (`app/agent/common.py`). It holds back a possible marker at
+  the end of a chunk, so `[1` + `]` still parses, and swaps each valid `[n]` for a `citation`
+  event. The SSE contract, the stored `segments` and the UI are unchanged.
+- **A number with no passage stays in the text, as written,** and is counted in the answer
+  step's `bad_citations`. So `arr[0]` survives, and a model inventing `[9]` shows in the trail.
+- **The chip is the passage.** `cited_text` is the passage's excerpt. The API already
+  returned whole chunks as `cited_text`, so the preview a reader sees is the same.
+- **Any model can answer, and both clients now run DeepSeek V4.1 Flash for every call.**
+  Measured on the nine demo questions, three passes each
+  (`evals/results/model-cost-2026-10-11.md`):
+
+  | | Original (P4, all Haiku 4.5) | Haiku answers, DeepSeek structured | All DeepSeek |
+  |---|---|---|---|
+  | Billed per turn | $0.0060 | $0.0017 (−72%) | **$0.00026 (−96%)** |
+  | Routed as expected · facts stated | 27/27 · 15/15 | 27/27 · 15/15 | 27/27 · 15/15 |
+  | Citations per answer · naming no passage | 1.9 · — | 2.5 · 0 | 3.1 · 0 |
+
+- **Structured calls turn reasoning off, use strict schemas, and put `reasoning` first.**
+  The benchmark found both failures. With reasoning on, DeepSeek used up `max_tokens` and
+  returned no JSON (2 of 18 turns). With reasoning off, it filled in `kind` before `reasoning`
+  and decided too early (24 of 27 routed). After the fixes: 0 of 16 and 27 of 27.
+- **Structured calls use `response_format: json_schema`.** Usage maps from OpenAI's shape:
+  `prompt_tokens` includes cached and cache-written tokens, so plain input is what remains
+  after taking both out. Counted whole, every cached call would be overstated.
+- **No tokenizer.** `--check` estimates the schema context at four characters a token.
+
+**Why:** one SDK and any model for every call, including the answer. The API's citations
+could only be had through Anthropic's request shape, and through OpenRouter that shape
+reached non-Claude models empty: no `search_result` text, so no answer.
+
+**What it costs:** P4's guarantee. The API tied each citation to a passage it was sent; a
+marker is the model's claim. Python checks only that the number names a passage, not that the
+passage says what the sentence does. Part 3 lists it.
+
+**Alternatives rejected:**
+- Keeping the Anthropic SDK for the answer only: two SDKs, and still Claude-only answers.
+- Verifying each cited sentence against its passage now: fuzzy matching misses paraphrase,
+  and a judging call per answer eats the saving. It waits for the eval that would justify it.
+
+**Recoverable:** the API-citations answer path is at `b0835d9`
+(`git show b0835d9:apps/api/app/agent/platform.py`, `…:apps/api/app/agent/common.py`).
 
 ---
 
@@ -545,4 +599,5 @@ what it would take" is a better answer than a half-built version of it.
 | **No hybrid SQL + vector + rules template.** | No client needs one; the accident-case pattern was considered and not built. | A third engine. **Trigger:** a hybrid use case is wanted. |
 | **The text-search language is `english` for every tenant.** | One English corpus. The language is baked into the generated `chunks.text_search` column. | A per-client column or index (or a per-language generated column) and a validated `retrieval.keyword.language`. **Trigger:** a non-English corpus. |
 | **One embedding dimension for every tenant.** | One `Vector(1024)` column (P2); the config refuses models of another width. | A column or table per dimension, and a migration per new width. **Trigger:** a client needs a model of another width. |
+| **Citations are the model's claim, not verified** (D15). A `[n]` names a passage that exists; nothing checks the passage says what the sentence does. | `bad_citations` catches invented numbers, and the guardrail already decided the passages answer the question. A wrong-but-valid marker is the residual risk. | A check per cited sentence against its passage (overlap, or a judge call). **Trigger:** the eval shows wrong citations at a rate a reader would notice. |
 | **The ticket service is a mock in this repo.** | It exercises the real integration shape — HTTP, schema, idempotency key, retries, failure injection — without a vendor account. | A real ticketing API. The client swaps; the retry and idempotency paths don't. |

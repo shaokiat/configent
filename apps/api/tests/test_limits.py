@@ -99,7 +99,7 @@ def test_a_call_on_another_model_is_priced_at_that_models_rates():
     from types import SimpleNamespace
 
     u = UsageTotals(HAIKU)
-    u.add(SimpleNamespace(input_tokens=_MTOK, output_tokens=0))
-    u.add(SimpleNamespace(input_tokens=_MTOK, output_tokens=_MTOK), "deepseek/deepseek-v4.1-flash")
+    u.add(SimpleNamespace(prompt_tokens=_MTOK, completion_tokens=0))
+    u.add(SimpleNamespace(prompt_tokens=_MTOK, completion_tokens=_MTOK), "deepseek/deepseek-v4.1-flash")
     assert u.input_tokens == 2 * _MTOK
     assert u.cost_usd == pytest.approx(1.00 + 0.30 + 1.20)
