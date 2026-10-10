@@ -1,6 +1,4 @@
-# GCP Platform Support — the primary client for the support-agent build.
-# See docs/support-agent-plan.md. W3-6 splits agent.model into
-# agent.models.{router, answer} for the cheap-router cost comparison.
+# GCP Platform Support (DeployBot): the documents-template client.
 client_id: gcp-platform-support
 name: "Cloud Platform Support"
 branding:
@@ -28,9 +26,9 @@ corpus:
     chunk_size: 512
     overlap: 64
 agent:
-  # Runs the three-tier support graph: RAG → corrective RAG → human (D10). Required: the
-  # tag picks the engine, and each engine accepts only its own keys (D13).
-  engine: support_graph
+  # The documents template: RAG → corrective RAG → handoff (D10). Required: the
+  # tag picks the template, and each template accepts only its own keys (D13).
+  template: documents
   # The model must have a row in config/pricing/claude.yaml (D8).
   model: claude-haiku-4-5-20251001
   # answer.md; grade.md, rewrite.md and ticket_draft.md sit beside it.
@@ -46,8 +44,10 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
-# What the shared escalate node offers and files (D13).
-escalation:
+# What happens when a turn can't be answered (D9). `mode: message` (the default) replies
+# with fixed text instead; this client drafts a ticket and files it on confirmation.
+handoff:
+  mode: ticket
   categories:
     account_config: project configuration
     quota_or_billing: quota or billing

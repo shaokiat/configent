@@ -309,14 +309,14 @@ async def ingest_client(
     return stats
 
 
-async def reconcile_all(configs: list[ClientConfig], repo_root: Path, engines: dict) -> None:
+async def reconcile_all(configs: list[ClientConfig], repo_root: Path, templates: dict) -> None:
     """Ingest every client at API startup, so a deploy with changed files or settings
     brings the index up to date without anyone running the CLI.
 
     Runs in the background: a full rebuild on Voyage's free tier takes minutes, and the
     chat endpoints' 409 guard covers the window. Unchanged files are skipped by hash, so
     an ordinary restart makes no embedding calls. One client failing does not stop the rest.
-    Each client is ingested by its own engine.
+    Each client is ingested by its own template.
     """
     try:
         # The lock is held by this connection for the whole run. Sessions release their
@@ -333,7 +333,7 @@ async def reconcile_all(configs: list[ClientConfig], repo_root: Path, engines: d
                 for cfg in configs:
                     try:
                         async with AsyncSessionLocal() as db:
-                            stats = await engines[cfg.agent.engine].ingest(db, cfg, repo_root)
+                            stats = await templates[cfg.agent.template].ingest(db, cfg, repo_root)
                         logger.info(
                             "Reconciled %s: %s",
                             cfg.client_id,

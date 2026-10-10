@@ -1,4 +1,4 @@
-# Formula 1 Analyst: the text-to-SQL client (D13). Branding values are placeholders.
+# Formula 1 Analyst: the database-template client (D13). Branding values are placeholders.
 client_id: f1-analyst
 name: "Formula 1 Analyst"
 branding:
@@ -14,7 +14,7 @@ branding:
     - "Which constructor scored the most points in 2010?"
     - "Can you add the 2024 season?"
 agent:
-  engine: text_to_sql
+  template: database
   model: claude-haiku-4-5-20251001
   # answer.md; generate.md and ticket_draft.md sit beside it.
   system_prompt_file: prompts/f1-analyst/answer.md
@@ -28,7 +28,8 @@ agent:
     row_limit: 200
     timeout_ms: 5000
   repair_attempts: 1
-escalation:
+handoff:
+  mode: ticket
   queue: data-team
   team: data team
   categories: [missing_data, data_request, other]

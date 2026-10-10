@@ -73,7 +73,7 @@ class CorpusConfig(BaseModel):
 
 
 class CorrectiveConfig(BaseModel):
-    """Level 2 of the graph engine: rewrite the question, then hybrid search (D10)."""
+    """Level 2 of the documents template: rewrite the question, then hybrid search (D10)."""
 
     # Off sends a turn Level 1 cannot answer straight to Level 3, a human.
     enabled: bool = True
@@ -81,13 +81,13 @@ class CorrectiveConfig(BaseModel):
     query_rewrites: int = Field(default=3, ge=1, le=5)
 
 
-class SupportGraphAgent(BaseModel):
+class DocumentsAgent(BaseModel):
     # An unknown key fails at load. `mode`, `tools` and `effort` belonged to the retired
     # loop engine; left in a YAML they would read like capabilities that do nothing (D11).
-    # It also rejects a key that belongs to another engine's member (D13).
+    # It also rejects a key that belongs to another template's member (D13).
     model_config = ConfigDict(extra="forbid")
 
-    engine: Literal["support_graph"]
+    template: Literal["documents"]
     model: str
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
@@ -106,7 +106,7 @@ class SupportGraphAgent(BaseModel):
     corrective: CorrectiveConfig = CorrectiveConfig()
 
     @model_validator(mode="after")
-    def escalation_floor_must_be_reachable(self) -> "SupportGraphAgent":
+    def escalation_floor_must_be_reachable(self) -> "DocumentsAgent":
         if self.escalate_below <= self.retrieval_drop_floor:
             raise ValueError(
                 f"agent.escalate_below ({self.escalate_below}) must be greater than "
@@ -120,7 +120,7 @@ class SupportGraphAgent(BaseModel):
 class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    dialect: Literal["sqlite"]  # a Postgres client would be a second dialect, not another engine
+    dialect: Literal["sqlite"]  # a Postgres client would be a second dialect, not another template
     path: str  # relative to the repo root
 
 
@@ -139,13 +139,13 @@ class GuardConfig(BaseModel):
     timeout_ms: int = Field(default=5000, gt=0)
 
 
-class TextToSqlAgent(BaseModel):
+class DatabaseAgent(BaseModel):
     """Text-to-SQL: the schema and notes go in the prompt, the model writes a SELECT, code
     guards and runs it (D13)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    engine: Literal["text_to_sql"]
+    template: Literal["database"]
     model: str
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
@@ -155,15 +155,25 @@ class TextToSqlAgent(BaseModel):
     repair_attempts: int = Field(default=2, ge=0, le=3)
 
 
-# The tag picks the member, so a key from another engine fails at load (D13).
-AgentConfig = Annotated[SupportGraphAgent | TextToSqlAgent, Field(discriminator="engine")]
+# The tag picks the member, so a key from another template fails at load (D13).
+AgentConfig = Annotated[DocumentsAgent | DatabaseAgent, Field(discriminator="template")]
 
 
-class EscalationConfig(BaseModel):
-    """What the shared escalate node needs to know about this tenant's tickets (D13)."""
+class MessageHandoff(BaseModel):
+    """Can't answer: reply with this text. No ticket, no model call (D9, amended)."""
 
     model_config = ConfigDict(extra="forbid")
 
+    mode: Literal["message"]
+    message: str
+
+
+class TicketHandoff(BaseModel):
+    """Can't answer: draft a ticket, offer it, file it once on the user's confirmation (D9, D13)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["ticket"]
     queue: str | None = None  # None: the ticket service routes by product area
     categories: dict[str, str]  # id -> label shown in the offer
     product_areas: list[str] = []  # empty: the draft has no product_area field
@@ -201,6 +211,10 @@ class EscalationConfig(BaseModel):
         }
 
 
+# The tag picks the member, so a ticket key under `mode: message` fails at load.
+HandoffConfig = Annotated[MessageHandoff | TicketHandoff, Field(discriminator="mode")]
+
+
 class EvalsConfig(BaseModel):
     golden_set: str
     judge_model: str = "claude-sonnet-4-6"
@@ -229,11 +243,15 @@ class RetrievalConfig(BaseModel):
 
 
 class ClientConfig(BaseModel):
+    # An unknown top-level key fails at load: a leftover `escalation:` must not sit beside
+    # `handoff:` looking like it does something.
+    model_config = ConfigDict(extra="forbid")
+
     client_id: str
     name: str
     branding: BrandingConfig
     agent: AgentConfig
-    escalation: EscalationConfig
+    handoff: HandoffConfig
     corpus: CorpusConfig | None = None
     retrieval: RetrievalConfig | None = None
     evals: EvalsConfig | None = None
@@ -250,16 +268,21 @@ class ClientConfig(BaseModel):
             )
         return v
 
+    @field_validator("handoff", mode="before")
+    @classmethod
+    def mode_defaults_to_message(cls, v):
+        return {"mode": "message", **v} if isinstance(v, dict) else v
+
     @model_validator(mode="after")
-    def blocks_match_the_engine(self) -> "ClientConfig":
-        if self.agent.engine == "support_graph":
+    def blocks_match_the_template(self) -> "ClientConfig":
+        if self.agent.template == "documents":
             if self.corpus is None:
-                raise ValueError("corpus: is required by the support_graph engine")
+                raise ValueError("corpus: is required by the documents template")
             self.retrieval = self.retrieval or RetrievalConfig()
         elif self.corpus is not None or self.retrieval is not None:
             block = "corpus" if self.corpus is not None else "retrieval"
             raise ValueError(
-                f"`{block}:` belongs to the support_graph engine; text_to_sql clients take "
+                f"`{block}:` belongs to the documents template; database clients take "
                 f"`agent.database` and `agent.context` instead"
             )
         return self

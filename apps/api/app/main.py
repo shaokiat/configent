@@ -11,8 +11,8 @@ load_dotenv()
 
 from fastapi import FastAPI  # noqa: E402
 
-from app.agent.engines import ENGINES  # noqa: E402
 from app.agent.platform import postgres_checkpointer  # noqa: E402
+from app.agent.templates import TEMPLATES  # noqa: E402
 from app.config.registry import _REPO_ROOT, get_registry  # noqa: E402
 from app.database import DATABASE_URL  # noqa: E402
 from app.ingest import reconcile_all  # noqa: E402
@@ -21,9 +21,9 @@ from app.routers import clients, health  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # An engine pauses on a proposed ticket and resumes after a crash, so its
+    # An template pauses on a proposed ticket and resumes after a crash, so its
     # checkpoints need a home that outlives the process: Postgres, beside everything else.
-    async with postgres_checkpointer(DATABASE_URL, ENGINES.values()):
+    async with postgres_checkpointer(DATABASE_URL, TEMPLATES.values()):
         # Bring every client's index in line with its corpus and config. Background, so
         # the API serves (and answers 409 for a stale client) while it runs.
         # RECONCILE_ON_STARTUP=0 turns it off, for when a restart must not spend embedding
@@ -31,7 +31,7 @@ async def lifespan(_app: FastAPI):
         if os.getenv("RECONCILE_ON_STARTUP", "1") == "0":
             yield
             return
-        reconcile = asyncio.create_task(reconcile_all(get_registry().all(), _REPO_ROOT, ENGINES))
+        reconcile = asyncio.create_task(reconcile_all(get_registry().all(), _REPO_ROOT, TEMPLATES))
         yield
         # Per-document commits make stopping mid-run safe: the next start picks up the rest.
         reconcile.cancel()

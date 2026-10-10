@@ -1,10 +1,12 @@
-"""The text-to-SQL engine (D13): the model writes a SELECT, code guards and runs it, the rows
+"""The database template (D13): the model writes a SELECT, code guards and runs it, the rows
 are the evidence.
 
-    generate ─┬─ converse / escalate      (the same call classifies the message, as in D9)
+    generate ─┬─ converse / handoff       (the same call classifies the message, as in D9)
               └─ guard → execute ─┬─ answer
                                   └─ repair → guard → execute ─┬─ answer
-                                                               └─ escalate → ticket
+                                                               └─ handoff
+
+The handoff is `decline` or `escalate → ticket`, per the client's `handoff.mode`.
 
 Python decides every route (`decide_sql`, D2); the nodes store it and the edges only read it.
 `guard` and `execute` are separate nodes so the trail tells a rejected query from a failed one.
@@ -20,9 +22,9 @@ from sqlalchemy import select
 
 from app.agent import platform
 from app.agent.common import collect_segments, excerpt
-from app.agent.escalation import _after_ticket, converse, escalate, ticket
-from app.agent.platform import Deps, Engine, _model_step, _prompt, _step, _transcript
-from app.config.schema import ClientConfig, TextToSqlAgent
+from app.agent.handoff import _after_ticket, converse, decline, escalate, route, ticket
+from app.agent.platform import Deps, Template, _model_step, _prompt, _step, _transcript
+from app.config.schema import ClientConfig, DatabaseAgent
 from app.models import Document
 from app.sql import context, guard
 from app.sql.connection import QueryError, run_query
@@ -69,7 +71,7 @@ _REPAIR_SCHEMA = {
 
 
 def decide_sql(
-    *, verdict: Verdict | None, error: str | None, attempts: int, cfg: TextToSqlAgent
+    *, verdict: Verdict | None, error: str | None, attempts: int, cfg: DatabaseAgent
 ) -> tuple[str, str]:
     """Route after the guard or the execution. Zero rows is an answer, not a failure: the
     query ran, and "nothing matches" is true evidence, not something for the data team."""
@@ -225,31 +227,29 @@ async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
     return {"outcome": "answer", "answer": text, "citations": citations, "segments": segments}
 
 
-def _route(state: TurnState) -> str:
-    return state["route"]
-
-
 def build() -> StateGraph:
     g = StateGraph(TurnState, context_schema=Deps)
     for name, node in (
         ("generate", generate), ("guard", guard_node), ("execute", execute), ("repair", repair),
         ("answer", answer), ("converse", converse), ("escalate", escalate), ("ticket", ticket),
+        ("decline", decline),
     ):
         g.add_node(name, node)
     g.add_edge(START, "generate")
-    g.add_conditional_edges("generate", _route, ["guard", "converse", "escalate"])
-    g.add_conditional_edges("guard", _route, ["execute", "repair", "escalate"])
-    g.add_conditional_edges("execute", _route, ["answer", "repair", "escalate"])
+    g.add_conditional_edges("generate", route, ["guard", "converse", "escalate", "decline"])
+    g.add_conditional_edges("guard", route, ["execute", "repair", "escalate", "decline"])
+    g.add_conditional_edges("execute", route, ["answer", "repair", "escalate", "decline"])
     g.add_edge("repair", "guard")
     g.add_edge("answer", END)
     g.add_edge("converse", END)
+    g.add_edge("decline", END)
     g.add_edge("escalate", "ticket")
     g.add_conditional_edges("ticket", _after_ticket, ["ticket", END])
     return g
 
 
 def summary(values: dict) -> dict:
-    """No `confidence`: this engine grades nothing."""
+    """No `confidence`: this template grades nothing."""
     return {"row_count": values["row_count"]} if "row_count" in values else {}
 
 
@@ -260,4 +260,4 @@ async def _ready(db, cfg: ClientConfig) -> str | None:
     return await context.ready(db, cfg, _REPO_ROOT)
 
 
-ENGINE = Engine("text_to_sql", build, "generate", summary, context.check, context.ingest, _ready)
+TEMPLATE = Template("database", build, "generate", summary, context.check, context.ingest, _ready)

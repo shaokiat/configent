@@ -211,3 +211,25 @@ async def test_the_step_trail_of_each_demo_input_is_pinned(message, scenario, st
     events = await h.turn(message, **scenario)
     assert stages_of(events) == stages
     assert set(named(events, "done")[0]) == _DONE_KEYS
+
+
+# ── the same turns for a client whose handoff is a message ──────────────────────────
+# The decision is the template's and does not move; only what follows it does (D9, amended).
+
+_MESSAGE = "I couldn't find that in the documentation. Email support@acme.com."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,scenario,stages", [t for t in TRAILS if t.values[2][-1] == "escalate"])
+async def test_a_message_handoff_declines_where_a_ticket_would_be_offered(message, scenario, stages, h):
+    from app.agent import platform
+    from app.config.schema import MessageHandoff
+
+    h.cfg = h.cfg.model_copy(update={"handoff": MessageHandoff(mode="message", message=_MESSAGE)})
+    events = await h.turn(message, **scenario)
+    assert stages_of(events) == stages[:-1] + ["decline"]
+    assert outcome_of(events) == "decline" and text_of(events) == _MESSAGE
+    assert "draft" not in h.call_names() and not named(events, "ticket_proposal")
+    with pytest.raises(platform.RunUnavailable):
+        await h.confirm()
+    assert h.ticket_calls == []

@@ -1,7 +1,7 @@
-"""The shared platform: what runs a turn, whichever engine finds the evidence.
+"""The shared platform: what runs a turn, whichever template finds the evidence.
 
 The audit trail (`RunRecorder`), the per-request `Deps`, the structured-call helper, the
-checkpointer, and the three entry points. An engine is passed in as an `Engine`; this module
+checkpointer, and the three entry points. An template is passed in as an `Template`; this module
 imports none.
 """
 import json
@@ -49,28 +49,29 @@ class RunUnavailable(Exception):
     that reveals nothing about which."""
 
 class TurnState(TypedDict, total=False):
-    """What every engine's state has, and all the shared nodes and the platform read. Plain
-    JSON: it is what the checkpointer saves. An engine's own state extends it."""
+    """What every template's state has, and all the shared nodes and the platform read. Plain
+    JSON: it is what the checkpointer saves. An template's own state extends it."""
 
     question: str
     history: list[dict]
     conversation_id: str
     run_id: str
-    level: int  # optional: the tier the evidence came from, for an engine that has tiers
+    handoff: str  # the client's handoff.mode, read by `handoff.route`
+    level: int  # optional: the tier the evidence came from, for an template that has tiers
     why: str  # what sent the turn to converse or escalate
     reply: str  # optional: what converse says
     draft: dict
     ticket: dict
-    outcome: str  # "answer" | "converse" | "ticket"
+    outcome: str  # "answer" | "converse" | "decline" | "ticket"
     answer: str
     segments: list[dict]
 
 
 @dataclass(frozen=True)
-class Engine:
-    """What an engine hands the platform: its graph, where a turn starts, its contribution
+class Template:
+    """What an template hands the platform: its graph, where a turn starts, its contribution
     to the `done` payload, and what ingestion means for it. The platform owns the callers
-    (CLI, startup reconcile, the chat 409 guard); the engine owns the meaning."""
+    (CLI, startup reconcile, the chat 409 guard); the template owns the meaning."""
 
     name: str
     build: Callable[[], StateGraph]
@@ -113,14 +114,14 @@ class RunRecorder:
         self.steps: list[dict] = []
 
     @classmethod
-    async def start(cls, conversation_id: str, client_id: str, engine: Engine) -> "RunRecorder":
+    async def start(cls, conversation_id: str, client_id: str, template: Template) -> "RunRecorder":
         async with checkpoint_session() as db:
             run = Run(
                 conversation_id=conversation_id,
                 client_id=client_id,
-                engine=engine.name,  # confirm_ticket resumes the graph the run was proposed on
+                template=template.name,  # confirm_ticket resumes the graph the run was proposed on
                 status="running",
-                current_stage=engine.first_stage,
+                current_stage=template.first_stage,
                 steps=[],
                 state={},
             )
@@ -285,27 +286,27 @@ def _transcript(history: list[dict], turns: int = 6) -> str:
 
 
 
-_graphs: dict = {}  # engine name -> graph compiled against the checkpointer
+_graphs: dict = {}  # template name -> graph compiled against the checkpointer
 
 
-def use_checkpointer(saver, engines: Iterable[Engine]) -> None:
-    """Compile every engine's graph against a checkpointer: Postgres in the app, in-memory
+def use_checkpointer(saver, templates: Iterable[Template]) -> None:
+    """Compile every template's graph against a checkpointer: Postgres in the app, in-memory
     in tests. Thread ids are run ids, so the graphs never share a checkpoint."""
     _graphs.clear()
-    _graphs.update({e.name: e.build().compile(checkpointer=saver) for e in engines})
+    _graphs.update({e.name: e.build().compile(checkpointer=saver) for e in templates})
 
 
 def _compiled(name: str):
     if not _graphs:
         raise RuntimeError(
-            "No engine has a checkpointer: the app lifespan did not run "
+            "No template has a checkpointer: the app lifespan did not run "
             "postgres_checkpointer(), and the ticket pause cannot work without one."
         )
     return _graphs[name]
 
 
 @asynccontextmanager
-async def postgres_checkpointer(database_url: str, engines: Iterable[Engine]):
+async def postgres_checkpointer(database_url: str, templates: Iterable[Template]):
     """Install the Postgres saver for the app's lifetime. psycopg 3, beside asyncpg, because
     langgraph-checkpoint-postgres is written against it; `setup()` is idempotent."""
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -315,7 +316,7 @@ async def postgres_checkpointer(database_url: str, engines: Iterable[Engine]):
     # concurrent turns contend on it, or if a dropped connection needs to heal itself.
     async with AsyncPostgresSaver.from_conn_string(conninfo) as saver:
         await saver.setup()
-        use_checkpointer(saver, engines)
+        use_checkpointer(saver, templates)
         yield
 
 
@@ -329,7 +330,7 @@ def _thread(run_id: str) -> dict:
 async def stream_turn(
     user_message: str,
     *,
-    engine: Engine,
+    template: Template,
     cfg: ClientConfig,
     client_id: str,
     conversation_id: str | None,
@@ -345,7 +346,7 @@ async def stream_turn(
     recorder = None
     try:
         conversation_id, history = await prepare_conversation(db, client_id, conversation_id)
-        recorder = await RunRecorder.start(conversation_id, client_id, engine)
+        recorder = await RunRecorder.start(conversation_id, client_id, template)
         run_id = recorder.run_id
         yield ("run", {"run_id": run_id, "conversation_id": conversation_id})
 
@@ -355,15 +356,16 @@ async def stream_turn(
             "history": history,
             "conversation_id": conversation_id,
             "run_id": run_id,
+            "handoff": cfg.handoff.mode,
         }
-        async for event, data in _compiled(engine.name).astream(
+        async for event, data in _compiled(template.name).astream(
             initial, _thread(run_id), context=deps, stream_mode="custom", durability="sync"
         ):
             yield event, data
             if event == "step":
                 _maybe_crash(data["stage"])
 
-        values = (await _compiled(engine.name).aget_state(_thread(run_id))).values
+        values = (await _compiled(template.name).aget_state(_thread(run_id))).values
         db.add(Message(conversation_id=conversation_id, role="user", content=user_message))
         db.add(
             Message(
@@ -383,7 +385,7 @@ async def stream_turn(
                 "conversation_id": conversation_id,
                 "run_id": run_id,
                 "outcome": values["outcome"],
-                **engine.summary(values),
+                **template.summary(values),
                 "ticket_id": None,
                 "input_tokens": deps.usage.input_tokens,
                 "output_tokens": deps.usage.output_tokens,
@@ -412,7 +414,7 @@ async def stream_turn(
 async def run_turn(
     user_message: str,
     *,
-    engine: Engine,
+    template: Template,
     cfg: ClientConfig,
     client_id: str,
     conversation_id: str | None,
@@ -422,13 +424,13 @@ async def run_turn(
     the final state."""
     run_id = None
     async for event, data in stream_turn(
-        user_message, engine=engine, cfg=cfg, client_id=client_id, conversation_id=conversation_id, db=db
+        user_message, template=template, cfg=cfg, client_id=client_id, conversation_id=conversation_id, db=db
     ):
         if event == "run":
             run_id = data["run_id"]
         elif event == "error":
             raise RuntimeError(data["message"])
-    return (await _compiled(engine.name).aget_state(_thread(run_id))).values
+    return (await _compiled(template.name).aget_state(_thread(run_id))).values
 
 
 async def confirm_ticket(
@@ -443,11 +445,11 @@ async def confirm_ticket(
     run = await db.get(Run, run_id)
     if run is None or run.client_id != client_id:
         raise RunUnavailable(f"Run {run_id!r} not found")
-    # The run's engine, not the client's current one: a config edit between the offer and
+    # The run's template, not the client's current one: a config edit between the offer and
     # the click must not resume a paused thread on a graph that never created it.
-    if run.engine not in _graphs:
+    if run.template not in _graphs:
         raise RunUnavailable(f"Run {run_id!r} not found")
-    graph, thread = _compiled(run.engine), _thread(run_id)
+    graph, thread = _compiled(run.template), _thread(run_id)
     snapshot = await graph.aget_state(thread)
     filed = snapshot.values.get("ticket") or {}
     if filed.get("ticket_id"):
@@ -464,10 +466,10 @@ async def confirm_ticket(
     ok = "error" not in result
     await recorder.finish("completed")
 
-    # Imported here: escalation imports this module for the helpers its nodes share.
-    from app.agent.escalation import _escalation_reply
+    # Imported here: handoff imports this module for the helpers its nodes share.
+    from app.agent.handoff import _ticket_reply
 
-    reply = _escalation_reply(result, ok, cfg.escalation)
+    reply = _ticket_reply(result, ok, cfg.handoff)
     # Its own assistant turn, so reloading the conversation shows the confirmation.
     db.add(
         Message(

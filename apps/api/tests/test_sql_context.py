@@ -21,9 +21,9 @@ def cfg():
             "client_id": "sql-test",
             "name": "SQL test",
             "branding": {"logo": "x", "primary_color": "#000", "assistant_name": "A"},
-            "escalation": {"categories": ["other"]},
+            "handoff": {"message": "Ask the data team."},
             "agent": {
-                "engine": "text_to_sql",
+                "template": "database",
                 "model": "claude-sonnet-4-6",
                 "system_prompt_file": "p.md",
                 "database": {"dialect": "sqlite", "path": "d.sqlite"},
