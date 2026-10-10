@@ -19,6 +19,8 @@ group: Getting Started
 | `client_id` | `string` | ✓ | Unique identifier. Used as the pgvector namespace, URL slug, and log prefix. Must match `^[a-z0-9][a-z0-9-]*[a-z0-9]$`. |
 | `name` | `string` | ✓ | Human-readable client name. Used in logs and the UI header. |
 
+Any other top-level key fails at load: a leftover `escalation:` beside `handoff:` would otherwise read like it does something.
+
 ```yaml
 client_id: gcp-platform-support
 name: "Cloud Platform Support"
@@ -86,11 +88,11 @@ corpus:
 
 ## `agent`
 
-Selects the client's engine with `agent.engine` (required, no default) and tunes it. The keys below are the [support graph](/configent/docs/support-graph)'s (`engine: support_graph`). Each engine accepts only its own keys; the text-to-SQL keys are [in their own section](#agent-text_to_sql) below.
+Selects the client's template with `agent.template` (required, no default) and tunes it. The keys below are the [support graph](/configent/docs/support-graph)'s (`template: documents`). Each template accepts only its own keys; the text-to-SQL keys are [in their own section](#agent-database) below.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `agent.engine` | `string` | — | `support_graph` or `text_to_sql`. A name with no registered engine fails at load. |
+| `agent.template` | `string` | — | `documents` or `database`. A name with no registered template fails at load. |
 | `agent.model` | `string` | — | Claude model ID. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `claude-haiku-4-5-20251001`. |
 | `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |
@@ -102,7 +104,7 @@ Selects the client's engine with `agent.engine` (required, no default) and tunes
 
 ```yaml
 agent:
-  engine: support_graph
+  template: documents
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -134,16 +136,16 @@ agent:
 
 ---
 
-## `agent` (text_to_sql)
+## `agent` (database)
 
-The [text-to-SQL engine](/configent/docs/text-to-sql)'s keys (`engine: text_to_sql`). A `text_to_sql` client takes no `corpus:` or `retrieval:` block; either one fails at load.
+The [text-to-SQL template](/configent/docs/text-to-sql)'s keys (`template: database`). A `database` client takes no `corpus:` or `retrieval:` block; either one fails at load.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `agent.model` | `string` | — | Claude model ID, priced in `config/pricing/claude.yaml` like any other. |
 | `agent.system_prompt_file` | `string` | — | Path to `answer.md`; `generate.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. |
-| `agent.database.dialect` | `string` | — | `sqlite` only. A Postgres client would be a second dialect, not another engine. |
+| `agent.database.dialect` | `string` | — | `sqlite` only. A Postgres client would be a second dialect, not another template. |
 | `agent.database.path` | `string` | — | SQLite file, relative to the repo root. A missing file is not a load error: chat answers 409 until it exists (`make data-bird` for the demo). |
 | `agent.context.source` | `string` | — | The notes folder: `descriptions/<table>.csv`, `glossary.md`, `rules.md`. Merged with the introspected DDL into the schema context at ingest. |
 | `agent.guard.row_limit` | `int` | `200` | Rows returned to the answering call; more are cut and the result says it was truncated. |
@@ -152,7 +154,7 @@ The [text-to-SQL engine](/configent/docs/text-to-sql)'s keys (`engine: text_to_s
 
 ```yaml
 agent:
-  engine: text_to_sql
+  template: database
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/f1-analyst/answer.md
   database:
@@ -171,24 +173,34 @@ agent:
 
 ---
 
-## `escalation`
+## `handoff`
 
-Required for every client: every engine ends in the shared ticket offer, and this is what it needs to know about the tenant's tickets.
+Required for every client. What happens when a turn can't be answered from the sources (D9, amended). The *decision* is the template's and is made in Python; this block picks only the action. The block is a union tagged by `mode`, so a ticket key under `mode: message` fails at load.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `escalation.categories` | `map` or `list` | — | Ticket categories the draft may use. A map gives each id a label for the offer; a list uses the id with spaces. Must include `other`. |
-| `escalation.product_areas` | `list[string]` | `[]` | Empty: the draft has no product-area field. |
-| `escalation.queue` | `string` | — | Queue sent with the ticket. Unset, the ticket service routes by product area. |
-| `escalation.team` | `string` | `platform team` | Who the offer and the failure message say will take the ticket. |
-| `escalation.preamble` | `string` | `That one needs a human.` | First sentence of the ticket offer. |
+| `handoff.mode` | `message` \| `ticket` | `message` | `message`: reply with fixed text, no ticket and no model call. `ticket`: draft a ticket, offer it, file it once on the user's confirmation. |
+| `handoff.message` | `string` | — | `message` mode only, and required there. The whole reply; name a contact. |
+| `handoff.categories` | `map` or `list` | — | `ticket` mode only, and required there. Ticket categories the draft may use. A map gives each id a label for the offer; a list uses the id with spaces. Must include `other`. |
+| `handoff.product_areas` | `list[string]` | `[]` | `ticket` mode. Empty: the draft has no product-area field. |
+| `handoff.queue` | `string` | — | `ticket` mode. Queue sent with the ticket. Unset, the ticket service routes by product area. |
+| `handoff.team` | `string` | `platform team` | `ticket` mode. Who the offer and the failure message say will take the ticket. |
+| `handoff.preamble` | `string` | `That one needs a human.` | `ticket` mode. First sentence of the ticket offer. |
 
 ```yaml
-escalation:
+handoff:
+  message: "I couldn't find that in the documentation. Email support@acme.com."
+```
+
+```yaml
+handoff:
+  mode: ticket
   queue: data-team
   team: data team
   categories: [missing_data, data_request, other]
 ```
+
+A `message` turn's trail ends in a `decline` step and its outcome is `decline`; a `ticket` turn's ends in `escalate`, then `ticket` once confirmed.
 
 ---
 
@@ -294,7 +306,7 @@ corpus:
     overlap: 64
 
 agent:
-  engine: support_graph
+  template: documents
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -305,7 +317,8 @@ agent:
     enabled: true
     query_rewrites: 3
 
-escalation:
+handoff:
+  mode: ticket
   categories:
     account_config: project configuration
     quota_or_billing: quota or billing

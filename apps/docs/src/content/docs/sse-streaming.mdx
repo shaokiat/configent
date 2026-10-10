@@ -142,7 +142,7 @@ async def chat_stream(client_id: str, req: ChatRequest):
     async def event_source():
         async with AsyncSessionLocal() as db:
             async for name, data in stream_turn(
-                req.message, engine=support_graph.ENGINE, cfg=cfg, client_id=client_id,
+                req.message, template=documents.TEMPLATE, cfg=cfg, client_id=client_id,
                 conversation_id=req.conversation_id, db=db,
             ):
                 yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
@@ -185,7 +185,7 @@ async for event, data in graph.astream(
 ## Errors
 
 ```python
-async def stream_turn(user_message, *, engine, cfg, client_id, conversation_id, db):
+async def stream_turn(user_message, *, template, cfg, client_id, conversation_id, db):
     try:
         ...                                   # prepare, run the graph, persist, commit
         yield ("done", {...})

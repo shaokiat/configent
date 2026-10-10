@@ -128,21 +128,3 @@ event: done      data: {"conversation_id": "f3a1…", "run_id": "3f2b…", "outc
   `thanks` and `what can you do?` leave at Level 1 through a `converse` node, with one model
   call. The bare follow-up is now a *question*: it goes to Level 2, is rewritten with the
   conversation in view, and is answered (verified live, three citations). Still zero POSTs.
-
----
-
-## Judge fixtures
-
-> **Retired with UC-2 (D11).** The pair below judged an Acme answer; a replacement should pin
-> a `gcp-platform-support` pair before the judge is built.
-
-One pinned pair, so judge-prompt changes are regression-testable. Stored at
-`evals/fixtures/judge_pair_uc2.json`.
-
-- **Question:** UC-2's.
-- **Correct answer:** covers helium leak, immediate vent, and 4 business hours, citing
-  both documents.
-- **Degraded answer:** "Error E-417 is a general system fault. A field engineer typically
-  arrives within 1 to 2 business days." (wrong meaning, fabricated SLA, no citations)
-- **Expected:** correct beats degraded on correctness and groundedness; degraded scores
-  ≤ 2 on citation accuracy and gets a "fail" verdict.

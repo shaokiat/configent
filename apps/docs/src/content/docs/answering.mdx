@@ -5,7 +5,7 @@ order: 13
 group: The Support Graph
 ---
 
-`answer` runs when either level's route says the evidence holds. It sends that level's passages and the question to the model with citations enabled, and streams the reply. `answer_request_kwargs()` in `agent/engines/support_graph.py` assembles the request.
+`answer` runs when either level's route says the evidence holds. It sends that level's passages and the question to the model with citations enabled, and streams the reply. `answer_request_kwargs()` in `agent/templates/documents.py` assembles the request.
 
 The interesting part of that request is what is missing from it.
 
@@ -87,4 +87,4 @@ Citation payloads and how the frontend renders them: [Citations](/configent/docs
 
 ---
 
-**Next:** [Escalation & Ticket](/configent/docs/escalation-ticket), for the turn neither level could answer.
+**Next:** [Handoff & Ticket](/configent/docs/escalation-ticket), for the turn neither level could answer.

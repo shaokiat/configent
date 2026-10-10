@@ -1,0 +1,156 @@
+---
+title: Adding a Template
+description: The contract a new template fills, and the echo template in tests/ as the worked example that proves the seam holds.
+order: 7.5
+group: Templates
+---
+
+<div class="lead">
+  A template is the graph a client runs: it finds evidence, code judges it, and the shared
+  nodes converse or hand off. A new client of an existing template is a YAML file plus a
+  sources folder. A new pattern is a template: code behind a stable seam. This page is the
+  contract, with the smallest possible template as the example.
+</div>
+
+---
+
+## What the platform owns, what a template owns
+
+| Platform (`app/agent/platform.py`, `handoff.py`) | Template (`app/agent/templates/<name>.py`) |
+|---|---|
+| Config load and startup validation, tenancy by `client_id` | The graph: nodes and routes |
+| Rate limit, daily budget, cost and traces | Its typed config member |
+| Step trail (`RunRecorder`), checkpoints, SSE, history | Its prompts |
+| `stream_turn`, `run_turn`, `confirm_ticket` | What ingestion means for its sources |
+| `converse`, `decline`, `escalate`, `ticket` nodes, and `handoff.route` | The routing decision, as a plain Python function |
+
+> **Config selects and tunes a template; it never describes control flow.** Every route is an
+> `if` in code, so "why did it escalate?" has an answer ([D2](/configent/docs/support-graph)).
+
+---
+
+## The `Template` contract
+
+`Template` is a frozen dataclass. The platform imports no template; it receives one.
+
+| Field | Type | What the platform does with it |
+|---|---|---|
+| `name` | `str` | Matches `agent.template`; stored on the run as `runs.template` |
+| `build` | `() -> StateGraph` | Compiled once against the checkpointer in `use_checkpointer` |
+| `first_stage` | `str` | The run's `current_stage` before its first node finishes |
+| `summary` | `(dict) -> dict` | Merged into the `done` payload, for example `row_count` or `confidence` |
+| `check` | `(cfg, root) -> IngestReport` | What ingest would do. Writes nothing. Backs `--check` |
+| `ingest` | `async (db, cfg, root, *, force) -> stats` | Builds the index. Called by the CLI and the startup reconcile |
+| `ready` | `async (db, cfg) -> str \| None` | Why chat cannot serve this client yet, or `None`. Becomes the 409 |
+
+- **The platform owns the callers, the template owns the meaning.** The CLI, the reconcile and the chat 409 guard call `check`, `ingest` and `ready` without knowing what an index is.
+- **`runs.template` pins the graph.** `confirm_ticket` resumes the graph the run was proposed on, so a config edit between the offer and the click cannot move a paused thread to a graph that never created it.
+
+---
+
+## The shared state contract
+
+The shared nodes read `platform.TurnState`, not the template's own state. A template's state extends it.
+
+| Key | Read by | Meaning |
+|---|---|---|
+| `question`, `history`, `conversation_id`, `run_id` | every node | The turn's inputs |
+| `handoff` | `handoff.route` | The client's `handoff.mode`, set by `stream_turn` |
+| `why` | `decline`, `escalate` | What sent the turn to converse or hand off |
+| `reply` | `converse` | What converse says |
+| `level` | `converse` (logged only) | Optional. The tier, for a template that has tiers. `escalate` and `ticket` log level 3 themselves |
+| `draft`, `ticket` | `ticket` | Written by `escalate` and `ticket` |
+| `outcome`, `answer`, `segments` | the platform | `answer`, `converse`, `decline` or `ticket`; the text and its cited segments |
+
+A template routes to `escalate` by setting `route` and `why`, and uses `handoff.route` as its edge function, listing both `"escalate"` and `"decline"` as targets. The edge sends a `message` client to `decline` and a `ticket` client to `escalate`. The template never knows which, and never builds a ticket itself.
+
+---
+
+## Worked example: the echo template
+
+`tests/echo_template.py` is a complete template in about 60 lines. It echoes the question, and on the message `handoff` routes to `escalate`, which the shared `handoff.route` edge turns into `decline` for a `message` client.
+
+```python
+class EchoAgent(BaseModel):
+    template: Literal["echo"]
+    model: str
+    system_prompt_file: str
+
+def build() -> StateGraph:
+    g = StateGraph(TurnState, context_schema=Deps)
+    g.add_node("echo", echo)
+    g.add_node("escalate", escalate)
+    g.add_node("ticket", ticket)
+    g.add_node("decline", decline)
+    g.add_edge(START, "echo")
+    g.add_conditional_edges("echo", route, ["escalate", "decline", END])
+    g.add_edge("decline", END)
+    g.add_edge("escalate", "ticket")
+    g.add_conditional_edges("ticket", _after_ticket, ["ticket", END])
+    return g
+
+TEMPLATE = Template(
+    "echo", build, "echo", lambda values: {}, lambda cfg, root: IngestReport(), _ingest, _ready
+)
+```
+
+- **Nodes record themselves.** `echo` calls `_step(d, "echo", t)`, which commits the trail entry and streams the SSE `step` event as one write.
+- **Reuse the shared routes.** `route` applies the client's handoff; `_after_ticket` loops a failed filing back to the pause, with the same idempotency key (D4).
+- **No sources, so ingestion is empty.** `check` returns an empty report, `ingest` returns `{}`, `ready` returns `None`.
+
+---
+
+## Registering a template
+
+Three steps, none in the platform.
+
+1. **Write the module** in `app/agent/templates/<name>.py` and export an `TEMPLATE`.
+2. **Add it to `TEMPLATES`** in `app/agent/templates/__init__.py`. It is a plain dict of modules in this repo, reviewed like any code.
+3. **Add its config member** to the `AgentConfig` union in `app/config/schema.py`.
+
+### The config member
+
+The union is tagged by `template`, so a YAML names its template and the matching member validates it.
+
+- **`template: Literal["<name>"]` is required, no default.** A default would let a YAML load without saying which template it runs.
+- **Every member sets `extra="forbid"`.** A key from another template, or a leftover `tools` from the retired loop, fails at load and names the field.
+- **A config naming a template with no `TEMPLATES` entry fails at load,** not on the first request (P10).
+- **`corpus:`, `retrieval:` and `handoff:` stay top-level.** `documents` requires `corpus:`; `database` rejects `corpus:` and `retrieval:`. `handoff:` is required for every client.
+
+---
+
+## The ingestion contract
+
+| Question | Support graph | Text-to-SQL |
+|---|---|---|
+| What are the sources? | Documents in `corpus.source` | A database file and a notes folder |
+| What does `ingest` build? | Chunks and embeddings in pgvector | One `documents` row of schema context |
+| What is the fingerprint? | Chunk size, overlap, embedding model | Normalised DDL and every notes file |
+| What does `ready` say is wrong? | Index missing or built from other settings | No context, unreadable database, or changed schema or notes |
+
+A template with no sources, like echo, returns empty answers. A template with sources must make `ready` truthful, because it is the only thing standing between a user and a chat that cannot answer.
+
+---
+
+## The proof: the echo test
+
+`tests/test_echo_template.py` runs two things through the platform's own entry points, with the echo template registered by a fixture:
+
+- **A full turn.** `stream_turn` emits the `echo` step, the text and a `done` with `outcome: answer`. The run row records `template == "echo"` and `status == "completed"`.
+- **A propose-and-confirm round trip.** `handoff` produces `echo`, `escalate` and a `ticket_proposal`, files nothing, and `confirm_ticket` then files exactly one ticket.
+
+> **What the test shows.** Nothing in `app/` knows the echo template exists, and no platform or handoff file changed to run it. The one thing a real template edits outside its own module is the `AgentConfig` union; the test builds its config with `model_copy`, which does not validate, because that union is closed.
+
+---
+
+## When not to add a template
+
+Per-client customisation is content, not code. When a client needs more than the template gives, take the remedies in this order:
+
+1. **Views** in the client's database (text-to-SQL), so the schema the model sees is already the right shape.
+2. **Notes:** more descriptions, glossary entries or rules in the sources folder.
+3. **A code hook** in the existing template.
+
+Repeated hooks mean a new template is due. The Known gaps in the decision log name the other triggers: a second template needing the same evidence source brings plug-in retrievers, and a hybrid use case brings a third template.
+
+See also: [Text-to-SQL](/configent/docs/text-to-sql) · [Adding a New Use Case](/configent/docs/adding-a-use-case) · [The Support Graph](/configent/docs/support-graph)

@@ -41,7 +41,7 @@ Nine nodes, two decision functions, one pause.
 
 | | Pipeline (retired) | **Graph (built)** |
 |---|---|---|
-| **Engine** | `agent/pipeline.py`, 957 lines, no framework | `agent/graph.py`, 942 lines, LangGraph (since split into `platform.py`, `escalation.py` and `engines/support_graph.py`) |
+| **Engine** | `agent/pipeline.py`, 957 lines, no framework | `agent/graph.py`, 942 lines, LangGraph (since split into `platform.py`, `handoff.py` and `templates/documents.py`) |
 | **`agent.mode`** | `pipeline` | `graph`. `pipeline` now fails at startup |
 | **Retrieval tiers** | One | Two: dense, then rewrite plus hybrid search |
 | **Routing** | `should_escalate()`, one `if` | `decide_level1` and `decide_level2`, stored on state, read by the edges |
@@ -181,6 +181,7 @@ git show d81a230:prompts/gcp-platform-support/score.md
 git show d81a230:apps/docs/src/content/docs/pipeline.mdx
 git show d81a230:apps/docs/src/content/docs/scoring.mdx
 git show d81a230:docs/support-agent-pipeline.html
+git show ee1d326:docs/support-agent-plan.md   # the four-week plan, deleted 2026-10-10
 
 # how the pipeline evolved
 git log --oneline 647bda6^..d81a230 -- apps/api/app/agent/pipeline.py

@@ -1,13 +1,18 @@
 ---
-title: Escalation & Ticket
-description: Level 3. A drafted ticket, a graph paused on interrupt(), and a POST from Python once the user confirms. Idempotency comes from the run, not the content.
+title: Handoff & Ticket
+description: Level 3. The client's handoff — a fixed message, or a drafted ticket, a graph paused on interrupt(), and a POST from Python once the user confirms. Idempotency comes from the run, not the content.
 order: 14
 group: The Support Graph
 ---
 
-When neither level can ground an answer, `escalate` drafts a ticket with a structured-output call and offers it. The graph then pauses in `ticket` on `interrupt()`, and the turn ends. Filing happens **only after the user confirms**, when `confirm_ticket()` resumes the graph and Python POSTs the draft.
+When neither level can ground an answer, the turn goes to the client's **handoff** (`handoff.mode`, D9 amended).
 
-The route to this tier was chosen before any of it started. Nothing here can revisit whether the question was answerable.
+- **`message` (the default):** the shared edge `handoff.route` sends the turn to `decline`, which replies with `handoff.message`. No model call, no ticket, outcome `decline`.
+- **`ticket`:** the rest of this page.
+
+In ticket mode, `escalate` drafts a ticket with a structured-output call and offers it. The graph then pauses in `ticket` on `interrupt()`, and the turn ends. Filing happens **only after the user confirms**, when `confirm_ticket()` resumes the graph and Python POSTs the draft.
+
+The route to this tier was chosen before any of it started. Nothing here, in either mode, can revisit whether the question was answerable.
 
 ---
 
@@ -15,6 +20,8 @@ The route to this tier was chosen before any of it started. Nothing here can rev
 
 ```
 decide_level2 (or decide_level1, with corrective off) → "escalate" + why
+  │
+  ├─ decline                           handoff.mode: message · the configured text · END
   │
   └─ escalate                          structured output · prompts/<client_id>/ticket_draft.md
        ├─ _normalise_draft()           subject fallback · category, product_area, priority defaults
@@ -126,4 +133,4 @@ A user mid-deploy did not ask for a ticket. One that appears unrequested reads a
 
 ---
 
-**Next:** [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph), why this engine replaced a hand-written one, and what carried over.
+**Next:** [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph), why this template replaced a hand-written one, and what carried over.
