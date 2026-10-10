@@ -99,10 +99,10 @@ Full write-up: [`docs/architecture.md`](docs/architecture.md).)*
 
 - **Support graph** — a LangGraph state graph whose every route is a plain Python
   function; LangGraph supplies checkpoints and the pause before a ticket is filed, and
-  model calls go through the Anthropic SDK directly (details under Status).
-- **Native citations** — chunks return as `search_result` content blocks; the API
-  attaches citations at generation time, and cited text must match the source
-  verbatim, so a hallucinated citation is detectable.
+  model calls go through the OpenAI SDK on OpenRouter, directly (details under Status).
+- **Citations on every claim** — the answering model sees numbered passages and cites
+  each claim as `[n]`; Python turns the markers into citations as they stream, and a number
+  that names no passage is kept as text and counted on the step (D15).
 - **Per-client isolation** — configs are validated (unknown keys and unpriced
   models rejected) at load, not request time; retrieval is scoped by `client_id` everywhere;
   conversation loading verifies ownership, so another client's conversation ID

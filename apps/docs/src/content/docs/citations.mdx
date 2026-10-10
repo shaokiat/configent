@@ -1,42 +1,56 @@
 ---
 title: Citations
-description: How Configent uses Anthropic's native citations API — search_result content blocks, inline citation markers, and the frontend-friendly segments format.
+description: How Configent cites — numbered passages in the prompt, [n] markers in the answer, parsed in Python into the segments the UI renders.
 order: 17
 group: Cross-Cutting
 ---
 
-When the agent answers a question, it cites the exact document passages it drew from. The Anthropic API produces citations natively: the model marks the specific text it used, not the whole chunk.
+When the agent answers, every claim carries a citation to the passage it came from. The model writes the citation as a number; Python turns the number into the chip (D15).
 
 ---
 
 ## How it works
 
-Citations flow through three layers:
+```
+retrieved chunks / query rows
+  └─ numbered passages: "[1] title (source)\n text"   → any model, via OpenRouter
+        └─ the answer, citing with [n]                  → streamed back
+              └─ Markers: [n] → citation event          → the UI, live
+                    └─ segments                         → stored in the DB
+```
+
+### 1. Numbered passages
+
+`answer_request_kwargs()` in each template returns the request and its passages. The user message is the passages, numbered in order, then the question:
 
 ```
-retrieved chunks
-  └─ search_result content blocks   → sent to Claude via OpenRouter
-        └─ citations in response    → extracted from API response
-              └─ segments           → stored in DB + sent to frontend
+[1] Cloud Run: deployment and runtime errors (https://cloud.google.com/run/docs/troubleshooting)
+Container failed to start. Failed to start and then listen on the port defined by the PORT environment variable.
+
+[2] …
+
+Question: what does the PORT error mean?
 ```
 
-### 1. `search_result` blocks
+The database template sends one passage, `[1]`: the query's rows as a table, titled with the query's reasoning and sourced as `sql://<client_id>`.
 
-`search_result` is the Anthropic content type that enables citation tracking. The graph's `answer` node puts the blocks directly in the user message, built by `answer_request_kwargs()`. See [Answering](/configent/docs/answering).
+### 2. The model cites with `[n]`
 
-The blocks are passed verbatim, never serialized to JSON. The API only enables citation tracking on the `search_result` content type, not on the same data JSON-stringified into a text block.
+The answer prompt asks for a marker after each sentence that uses a passage, `[1][2]` for several, numbers from the list only, and no sources list at the end. Any model OpenRouter lists can do this; Haiku 4.5 and DeepSeek V4.1 Flash both answered the demo questions with valid markers.
 
-### 2. Anthropic generates citations
+### 3. `Markers` parses the stream
 
-With `search_result` blocks in context, the model annotates its response text with citation markers that reference specific passages from those blocks. This is GA behavior on current Claude models, including the `claude-haiku-4-5` model the shipped client runs, with no beta header required.
+`Markers` in `agent/common.py` reads the streamed text:
 
-The attribution is the API's, not ours. Each citation comes back with its source, title, and a `cited_text` field. The API decides which block and which span supports each run of the reply. We do no string matching.
+- **A valid `[n]` becomes a `citation` event,** and the marker leaves the text, with the space before it. "1 vCPU [1]." reads "1 vCPU." with a chip.
+- **A marker split across chunks still parses.** A trailing `[`, `[1` or space is held back until the next chunk settles it.
+- **A number with no passage stays in the text,** as written, and is counted in the answer step's `bad_citations`. So `arr[0]` in an answer about code survives, and a model inventing `[9]` shows in the step trail.
 
-**One caveat: `cited_text` is the whole chunk.** The API returns the entire matched chunk, often hundreds of tokens. `excerpt()` in `agent/common.py` trims it to a ~400-character, sentence-boundary preview before it reaches the frontend.
+**What this does not check:** that passage `[n]` says what the sentence does. The marker is the model's claim. D15 records the trade, and the decision log's Known gaps names the check that would close it.
 
-### 3. Segments extraction
+### 4. Segments
 
-`collect_segments()` turns the final response into a `segments` list, alternating text and cited passages, structured for the frontend:
+`segments_from()` turns the parsed pieces into a `segments` list: each run of text, then the citations that follow it. The shape is the one the UI and stored messages have always used:
 
 ```json
 [
@@ -44,22 +58,21 @@ The attribution is the API's, not ours. Each citation comes back with its source
     "text": "That error means the container never listened on the port Cloud Run expects",
     "citations": [
       {
-        "source": "corpus://gcp-platform-support/cloud-run-troubleshooting.md",
-        "title": "Cloud Run troubleshooting",
+        "source": "https://cloud.google.com/run/docs/troubleshooting",
+        "title": "Cloud Run: deployment and runtime errors",
         "cited_text": "Container failed to start. Failed to start and then listen on the port defined by the PORT environment variable."
       }
     ]
   },
-  {
-    "text": ", so the startup probe gave up.",
-    "citations": []
-  }
+  {"text": ". Read the port from `PORT` rather than hardcoding it.", "citations": []}
 ]
 ```
 
+`cited_text` is the cited passage, trimmed by `excerpt()` to a ~400-character, sentence-boundary preview.
+
 ### Linkable sources
 
-A citation's `source` is the document's URL when it has one, else the `corpus://` identity. The URL is passed as the `search_result` `source`, and the API echoes it back, so there is no extra SSE field.
+A citation's `source` is the document's URL when it has one, else the `corpus://` identity. The URL is the passage's `source`, shown in its numbered header and carried onto the citation, so there is no extra SSE field.
 
 - **Where the URL comes from:** `url:` in the file's YAML front matter, else `corpus.source_url_template` (`{stem}` and `{path}`, the relative path without extension), else none.
 - **Stored on the document** (`documents.url`), carried on `Hit`, sent by `_hit_dict` and `answer_request_kwargs`. `source_uri` stays the stable identity that prune and the fingerprint key on.
@@ -91,29 +104,20 @@ The answering call never runs with zero passages. Both route functions require a
 
 ## Frontend rendering
 
-Citations aren't delivered whole in `done`. They stream. As the model emits each one, the `answer` node turns the API's `citations_delta` into a `citation` SSE event, interleaved with the `text` deltas:
+Citations stream. As `Markers` completes each valid marker, the `answer` node writes a `citation` SSE event between the `text` deltas:
 
 ```json
 // citation event payload
-{"index": 1, "source": "corpus://gcp-platform-support/cloud-run-troubleshooting.md",
- "title": "Cloud Run troubleshooting", "cited_text": "Container failed to start. Failed to start and then listen on the port..."}
+{"index": 1, "source": "https://cloud.google.com/run/docs/troubleshooting",
+ "title": "Cloud Run: deployment and runtime errors", "cited_text": "Container failed to start. Failed to start and then listen on the port..."}
 ```
 
 ```
 SSE events:  text · text · citation#1 · text · citation#2 · text · done
                     └──────────── frontend folds ───────────┘     (usage only)
-segments:    [ {text, citations:[]}, {text, citations:[#1]}, … ]
+segments:    [ {text, citations:[#1]}, {text, citations:[#2]}, … ]
 ```
 
-The frontend rebuilds `{text, citations[]}` segments from the interleaved stream and renders each inline, with a badge that expands to the source title and cited passage.
-
-Where the segments come from differs by path:
-
-| Path | Segment assembly |
-|---|---|
-| `run_turn()` (non-streaming) | `collect_segments()` builds the full array in one shot |
-| `stream_turn()` (SSE) | The frontend rebuilds them from `citation` deltas |
-
-Either way, the `collect_segments()` list lands in the `messages.citations` column at commit. The `done` event carries no `reply` or `segments`.
+The frontend rebuilds `{text, citations[]}` segments from the interleaved stream and renders each inline, with a badge that expands to the source title and the passage. The same pieces build the stored `segments` on the server, so a reloaded conversation renders what the live one did. The `done` event carries no `reply` or `segments`.
 
 See [SSE Streaming](/configent/docs/sse-streaming) for the full event contract.

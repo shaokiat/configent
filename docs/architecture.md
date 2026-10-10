@@ -68,8 +68,8 @@ and four prompts, run the ingestion command.
 4. `retrieve` runs vector search scoped to that client's rows, and `grade` rates whether the
    passages support an answer. A Python function routes the turn: answer, converse, search
    again, or draft a ticket.
-5. An answer is streamed from Claude (via OpenRouter, D14) with the passages as `search_result` content
-   blocks and citations enabled, and with no tool definitions in the request.
+5. An answer is streamed (via OpenRouter, D14) from the passages, numbered so the model cites
+   each claim as `[n]`, and with no tool definitions in the request (D15).
 6. Steps, text deltas and citation deltas stream back to the browser via SSE. A ticket offer
    arrives as a `ticket_proposal` event; the graph pauses until the user confirms.
 7. Every model call is recorded as a trace row (tokens, cache reads, cost, latency), each
@@ -132,8 +132,8 @@ Level 3 · handoff         decline                 (handoff.mode: message)
 - **LangGraph owns mechanism only:** a Postgres checkpoint after every node, and the
   `interrupt()` pause while a ticket offer waits for the user.
 - **The answering call is sent no tools,** so escalation is unreachable from inside the model.
-- **Model calls use the Anthropic SDK directly** inside nodes, so citations stream exactly as
-  the API documents them.
+- **Model calls use the OpenAI SDK directly** inside nodes, on OpenRouter, so the answer's
+  `[n]` markers are parsed from the raw stream as it arrives (D15).
 - **Every node commits a step** to the `runs` row on its own session before the next starts,
   so a crash leaves the finished steps on the record.
 
@@ -141,15 +141,15 @@ A free-form tool-use loop shipped beside the graph until D11; see `docs/decision
 
 ## 5. Citations
 
-Citations are attached by the Anthropic API at generation time, not extracted or regexed out
-of the answer afterward. The `answer` node passes retrieved chunks as `search_result` content
-blocks (each with a `source` URI, a `title`, and the passage text) with citations enabled.
-The model's answer comes back as text blocks that can each carry a `citations` array — source,
-title, and the exact `cited_text`, which must appear verbatim in the source document. That
-verbatim requirement is what makes a hallucinated citation detectable.
+The `answer` node sends the retrieved chunks as numbered passages, `[n] title (source)` then
+the text, and the model cites each claim with `[n]` (D15). `Markers` parses the stream: each
+valid marker becomes a `citation` event, between the text deltas, and leaves the text. A number
+that names no passage stays in the text and is counted as `bad_citations` on the step. The
+frontend renders citations as inline, expandable source popovers.
 
-While streaming, citation data arrives as `citations_delta` events alongside the text deltas,
-and the frontend renders them as inline, expandable source popovers.
+What a marker does not prove is that its passage says what the sentence does: it is the
+model's claim. The API citations this replaced (P4) tied each one to a passage the API was
+sent; that guarantee was traded for one SDK and any answering model.
 
 The graph never calls the answering model with zero passages: both route functions require
 at least one before they choose `answer`.
@@ -216,7 +216,7 @@ configent/
 | Vector store | pgvector + Postgres full-text | One database for everything; no extra service to run or explain |
 | Agent runtime | LangGraph for mechanism, Python for decisions | Checkpoints and the ticket pause come from the framework; every route is a function you can read |
 | Escalation | Routed by code; answering call sent no tools | A model cannot be talked out of an `if` statement |
-| Citations | `search_result` blocks + API citations | Citations are guaranteed-valid (verbatim match required) instead of prompt-based quoting |
+| Citations | Numbered passages, `[n]` markers parsed in Python | Any model can answer and cite; an invented number is caught, a wrong-but-valid one is not (D15) |
 | Model | `anthropic/claude-haiku-4.5` | Cheap enough to spend extra calls on grading and rewriting |
 | Cost | Priced per model from a dated YAML table | No API returns prices; an unpriced model fails startup |
 | Tracing | Homegrown Postgres `traces` table | The same data feeds cost display and the daily budget; no extra service to run |
@@ -231,7 +231,7 @@ Full reasoning for each: `docs/decisions.md`.
 - The three-tier support graph with a durable step trail and a confirm-before-filing pause
 - RAG retrieval (pgvector) scoped by `client_id`, with a similarity floor, and hybrid search
   at Level 2
-- Native citations via `search_result` blocks
+- Citations as numbered markers, parsed as they stream
 - SSE streaming chat UI with the step trail, citation popovers and a ticket confirm card
 - Cross-tenant conversation and run ownership enforcement (mismatched `client_id` → 404)
 - Per-client rate limiting and daily budget enforcement (429s), backed by trace persistence

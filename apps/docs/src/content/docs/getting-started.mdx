@@ -178,7 +178,7 @@ When you sent your first message, the support graph:
 2. **`retrieve`** embedded your message with `voyage-3` and searched `my-assistant`'s chunks in pgvector
 3. **`grade`** asked Claude whether the passages support an answer, and whether the message is a question at all
 4. **`decide_level1`** compared the best similarity and the groundedness score against your thresholds
-5. **`answer`** streamed a reply from the passages as `search_result` blocks with citations enabled, and no tools
+5. **`answer`** streamed a reply from the numbered passages, citing each claim as `[n]`, with no tools
 6. Each node's step, the text and the citations streamed back over SSE
 7. The frontend rendered the step trail above the reply, with inline citation popovers
 

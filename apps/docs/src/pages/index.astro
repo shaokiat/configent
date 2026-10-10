@@ -196,7 +196,7 @@ const decisions = [
             <li><strong>grade</strong> — a cheap model rates how well the surviving passages support an answer, and whether the message is a support question at all. A greeting leaves here with a short reply and no ticket.</li>
             <li><strong>decide_level1</strong> — Python compares similarity and groundedness to the configured thresholds. Both clear: answer. Otherwise: Level 2.</li>
             <li><strong>rewrite → hybrid_retrieve → regrade</strong> — Level 2 rewrites the question with the conversation in view, searches semantic and keyword at once, fuses the results by rank, and grades again. <code>decide_level2</code> answers if the new evidence holds.</li>
-            <li><strong>answer</strong> — passages go to the model as <code>search_result</code> blocks in top-level user content, so the API attaches citations at generation time. No tool definitions are sent on this call.</li>
+            <li><strong>answer</strong> — passages go to the model numbered, it cites each claim as <code>[n]</code>, and Python turns the markers into citations as they stream. No tool definitions are sent on this call.</li>
             <li><strong>escalate → ticket</strong> — neither level could answer, so a structured ticket is drafted and offered, and the graph pauses. On confirmation it resumes and POSTs to the ticket service, which assigns the id. A queue is only worth reading if what reaches it needed a human.</li>
           </ol>
         </div>

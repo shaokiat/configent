@@ -122,11 +122,11 @@ LangGraph provides the mechanism. Every decision stays in this repo's Python.
 | **Saving progress** | A checkpoint after every node (`durability="sync"`) | Nothing |
 | **Waiting for the user** | `interrupt()` pauses, `Command(resume=True)` continues | `confirm_ticket()` checks the run before it resumes |
 | **Streaming** | A custom stream writer | Nodes write the same SSE tuples as before |
-| **Model calls** | Nothing | The Anthropic SDK, called directly |
+| **Model calls** | Nothing | The OpenAI SDK on OpenRouter, called directly (D15) |
 | **The trail the UI shows** | Nothing | `RunRecorder` writes `runs.steps` |
 
 - **Why a framework now.** The two things LangGraph gives this graph are the two things the retired pipeline built by hand: resumable state (`RunRecorder` plus `Run.state`) and a confirm endpoint reading a parked draft. The full comparison, and every decision in the change: [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph).
-- **Why not LangChain model wrappers.** Top-level `search_result` blocks and `citations_delta` streaming have to behave exactly as the Messages API documents them. Calling the SDK inside the node guarantees that.
+- **Why not LangChain model wrappers.** The answer's `[n]` markers are parsed from the raw stream as it arrives, and structured calls need the exact `response_format`. Calling the SDK inside the node keeps both in plain view.
 - **Why the edges are not model-chosen.** A model picking the next node is a tool-use loop with extra steps. The edge function only reads a string Python already wrote.
 
 ---
@@ -169,14 +169,14 @@ The fix keeps the ordering. The grade call returns a `kind` field alongside its 
 
 ---
 
-## The two API constraints that set the boundaries
+## Where the nodes are cut
 
-Both were verified against the Messages API before the build. Between them they explain why the nodes are cut where they are.
+- **Judging calls return JSON; the answer returns prose.** `grade`, `rewrite` and `escalate` take structured output (`response_format: json_schema`); `answer` writes prose that cites numbered passages as `[n]`. The split falls along node lines.
+- **Retrieval is a node, not a tool.** Passages go into the answer's user message as numbered text, so no model ever holds a search tool.
 
-- **`search_result` blocks are valid as top-level user content.** They do not have to arrive inside a `tool_result`, so retrieval can be a node with no tool involved.
-- **Citations and `output_config.format` cannot be combined.** The API returns 400. The split falls along node lines: `grade`, `rewrite` and `escalate` take structured output, and `answer` takes citations.
+> **The final response is assembled, not generated.** Python parses the answer's markers into citations and builds the response from the checkpointed state. The contract is constructed rather than hoped for.
 
-> **The final response is assembled, not generated.** No single model call can return citations and a schema, so Python builds the response from the checkpointed state. The contract is constructed rather than hoped for.
+_Amended 2026-10-10, D15:_ the cut was first forced by the Messages API, which rejected citations combined with `output_config.format` (400) and took `search_result` blocks as top-level content.
 
 ---
 
