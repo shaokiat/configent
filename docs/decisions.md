@@ -436,8 +436,8 @@ one only together with a client that does (`f1-analyst`, #19).
 - Per-client customisation is content, not code. When a client needs more than notes, the
   remedies in order are views in the client's database, more notes, then a code hook;
   repeated hooks mean a new engine is due.
-- `TextToSqlAgent` is a stub until #18. A `text_to_sql` YAML loads but has no entry in
-  `ENGINES`.
+- A config naming an `agent.engine` with no `ENGINES` entry fails at load. `text_to_sql`
+  is registered with its ingestion contract (#18); its graph is a placeholder until #19.
 
 ---
 

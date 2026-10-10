@@ -22,6 +22,9 @@ out/
 apps/docs/.astro/
 apps/docs/dist/
 
+# Third-party datasets (BIRD is CC BY-SA 4.0; fetched by `make data-bird`)
+data/
+
 # Env
 .env
 .env.local
