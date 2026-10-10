@@ -101,7 +101,7 @@ async def generate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
     out, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=await _system(d),
         user_content=(
             f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
@@ -114,7 +114,7 @@ async def generate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     kind, sql = out.get("kind"), (out.get("sql") or "").strip()
     route = {"conversation": "converse", "handoff": "escalate"}.get(kind, "guard")
     reasoning = out.get("reasoning") or ""
-    await _model_step(d, state, "generate", t, response, reasoning=reasoning, kind=kind, sql=sql or None)
+    await _model_step(d, state, "generate", t, response, model=d.cfg.structured_model, reasoning=reasoning, kind=kind, sql=sql or None)
     return {
         "kind": kind, "sql": sql, "reasoning": reasoning, "reply": out.get("reply"),
         "route": route, "why": reasoning or f"the model marked this a {kind}",
@@ -167,7 +167,7 @@ async def repair(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
     out, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=await _system(d),
         user_content=(
             f"Latest message:\n{state['question']}\n\n"
@@ -180,7 +180,7 @@ async def repair(state: TurnState, runtime: Runtime[Deps]) -> dict:
     )
     sql, attempt = (out.get("sql") or "").strip(), state["attempts"] + 1
     await _model_step(
-        d, state, "repair", t, response,
+        d, state, "repair", t, response, model=d.cfg.structured_model,
         reasoning=out.get("reasoning"), error=state["error"], sql=sql or None, attempt=attempt,
     )
     return {"sql": sql, "attempts": attempt, "route": "guard"}

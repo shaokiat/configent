@@ -55,6 +55,7 @@ def _load_all(config_dir: Path) -> dict[str, ClientConfig]:
         # An unpriced model would report every turn as free (D8)
         try:
             price_for(cfg.agent.model)
+            price_for(cfg.structured_model)
         except ValueError as exc:
             raise ValueError(f"Config error in {path.name}: {exc}") from exc
 

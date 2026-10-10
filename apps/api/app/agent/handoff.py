@@ -103,7 +103,7 @@ async def escalate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
     raw, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=_prompt(d.cfg, "ticket_draft"),
         user_content=(
             f"The assistant could not answer this from its evidence.\n"
@@ -118,7 +118,7 @@ async def escalate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     if d.cfg.handoff.queue:
         draft["queue"] = d.cfg.handoff.queue  # sent with the ticket; the service honours it
     await _model_step(
-        d, state, "escalate", t, response,
+        d, state, "escalate", t, response, model=d.cfg.structured_model,
         level=3,  # "Level 3 is a human" holds for every template
         reasoning=state["why"],
         category=draft["category"],

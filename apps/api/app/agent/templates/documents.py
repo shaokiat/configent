@@ -178,7 +178,7 @@ async def grade(state: TurnState, runtime: Runtime[Deps]) -> dict:
     ) or "(none — retrieval returned nothing above the drop floor)"
     score, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=_prompt(d.cfg, "grade"),
         user_content=(
             f"Question:\n{state['question']}\n\n"
@@ -197,7 +197,7 @@ async def grade(state: TurnState, runtime: Runtime[Deps]) -> dict:
     else:
         route, why = decide_level2(score=score, n_hits=len(hits), cfg=d.cfg)
     await _model_step(
-        d, state, "grade" if level == 1 else "regrade", t, response,
+        d, state, "grade" if level == 1 else "regrade", t, response, model=d.cfg.structured_model,
         level=level,
         reasoning=score.get("reasoning"),
         confidence=round(float(score.get("confidence", 0.0)), 4),
@@ -214,7 +214,7 @@ async def rewrite(state: TurnState, runtime: Runtime[Deps]) -> dict:
     n = d.cfg.agent.corrective.query_rewrites
     out, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=_prompt(d.cfg, "rewrite"),
         user_content=(
             f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
@@ -227,7 +227,7 @@ async def rewrite(state: TurnState, runtime: Runtime[Deps]) -> dict:
     queries = [q.strip() for q in out.get("queries") or [] if isinstance(q, str) and q.strip()][:n]
     keywords = str(out.get("keywords") or "").strip()
     await _model_step(
-        d, state, "rewrite", t, response,
+        d, state, "rewrite", t, response, model=d.cfg.structured_model,
         level=2,
         reasoning=f"Level 1 fell short ({state['why']}), so searching again",
         queries=queries,

@@ -493,6 +493,12 @@ place (`app/llm.py`) from `OPENROUTER_API_KEY`. Model ids are OpenRouter's
 - **Haiku 4.5 is the default; Haiku 5.5 is priced and one YAML line away.** It is a tenth
   of the price per token but always thinks first (`thinking: disabled` is not honoured
   through OpenRouter), so output runs longer and a tight `max_tokens` can truncate.
+- **Cheap models do the structured calls (`agent.structured_model`).** Grading, rewriting,
+  SQL and the ticket draft send text, not `search_result` blocks, so any model that follows
+  a schema can do them. Both clients run them on DeepSeek V4.1 Flash and answer on Haiku 4.5:
+  the demo turns cost a third to a half of all-Haiku, with the same routes and citations.
+  `UsageTotals` prices each call at its own model's rates. The ticket draft now requires
+  `category`, which DeepSeek otherwise skipped.
 - **`count_tokens` is unavailable** through OpenRouter (404). The schema-context token count
   in `--check` was already best-effort and now reports none.
 
