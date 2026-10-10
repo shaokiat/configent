@@ -339,7 +339,7 @@ pronoun follow-up or an exact identifier like `iam.serviceAccounts.actAs` could 
 
 ### D11 — The loop engine is retired · LOCKED, SUPERSEDED-IN-PART (decided and built 2026-09-11, #8; several engines return in D13)
 The free-form tool-use loop, its tool registry and tools, and the two clients that used it
-(Acme Fab Equipment, Meridian Insurance) are deleted. Every client runs the support graph.
+(Acme Fab Equipment, Meridian Insurance) are deleted. Every client then ran the support graph (D13 added a second engine).
 `AgentConfig` drops `mode`, `tools` and `effort`, and forbids unknown keys.
 
 - **What the graph used moves to `app/agent/common.py`:** conversation loading,
@@ -440,7 +440,7 @@ one only together with a client that does (`f1-analyst`, #19).
   remedies in order are views in the client's database, more notes, then a code hook;
   repeated hooks mean a new engine is due.
 - A config naming an `agent.engine` with no `ENGINES` entry fails at load. `text_to_sql`
-  is registered with its ingestion contract (#18); its graph is a placeholder until #19.
+  is registered with its ingestion contract (#18) and its graph (#19): generate → guard → execute, with one repair.
 
 ---
 
@@ -450,7 +450,7 @@ Things this deliberately does not do. This is a POC: the point is that each of t
 choice, and that the choice can be named. Saying "I didn't build that, here's why, here's
 what it would take" is a better answer than a half-built version of it.
 
-| Gap | Why it's acceptable here | What production would need |
+| Gap | Why it's acceptable here | What production would need (and the trigger) |
 |---|---|---|
 | **One ticket per run, not per conversation.** A user rephrasing the same unanswerable question files a second ticket. | Run-level idempotency (D4) covers the crash path, which is the one being demonstrated. Conversation-level dedupe is product policy, not a reliability property. | A `conversation_id → open ticket` lookup, and the escalate branch referencing the existing ticket. |
 | **Exhausted ticket retries mark the run `failed_ticket` and log it.** No dead-letter table, no drain endpoint. | The user is still told their question was recorded, and the failure is visible. A queue nobody drains isn't a queue — and at POC scale the operator is you, reading logs. | A dead-letter table with list and retry endpoints, and someone on the hook for draining it. |
@@ -466,4 +466,10 @@ what it would take" is a better answer than a half-built version of it.
 | **Cost is an estimate from a checked-in price table** (D8). Nothing reconciles it against the bill. | Prices change rarely and the table is dated. An unpriced model fails startup, so the failure that matters, a turn reported as free, cannot happen. | A daily job comparing summed `traces.cost_usd` against the Admin API cost report (`/v1/organizations/cost_report`), alerting on drift. |
 | **No multi-hop engine** (D11). A question that needs one search to inform the next gets one extra search at most. | The loop that could chain searches served no loaded client. | A tool-holding research node inside the graph, still sent no ticket tool. |
 | **Nothing is prompt-cached on Haiku 4.5** (P5). The answering call's one breakpoint covers a ~750-token system prompt, under the model's 4,096-token minimum, and history has no breakpoint. | Haiku input is $1/MTok and support conversations are a few turns; caching a prompt this size would save a fraction of a cent per turn. | A breakpoint on the last history message for long conversations, or a model with a lower minimum. |
+| **No web search.** | No loaded client needs fresher data than its sources; DeployBot's unanswerable questions depend on the user's own project, which no public page holds (D1, D10). | A client-side search API normalised into a shared `Evidence` shape and graded like any other evidence. **Trigger:** a client needs fresher data than its sources hold. Design in #22. |
+| **No plug-in retrievers or shared `Evidence` type** (D12). | Each engine has one evidence source; an interface with one implementation per engine is ceremony. | Named slots per engine, filled by retriever ids in config. **Trigger:** a second engine needs the same evidence source (web search is the likely first). |
+| **The full schema goes in the prompt.** | `formula_1`'s context fits comfortably and caches. | Schema retrieval: select tables per question before generating. **Trigger:** a schema no longer fits the context or stops caching economically. |
+| **No hybrid SQL + vector + rules engine.** | No client needs one; the accident-case pattern was considered and not built. | A third engine. **Trigger:** a hybrid use case is wanted. |
+| **The text-search language is `english` for every tenant.** | One English corpus. The language is baked into the generated `chunks.text_search` column. | A per-client column or index (or a per-language generated column) and a validated `retrieval.keyword.language`. **Trigger:** a non-English corpus. |
+| **One embedding dimension for every tenant.** | One `Vector(1024)` column (P2); the config refuses models of another width. | A column or table per dimension, and a migration per new width. **Trigger:** a client needs a model of another width. |
 | **The ticket service is a mock in this repo.** | It exercises the real integration shape — HTTP, schema, idempotency key, retries, failure injection — without a vendor account. | A real ticketing API. The client swaps; the retry and idempotency paths don't. |

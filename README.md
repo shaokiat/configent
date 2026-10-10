@@ -2,8 +2,21 @@
 
 [![API CI](https://github.com/shaokiat/configent/actions/workflows/api-ci.yml/badge.svg)](https://github.com/shaokiat/configent/actions/workflows/api-ci.yml)
 
-**Config-driven, multi-tenant RAG + agent platform: one codebase, one YAML file per
-client.**
+**A platform for grounded assistants: one codebase, one YAML file per client.**
+
+A grounded assistant retrieves evidence before it answers, answers only from it with
+citations, and escalates to a human when the evidence falls short. Python decides which of
+those happens, never the model. Documents are one kind of evidence and rows from a SQL
+database are another, so text-to-SQL counts as retrieval, with no vector index.
+
+Two engines ship, each a LangGraph graph in its own module:
+
+- **`support_graph`** (DeployBot): documents, a groundedness grade, corrective retrieval.
+- **`text_to_sql`** (PitWall, the `f1-analyst` client): the schema in the prompt, a guarded
+  read-only SELECT, the rows as evidence.
+
+A new client of an existing pattern is a YAML file plus a sources folder. A new pattern is
+code behind a stable seam: [Adding an engine](https://shaokiat.github.io/configent/docs/adding-an-engine/).
 
 Enterprise AI demos are usually generic — the prospect asks "does it know our
 documents?" and the honest answer is "not yet, give us a few weeks." The gap between
@@ -181,6 +194,11 @@ The free-form tool-use loop that shipped beside it was then deleted:
 [Retiring the Loop](https://shaokiat.github.io/configent/docs/retiring-the-loop/).
 The original plan and exit gates: [`docs/support-agent-plan.md`](docs/support-agent-plan.md).
 
+**Text-to-SQL:** a second engine for the `f1-analyst` client (D13). The model writes one
+SELECT; a read-only connection with a deny-by-default authorizer runs it; the rows are the
+evidence for a cited answer. Eval results are not in yet (see
+[Text-to-SQL](https://shaokiat.github.io/configent/docs/text-to-sql/)).
+
 **In progress / planned:**
 - Resume for interrupted runs (checkpoints are written after every node; no endpoint yet)
 - Eval harness — golden sets + LLM judge (10 golden rows for the support client,
@@ -197,3 +215,16 @@ The original plan and exit gates: [`docs/support-agent-plan.md`](docs/support-ag
 - [Full docs site](https://shaokiat.github.io/configent/)
 - [Config reference](https://shaokiat.github.io/configent/docs/config-reference/)
 - [Examples](https://shaokiat.github.io/configent/docs/examples/)
+- [Adding an engine](https://shaokiat.github.io/configent/docs/adding-an-engine/) · [Text-to-SQL](https://shaokiat.github.io/configent/docs/text-to-sql/)
+
+## Data and attribution
+
+The `f1-analyst` client answers from **BIRD** (BIg Bench for LaRge-scale Database Grounded
+Text-to-SQL Evaluation), https://bird-bench.github.io/, licensed
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+- `make data-bird` downloads the `formula_1` database at setup, against a pinned checksum.
+- The database is **not redistributed** in this repo; `data/bird/` is gitignored.
+- Only the column-description CSVs are copied into `corpora/f1-analyst/descriptions/`,
+  unchanged, with a [`NOTICE.md`](corpora/f1-analyst/NOTICE.md). Material derived from them
+  carries the same licence.

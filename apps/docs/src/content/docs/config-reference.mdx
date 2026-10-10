@@ -86,10 +86,11 @@ corpus:
 
 ## `agent`
 
-Controls the model, prompts and guardrail thresholds of this client's [support graph](/configent/docs/support-graph).
+Selects the client's engine with `agent.engine` (required, no default) and tunes it. The keys below are the [support graph](/configent/docs/support-graph)'s (`engine: support_graph`). Each engine accepts only its own keys; the text-to-SQL keys are [in their own section](#agent-text_to_sql) below.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `agent.engine` | `string` | — | `support_graph` or `text_to_sql`. A name with no registered engine fails at load. |
 | `agent.model` | `string` | — | Claude model ID. Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `claude-haiku-4-5-20251001`. |
 | `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |
@@ -101,6 +102,7 @@ Controls the model, prompts and guardrail thresholds of this client's [support g
 
 ```yaml
 agent:
+  engine: support_graph
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -129,6 +131,64 @@ agent:
 
 > **One pass, no iteration cap.** A turn runs at most seven nodes: Level 1, Level 2, the
 > ticket offer and the ticket itself.
+
+---
+
+## `agent` (text_to_sql)
+
+The [text-to-SQL engine](/configent/docs/text-to-sql)'s keys (`engine: text_to_sql`). A `text_to_sql` client takes no `corpus:` or `retrieval:` block; either one fails at load.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `agent.model` | `string` | — | Claude model ID, priced in `config/pricing/claude.yaml` like any other. |
+| `agent.system_prompt_file` | `string` | — | Path to `answer.md`; `generate.md` and `ticket_draft.md` must sit beside it. |
+| `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. |
+| `agent.database.dialect` | `string` | — | `sqlite` only. A Postgres client would be a second dialect, not another engine. |
+| `agent.database.path` | `string` | — | SQLite file, relative to the repo root. A missing file is not a load error: chat answers 409 until it exists (`make data-bird` for the demo). |
+| `agent.context.source` | `string` | — | The notes folder: `descriptions/<table>.csv`, `glossary.md`, `rules.md`. Merged with the introspected DDL into the schema context at ingest. |
+| `agent.guard.row_limit` | `int` | `200` | Rows returned to the answering call; more are cut and the result says it was truncated. |
+| `agent.guard.timeout_ms` | `int` | `5000` | A query still running after this is interrupted. SQLite has no statement timeout, so a progress handler enforces it. |
+| `agent.repair_attempts` | `int` | `2` | Repairs allowed after a rejected or failed query before the turn escalates. Between 0 and 3. |
+
+```yaml
+agent:
+  engine: text_to_sql
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/f1-analyst/answer.md
+  database:
+    dialect: sqlite
+    path: data/bird/formula_1.sqlite
+  context:
+    source: corpora/f1-analyst/
+  guard:
+    row_limit: 200
+    timeout_ms: 5000
+  repair_attempts: 1
+```
+
+> **Changing the database or a notes file needs an ingest.** The schema context is
+> fingerprinted from the DDL and the notes; until `make ingest` runs, chat answers 409.
+
+---
+
+## `escalation`
+
+Required for every client: every engine ends in the shared ticket offer, and this is what it needs to know about the tenant's tickets.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `escalation.categories` | `map` or `list` | — | Ticket categories the draft may use. A map gives each id a label for the offer; a list uses the id with spaces. Must include `other`. |
+| `escalation.product_areas` | `list[string]` | `[]` | Empty: the draft has no product-area field. |
+| `escalation.queue` | `string` | — | Queue sent with the ticket. Unset, the ticket service routes by product area. |
+| `escalation.team` | `string` | `platform team` | Who the offer and the failure message say will take the ticket. |
+| `escalation.preamble` | `string` | `That one needs a human.` | First sentence of the ticket offer. |
+
+```yaml
+escalation:
+  queue: data-team
+  team: data team
+  categories: [missing_data, data_request, other]
+```
 
 ---
 
@@ -234,6 +294,7 @@ corpus:
     overlap: 64
 
 agent:
+  engine: support_graph
   model: claude-haiku-4-5-20251001
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
@@ -243,6 +304,19 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
+
+escalation:
+  categories:
+    account_config: project configuration
+    quota_or_billing: quota or billing
+    incident: suspected incident
+    access_request: access request
+    docs_gap: documentation gap
+    other: other
+  product_areas: [cloud_run, gke, iam, other]
+  preamble: >-
+    That one needs a human: it depends on your own project configuration, and my
+    knowledge base is public Google Cloud documentation only.
 
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl

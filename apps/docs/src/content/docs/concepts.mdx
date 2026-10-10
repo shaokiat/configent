@@ -6,7 +6,7 @@ group: Overview
 ---
 
 <div class="lead">
-  Configent is a multi-tenant RAG assistant platform where a client is a YAML file, not a codebase.
+  Configent is a platform for grounded assistants, where a client is a YAML file plus a sources folder, not a codebase.
   The reference client is a Google Cloud support agent that answers from documentation with
   citations, searches again when the first attempt falls short, and offers a drafted ticket
   when it still can't.
@@ -76,7 +76,7 @@ One Postgres holds the relational data, the vectors, the full-text index and the
 
 ## A graph, not a tool loop
 
-Every client runs the support graph. The alternative, a model looping over tools until it stops, shipped beside it until D11.
+The reference client runs the support graph. A client chooses one engine with `agent.engine`; the second is [text-to-SQL](/configent/docs/text-to-sql), and [adding one](/configent/docs/adding-an-engine) is code behind a stable seam. The alternative, a model looping over tools until it stops, shipped beside it until D11.
 
 | | Tool-use loop (retired) | Support graph |
 |---|---|---|
