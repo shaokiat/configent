@@ -36,8 +36,9 @@ _RECONCILE_LOCK = 0x636F6E66
 # Flags for a human to look at, not decisions: a file over or under these is still ingested.
 _SCANNED_CHARS_PER_PAGE = 50
 _STUB_TOKENS = 50
-# USD per million embedding tokens, from Voyage's pricing page on 2026-10-08 (D8's rule: a
-# dated constant, no pricing system). Voyage's free tier covers far more than a POC uses.
+# USD per million embedding tokens, checked against https://docs.voyageai.com/docs/pricing
+# on 2026-10-10 (D8's rule: a dated constant, no pricing system). The voyage-3 series has no
+# free-token allowance, so the estimate is the real spend.
 _EMBED_USD_PER_MTOK = {"voyage-3": 0.06, "voyage-3-large": 0.18, "voyage-3.5": 0.06}
 # embed.py's first backoff on a rate limit; the free tier hits it once per batch.
 _FREE_TIER_SECONDS_PER_BATCH = 21
