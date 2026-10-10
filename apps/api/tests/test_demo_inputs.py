@@ -15,7 +15,7 @@ Retrieval and the model are faked; the graph and its routing are real.
 import pytest
 
 from app.config.registry import get_registry
-from tests.graph_fakes import Harness, grade, hit, named, outcome_of, text_of
+from tests.graph_fakes import Harness, grade, hit, named, outcome_of, stages_of, text_of
 
 
 @pytest.fixture
@@ -170,3 +170,44 @@ async def test_the_user_is_asked_before_anything_is_filed(h):
     reply = text_of(events).lower()
     assert "i can open" in reply
     assert "i've opened" not in reply
+
+
+# ── the step trail of every demo input, pinned ──────────────────────────────────────
+# A refactor of the graph must leave these stage-for-stage identical. Taken from the code
+# before the platform was extracted (#16).
+
+_ASK = "What's the default CPU limit for a Cloud Run instance?"
+_QUOTA = {"subject": "Cloud Run quota in europe-west1", "category": "quota_or_billing",
+          "product_area": "cloud_run", "priority": "high"}
+_HISTORY = [
+    {"role": "user", "content": "why does my container fail to start on PORT?"},
+    {"role": "assistant", "content": "The container isn't listening on $PORT."},
+]
+_DONE_KEYS = {
+    "outcome", "confidence", "run_id", "conversation_id", "ticket_id", "latency_ms", "cost_usd",
+    "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+}
+
+TRAILS = [
+    pytest.param("hey", dict(grade=grade(0.0, kind="conversation", reply="Hey")),
+                 ["retrieve", "grade", "converse"], id="greeting"),
+    pytest.param(_ASK, dict(hits=[hit(0.72)], grade=grade(0.9)), ["retrieve", "grade", "answer"], id="answered"),
+    pytest.param("so is that the same as the health check timing out?",
+                 dict(history=_HISTORY, grade=grade(0.0), l2_hits=[hit(0.55)], regrade=grade(0.8)),
+                 ["retrieve", "grade", "rewrite", "hybrid_retrieve", "regrade", "answer"], id="corrective-followup"),
+    pytest.param("raise my Cloud Run quota in europe-west1",
+                 dict(hits=[hit(0.72)], grade=grade(0.05), l2_hits=[hit(0.6)],
+                      regrade=grade(0.05), draft=_QUOTA),
+                 ["retrieve", "grade", "rewrite", "hybrid_retrieve", "regrade", "escalate"], id="escalation"),
+    pytest.param("ok can you open a ticket with the platform team",
+                 dict(history=_HISTORY, grade=grade(0.0, kind="handoff"), draft=_QUOTA),
+                 ["retrieve", "grade", "escalate"], id="asked-for-ticket"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,scenario,stages", TRAILS)
+async def test_the_step_trail_of_each_demo_input_is_pinned(message, scenario, stages, h):
+    events = await h.turn(message, **scenario)
+    assert stages_of(events) == stages
+    assert set(named(events, "done")[0]) == _DONE_KEYS

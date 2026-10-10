@@ -6,13 +6,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.graph import RunUnavailable, confirm_ticket, run_graph, stream_graph
+from app.agent.engines import support_graph
 from app.agent.limits import (
     BudgetExceeded,
     RateLimitExceeded,
     check_daily_budget,
     check_rate_limit,
 )
+from app.agent.platform import RunUnavailable, confirm_ticket, run_turn, stream_turn
 from app.config.registry import get_registry
 from app.config.schema import ClientConfig
 from app.database import AsyncSessionLocal, get_db
@@ -135,8 +136,9 @@ async def chat(
 
     await _check_conversation_ownership(db, client_id, req.conversation_id)
     try:
-        state = await run_graph(
+        state = await run_turn(
             req.message,
+            engine=support_graph.ENGINE,
             cfg=cfg,
             client_id=client_id,
             conversation_id=req.conversation_id,
@@ -170,8 +172,9 @@ async def chat_stream(client_id: str, req: ChatRequest):
         # The session is opened inside the generator: a Depends(get_db) session
         # can be torn down before a StreamingResponse body starts executing.
         async with AsyncSessionLocal() as db:
-            async for name, data in stream_graph(
+            async for name, data in stream_turn(
                 req.message,
+                engine=support_graph.ENGINE,
                 cfg=cfg,
                 client_id=client_id,
                 conversation_id=req.conversation_id,
@@ -200,7 +203,9 @@ async def file_proposed_ticket(
     """
     cfg = _client(client_id)
     try:
-        return await confirm_ticket(run_id=run_id, client_id=client_id, cfg=cfg, db=db)
+        return await confirm_ticket(
+            engine=support_graph.ENGINE, run_id=run_id, client_id=client_id, cfg=cfg, db=db
+        )
     except RunUnavailable as exc:
         # Also the answer when the run belongs to another client: a 404 leaks nothing
         # about whether that run exists (P8 — tenancy is enforced here, not by the DB).

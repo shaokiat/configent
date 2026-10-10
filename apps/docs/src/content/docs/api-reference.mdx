@@ -53,7 +53,7 @@ Returns `404` if `client_id` is not in the config registry.
 
 ## `POST /api/c/{client_id}/chat`
 
-Synchronous (non-streaming) chat. Runs the support graph through `run_graph()`, which drains the same stream the streaming endpoint serves, and returns once the turn has committed. Primarily for testing; the frontend always uses the streaming endpoint.
+Synchronous (non-streaming) chat. Runs the support graph through `run_turn()`, which drains the same stream the streaming endpoint serves, and returns once the turn has committed. Primarily for testing; the frontend always uses the streaming endpoint.
 
 **Request:**
 
@@ -102,7 +102,7 @@ Ownership, rate-limit and budget checks run before the `StreamingResponse` is bu
 ```python
 async def event_source():
     async with AsyncSessionLocal() as db:
-        async for name, data in stream_graph(..., db=db):
+        async for name, data in stream_turn(..., engine=support_graph.ENGINE, db=db):
             yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
 
 return StreamingResponse(

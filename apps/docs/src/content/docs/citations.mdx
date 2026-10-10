@@ -102,8 +102,8 @@ Where the segments come from differs by path:
 
 | Path | Segment assembly |
 |---|---|
-| `run_graph()` (non-streaming) | `collect_segments()` builds the full array in one shot |
-| `stream_graph()` (SSE) | The frontend rebuilds them from `citation` deltas |
+| `run_turn()` (non-streaming) | `collect_segments()` builds the full array in one shot |
+| `stream_turn()` (SSE) | The frontend rebuilds them from `citation` deltas |
 
 Either way, the `collect_segments()` list lands in the `messages.citations` column at commit. The `done` event carries no `reply` or `segments`.
 

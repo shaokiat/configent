@@ -9,7 +9,8 @@ from types import SimpleNamespace
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app.agent import graph
+from app.agent import escalation, platform
+from app.agent.engines import support_graph
 from app.retrieval import search as retrieval
 from app.retrieval.search import Hit
 
@@ -99,19 +100,19 @@ class FakeDB:
         pass
 
     async def get(self, model, key):
-        if model is graph.Run:
+        if model is platform.Run:
             return self.runs.get(key)
         return None  # a Conversation miss: budget accrual no-ops
 
 
 def _recorder_class(runs: dict):
-    class FakeRecorder(graph.RunRecorder):
+    class FakeRecorder(platform.RunRecorder):
         """The real step logic; only the checkpoint session is replaced by a dict."""
 
         @classmethod
-        async def start(cls, conversation_id, client_id):
+        async def start(cls, conversation_id, client_id, first_stage):
             recorder = cls(f"run-{len(runs) + 1}", conversation_id, client_id)
-            await recorder._persist(status="running", current_stage="retrieve")
+            await recorder._persist(status="running", current_stage=first_stage)
             return recorder
 
         async def _persist(self, *, status, current_stage):
@@ -145,14 +146,16 @@ class Harness:
         self.ticket_calls: list[dict] = []
         self.ticket_failures = 0
 
-        monkeypatch.setattr(graph, "_graph", graph._builder.compile(checkpointer=InMemorySaver()))
-        monkeypatch.setattr(graph, "RunRecorder", _recorder_class(self.runs))
-        monkeypatch.setattr(graph, "prepare_conversation", self._prepare)
-        monkeypatch.setattr(retrieval, "retrieve", self._retrieve)
-        monkeypatch.setattr(graph, "_structured_call", self._structured)
-        monkeypatch.setattr(graph, "stage_ticket", self._file)
         monkeypatch.setattr(
-            graph.anthropic,
+            platform, "_graph", support_graph.ENGINE.graph.compile(checkpointer=InMemorySaver())
+        )
+        monkeypatch.setattr(platform, "RunRecorder", _recorder_class(self.runs))
+        monkeypatch.setattr(platform, "prepare_conversation", self._prepare)
+        monkeypatch.setattr(retrieval, "retrieve", self._retrieve)
+        monkeypatch.setattr(platform, "_structured_call", self._structured)
+        monkeypatch.setattr(escalation, "stage_ticket", self._file)
+        monkeypatch.setattr(
+            platform.anthropic,
             "AsyncAnthropic",
             lambda *_a, **_k: SimpleNamespace(messages=SimpleNamespace(stream=self._stream)),
         )
@@ -171,9 +174,9 @@ class Harness:
 
     async def _structured(self, _aclient, *, schema, user_content, **_k):
         name = {
-            id(graph._GRADE_SCHEMA): "grade",
-            id(graph._REWRITE_SCHEMA): "rewrite",
-            id(graph._DRAFT_SCHEMA): "draft",
+            id(support_graph._GRADE_SCHEMA): "grade",
+            id(support_graph._REWRITE_SCHEMA): "rewrite",
+            id(escalation._DRAFT_SCHEMA): "draft",
         }[id(schema)]
         self.calls.append((name, user_content))
         if name == "grade":
@@ -214,14 +217,14 @@ class Harness:
         self.calls = []
         return [
             event
-            async for event in graph.stream_graph(
-                message, cfg=self.cfg, client_id=CLIENT, conversation_id=None, db=self.db
+            async for event in platform.stream_turn(
+                message, engine=support_graph.ENGINE, cfg=self.cfg, client_id=CLIENT, conversation_id=None, db=self.db
             )
         ]
 
     async def confirm(self, run_id: str = "run-1", client_id: str = CLIENT) -> dict:
-        return await graph.confirm_ticket(
-            run_id=run_id, client_id=client_id, cfg=self.cfg, db=self.db
+        return await platform.confirm_ticket(
+            engine=support_graph.ENGINE, run_id=run_id, client_id=client_id, cfg=self.cfg, db=self.db
         )
 
     def call_names(self) -> list[str]:

@@ -45,7 +45,7 @@ Level 3 · human           escalate → ticket   (interrupt → user confirms �
 | **Cache breakpoints** | System prompt, and the latest message of history | System prompt only |
 | **SSE events** | `tool`, `text`, `citation`, `done`, `error` | `run`, `step`, `text`, `citation`, `ticket_proposal`, `done`, `error` |
 | **Clients** | Acme, Meridian: neither loaded | `gcp-platform-support` |
-| **Code** | `loop.py` (592 lines), a tool registry, four tools | `graph.py` |
+| **Code** | `loop.py` (592 lines), a tool registry, four tools | `graph.py` (since split into `platform.py`, `escalation.py`, `engines/support_graph.py`) |
 
 ---
 
@@ -86,7 +86,7 @@ All six are recorded under D11 in `docs/decisions.md`.
 
 | Loop | Now |
 |---|---|
-| `stream_turn()`, `run()`, `_stream_loop()`, `_run_loop()` | Removed. `stream_graph()` and `run_graph()` serve every client |
+| `stream_turn()`, `run()`, `_stream_loop()`, `_run_loop()` | Removed. `stream_turn()` and `run_turn()` serve every client |
 | `_execute_tool()`, `_sorted_tool_defs()`, `_with_turn_breakpoint()` | Removed |
 | `UsageTotals`, `_prepare_conversation()`, `_collect_segments()`, `_excerpt()`, `_model_trace()` | `app/agent/common.py`, without the leading underscore. `UsageTotals` now takes a model id |
 | `_PRICE_*` constants (Sonnet 4.6 rates) | `config/pricing/claude.yaml`, looked up per model |
