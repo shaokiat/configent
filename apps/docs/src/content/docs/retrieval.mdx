@@ -101,6 +101,21 @@ The `retrieval:` block is optional and query-side: edits apply on the next reque
 
 > **The floor and `escalate_below` are not the same knob.** The floor discards; `escalate_below` fails Level 1. They read the same number at different points, and their ordering is validated at startup. See [The Guardrail](/configent/docs/escalation-guardrail#three-thresholds).
 
+## Measured
+
+`evals/retrieval_eval.py` scores `retrieve()` against the golden set (no model calls). Full file: `evals/results/retrieval-2026-10-08.md`, SHA `f4f50db`.
+
+| Variant | top_k | recall@k | MRR |
+|---|---|---|---|
+| Level 1, dense only | 5 | 0.889 | 0.889 |
+| Level 1, dense only | 10 | 0.889 | 0.889 |
+| Level 2, dense + keyword | 5 | 1.000 | 0.917 |
+| Level 2, dense + keyword | 10 | 1.000 | 0.917 |
+
+- n = 9 questions: one question moves a metric 11 points. Direction, not a benchmark.
+- The one Level 1 miss is a floor drop (cosine 0.27 < 0.3), which keyword fusion recovers.
+- Reranking was not built: there is no ordering error left to fix.
+
 ---
 
 **Next:** [Grading](/configent/docs/grading), the second signal and the triage that rides with it.
