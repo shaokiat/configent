@@ -90,8 +90,7 @@ class DocumentsAgent(BaseModel):
     template: Literal["documents"]
     model: str
     # Every structured-output call (grading, rewriting, SQL, the ticket draft) runs on this
-    # when set; the cited answer always runs on `model`. Only Claude reads a `search_result`
-    # block, so `model` must be Claude; this one may be any model that follows a schema (D14).
+    # when set; the cited answer runs on `model`. Any model that follows a JSON schema (D14).
     structured_model: str | None = None
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
@@ -152,8 +151,7 @@ class DatabaseAgent(BaseModel):
     template: Literal["database"]
     model: str
     # Every structured-output call (grading, rewriting, SQL, the ticket draft) runs on this
-    # when set; the cited answer always runs on `model`. Only Claude reads a `search_result`
-    # block, so `model` must be Claude; this one may be any model that follows a schema (D14).
+    # when set; the cited answer runs on `model`. Any model that follows a JSON schema (D14).
     structured_model: str | None = None
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)

@@ -149,15 +149,15 @@ async def test_zero_rows_still_answers(h):
     assert outcome_of(events) == "answer" and named(events, "done")[0]["row_count"] == 0
 
 
-def test_the_answer_request_has_no_tools_and_rows_in_a_search_result(h):
-    kw = database.answer_request_kwargs(
+def test_the_answer_request_has_no_tools_and_the_rows_are_passage_one(h):
+    kw, passages = database.answer_request_kwargs(
         h.cfg, client_id=CLIENT, sql="SELECT 1", reasoning="one", columns=["a"], rows=[[1]],
         truncated=False, question="q", history=[],
     )
     assert "tools" not in kw
-    block = kw["messages"][-1]["content"][0]
-    assert block["type"] == "search_result" and block["source"] == f"sql://{CLIENT}"
-    assert block["content"][0]["text"].startswith("a\n1")
+    assert len(passages) == 1 and passages[0]["source"] == f"sql://{CLIENT}"
+    assert passages[0]["text"].startswith("a\n1")
+    assert kw["messages"][-1]["content"].startswith(f"[1] one (sql://{CLIENT})\na\n1")
 
 
 # ── decide_sql ───────────────────────────────────────────────────────────────────────

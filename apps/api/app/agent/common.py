@@ -32,6 +32,18 @@ def _priced(price, input_tokens, output_tokens, cache_write, cache_read) -> floa
     ) / 1_000_000
 
 
+def usage_counts(usage: Any) -> tuple[int, int, int, int]:
+    """(input, output, cache write, cache read) from an OpenAI-shaped usage object.
+
+    `prompt_tokens` *includes* cached and cache-written tokens, so plain input is what is left
+    after taking both out; counted whole, every cached call would be overstated (D15)."""
+    details = getattr(usage, "prompt_tokens_details", None)
+    read = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+    write = (getattr(details, "cache_write_tokens", 0) or 0) if details else 0
+    prompt = getattr(usage, "prompt_tokens", 0) or 0
+    return max(prompt - read - write, 0), getattr(usage, "completion_tokens", 0) or 0, write, read
+
+
 @dataclass
 class UsageTotals:
     """Token usage summed across one turn's model calls, priced at `model`'s rates (D8).
@@ -47,12 +59,7 @@ class UsageTotals:
     offset_usd: float = 0.0
 
     def add(self, usage: Any, model: str | None = None) -> None:
-        counts = (
-            getattr(usage, "input_tokens", 0) or 0,
-            getattr(usage, "output_tokens", 0) or 0,
-            getattr(usage, "cache_creation_input_tokens", 0) or 0,
-            getattr(usage, "cache_read_input_tokens", 0) or 0,
-        )
+        counts = usage_counts(usage)
         self.input_tokens += counts[0]
         self.output_tokens += counts[1]
         self.cache_creation_input_tokens += counts[2]
@@ -102,21 +109,10 @@ def model_trace(conversation_id: str, model: str, usage: Any, latency_ms: int) -
     )
 
 
-def attr_or_key(block: Any, name: str, default: Any = None) -> Any:
-    value = getattr(block, name, None)
-    if value is None and isinstance(block, dict):
-        value = block.get(name, default)
-    return value if value is not None else default
-
-
-def _as_dict(b: Any) -> dict:
-    return b.model_dump(exclude_none=True) if hasattr(b, "model_dump") and callable(b.model_dump) else b
-
-
 def excerpt(text: str, max_chars: int = 400) -> str:
     """Trim a full document chunk to a readable 2-3 sentence excerpt.
 
-    The Anthropic Citations API returns the entire chunk as cited_text. This
+    A citation names a whole passage (D15), so its preview is the passage. This
     reduces it to something useful as a hover preview without losing the key fact.
     """
     if not text:
@@ -133,32 +129,68 @@ def excerpt(text: str, max_chars: int = 400) -> str:
     return window.rstrip() + "…"
 
 
-def collect_segments(response: Any) -> tuple[str, list[dict], list[dict]]:
-    """Map the final response's text blocks into (reply_text, citations, segments)."""
-    reply_text = ""
-    citations: list[dict] = []
-    segments: list[dict] = []
-    for block in response.content:
-        if attr_or_key(block, "type") != "text":
-            continue
-        block_text = attr_or_key(block, "text", "")
-        reply_text += block_text
-        cit_dicts = [_as_dict(cit) for cit in (attr_or_key(block, "citations") or [])]
-        citations.extend(cit_dicts)
-        segments.append(
-            {
-                "text": block_text,
-                "citations": [
-                    {
-                        "source": c.get("source"),
-                        "title": c.get("title"),
-                        "cited_text": excerpt(c.get("cited_text") or ""),
-                    }
-                    for c in cit_dicts
-                ],
-            }
-        )
-    return reply_text, citations, segments
+def citation(passage: dict) -> dict:
+    """The chip for passage [n]: what the UI shows and the step trail counts."""
+    return {"source": passage["source"], "title": passage["title"], "cited_text": excerpt(passage["text"])}
+
+
+class Markers:
+    """Numbered citations in streamed text (D15). `feed` turns chunks into `("text", str)` and
+    `("cite", n)` pieces. A possible marker at the end of a chunk is held back until it
+    completes, so `[1` + `2]` still parses. A number with no passage (`arr[0]`, an invented
+    `[9]`) stays as text and is counted in `bad`."""
+
+    _MARKER = re.compile(r"\[(\d{1,2})\]")
+    # Trailing spaces wait too: "1 vCPU [1]." should read "1 vCPU." once the marker is gone.
+    _PARTIAL = re.compile(r"\s*(\[\d{0,2})?$")
+
+    def __init__(self, n_passages: int):
+        self.n, self.buf, self.bad = n_passages, "", 0
+
+    def feed(self, chunk: str) -> list[tuple[str, Any]]:
+        self.buf += chunk
+        out: list[tuple[str, Any]] = []
+        while m := self._MARKER.search(self.buf):
+            n = int(m.group(1))
+            if 1 <= n <= self.n:
+                if before := self.buf[: m.start()].rstrip():
+                    out.append(("text", before))
+                out.append(("cite", n))
+            else:
+                self.bad += 1
+                out.append(("text", self.buf[: m.end()]))
+            self.buf = self.buf[m.end():]
+        partial = self._PARTIAL.search(self.buf)
+        cut = partial.start() if partial else len(self.buf)
+        if cut:
+            out.append(("text", self.buf[:cut]))
+            self.buf = self.buf[cut:]
+        return out
+
+    def flush(self) -> list[tuple[str, Any]]:
+        rest, self.buf = self.buf, ""
+        return [("text", rest)] if rest else []
+
+
+def segments_from(pieces: list[tuple[str, Any]], passages: list[dict]) -> tuple[str, list[dict], list[dict]]:
+    """(reply text, citations, segments) from parsed pieces: each run of text, then the
+    citations that follow it. The same shape the UI and stored messages have always used."""
+    text, citations, segments = "", [], []
+    for kind, value in pieces:
+        if kind == "text":
+            text += value
+            if not segments or segments[-1]["citations"]:
+                segments.append({"text": "", "citations": []})
+            segments[-1]["text"] += value
+        else:
+            c = citation(passages[value - 1])
+            citations.append(c)
+            if not segments:
+                segments.append({"text": "", "citations": []})
+            segments[-1]["citations"].append(c)
+    return text, citations, segments
+
+
 
 
 async def prepare_conversation(

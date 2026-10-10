@@ -37,45 +37,25 @@ def hit(
 
 
 class _Usage:
-    input_tokens = 10
-    output_tokens = 5
-    cache_creation_input_tokens = 0
-    cache_read_input_tokens = 0
+    """OpenAI-shaped usage: `prompt_tokens` includes any cached tokens."""
+
+    prompt_tokens = 10
+    completion_tokens = 5
+    prompt_tokens_details = None
 
 
-def _response(text: str = "ok", citations=None):
-    block = SimpleNamespace(type="text", text=text, citations=citations)
-    return SimpleNamespace(content=[block], usage=_Usage())
+def _response(text: str = "ok"):
+    """A non-streamed chat completion, as a structured call gets back."""
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))], usage=_Usage())
 
 
-_CITATION = {
-    "source": "corpus://gcp-platform-support/cloud-run-cpu-and-memory",
-    "title": "Cloud Run: CPU and memory limits",
-    "cited_text": "By default, each instance is limited to 1 vCPU.",
-}
-
-
-class _AnswerStream:
-    def __init__(self, text: str):
-        self._text = text
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_a):
-        return False
-
-    def __aiter__(self):
-        async def events():
-            delta = SimpleNamespace(type="text_delta", text=self._text)
-            yield SimpleNamespace(type="content_block_delta", delta=delta)
-            delta = SimpleNamespace(type="citations_delta", citation=_CITATION)
-            yield SimpleNamespace(type="content_block_delta", delta=delta)
-
-        return events()
-
-    async def get_final_message(self):
-        return _response(self._text, citations=[_CITATION])
+async def _answer_chunks(text: str, size: int = 3):
+    """The answer streamed in small chunks, so a `[n]` marker splits across them, then the
+    usage-only chunk `stream_options.include_usage` adds."""
+    for k in range(0, len(text), size):
+        delta = SimpleNamespace(content=text[k : k + size])
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)], usage=None)
+    yield SimpleNamespace(choices=[], usage=_Usage())
 
 
 class FakeDB:
@@ -158,7 +138,7 @@ class Harness:
         monkeypatch.setattr(
             platform.llm,
             "async_client",
-            lambda: SimpleNamespace(messages=SimpleNamespace(stream=self._stream)),
+            lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=self._create))),
         )
 
     # ── fakes ──────────────────────────────────────────────────────────────────────
@@ -192,9 +172,10 @@ class Harness:
             out = self.scenario.get("draft") or {}
         return dict(out), _response()
 
-    def _stream(self, **kwargs):
+    async def _create(self, *, stream=False, stream_options=None, **kwargs):
+        assert stream, "only the answer streams; structured calls are faked above"
         self.answer_requests.append(kwargs)
-        return _AnswerStream(self.scenario.get("answer_text", "By default each instance gets 1 vCPU."))
+        return _answer_chunks(self.scenario.get("answer_text", "By default each instance gets 1 vCPU. [1]"))
 
     async def _file(self, draft, *, run_id, stage_seq):
         self.ticket_calls.append({"draft": draft, "run_id": run_id, "stage_seq": stage_seq})
