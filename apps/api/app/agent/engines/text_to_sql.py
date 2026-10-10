@@ -1,34 +1,263 @@
-"""The text-to-SQL engine (D13). The graph is #19; until then `build` is a placeholder that
-answers "not built". What exists is the ingestion contract: the schema context (#18)."""
+"""The text-to-SQL engine (D13): the model writes a SELECT, code guards and runs it, the rows
+are the evidence.
+
+    generate ─┬─ converse / escalate      (the same call classifies the message, as in D9)
+              └─ guard → execute ─┬─ answer
+                                  └─ repair → guard → execute ─┬─ answer
+                                                               └─ escalate → ticket
+
+Python decides every route (`decide_sql`, D2); the nodes store it and the edges only read it.
+`guard` and `execute` are separate nodes so the trail tells a rejected query from a failed one.
+Citations cannot be combined with structured output, so `generate` and `answer` stay apart.
+"""
+import asyncio
+import time
 from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
+from sqlalchemy import select
 
-from app.agent.platform import Deps, Engine, TurnState
-from app.config.schema import ClientConfig
-from app.sql import context
+from app.agent import platform
+from app.agent.common import collect_segments, excerpt
+from app.agent.escalation import _after_ticket, converse, escalate, ticket
+from app.agent.platform import Deps, Engine, _model_step, _prompt, _step, _transcript
+from app.config.schema import ClientConfig, TextToSqlAgent
+from app.models import Document
+from app.sql import context, guard
+from app.sql.connection import QueryError, run_query
+from app.sql.guard import Verdict
 
 _REPO_ROOT = Path(__file__).parents[4]
+_PREVIEW_ROWS = 5  # in the step trail; the full rows go only to the answering call
 
 
-async def _generate(state: TurnState, runtime):
-    # ponytail: placeholder until #19 builds the real graph.
-    text = "The text-to-SQL graph is not built yet."
-    return {"outcome": "answer", "answer": text, "segments": [{"text": text, "citations": []}]}
+class TurnState(platform.TurnState, total=False):
+    kind: str
+    sql: str
+    reasoning: str
+    verdict: dict  # {"ok": bool, "reason": str | None}
+    error: str  # the latest guard or execution failure
+    attempts: int  # repairs so far
+    route: str  # chosen by decide_sql (or generate); the edges only read it
+    columns: list[str]
+    rows: list[list]
+    truncated: bool
+    row_count: int  # set only when a query ran: summary() reads it
+
+
+_SQL_FIELDS = {
+    "sql": {"type": "string"},
+    "reasoning": {"type": "string"},
+}
+_GENERATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["question", "conversation", "handoff"]},
+        **_SQL_FIELDS,
+        "reply": {"type": "string"},  # what converse says; "" otherwise
+    },
+    "required": ["kind", "sql", "reasoning", "reply"],
+    "additionalProperties": False,
+}
+_REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": _SQL_FIELDS,
+    "required": ["sql", "reasoning"],
+    "additionalProperties": False,
+}
+
+
+def decide_sql(
+    *, verdict: Verdict | None, error: str | None, attempts: int, cfg: TextToSqlAgent
+) -> tuple[str, str]:
+    """Route after the guard or the execution. Zero rows is an answer, not a failure: the
+    query ran, and "nothing matches" is true evidence, not something for the data team."""
+    failure = error or (verdict.reason if verdict is not None and not verdict.ok else None)
+    if failure is None:
+        return "answer", "the query ran"
+    if attempts < cfg.repair_attempts:
+        return "repair", failure
+    return "escalate", f"the query failed after {attempts} repair attempt(s): {failure}"
+
+
+async def _system(d: Deps) -> str:
+    """The same text for `generate` and `repair`, so the cached prefix is reused (P5)."""
+    uri = f"schema://{d.client_id}"
+    text = (
+        await d.db.execute(
+            select(Document.full_text).where(Document.client_id == d.client_id, Document.source_uri == uri)
+        )
+    ).scalar()
+    return f"{_prompt(d.cfg, 'generate')}\n\n## Database schema and notes\n\n{text}"
+
+
+def _db_path(cfg: ClientConfig) -> Path:
+    return _REPO_ROOT / cfg.agent.database.path
+
+
+async def generate(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    d, t = runtime.context, time.monotonic()
+    out, response = await platform._structured_call(
+        d.aclient,
+        model=d.cfg.agent.model,
+        system=await _system(d),
+        user_content=(
+            f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
+            f"Latest message:\n{state['question']}"
+        ),
+        schema=_GENERATE_SCHEMA,
+        max_tokens=d.cfg.agent.max_tokens,
+        cache_system=True,
+    )
+    kind, sql = out.get("kind"), (out.get("sql") or "").strip()
+    route = {"conversation": "converse", "handoff": "escalate"}.get(kind, "guard")
+    reasoning = out.get("reasoning") or ""
+    await _model_step(d, state, "generate", t, response, reasoning=reasoning, kind=kind, sql=sql or None)
+    return {
+        "kind": kind, "sql": sql, "reasoning": reasoning, "reply": out.get("reply"),
+        "route": route, "why": reasoning or f"the model marked this a {kind}",
+        "attempts": 0,
+    }
+
+
+async def guard_node(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    d, t = runtime.context, time.monotonic()
+    cfg = d.cfg.agent
+    if state["sql"]:
+        verdict = await asyncio.to_thread(
+            guard.check, state["sql"], dialect=cfg.database.dialect, path=_db_path(d.cfg)
+        )
+    else:
+        verdict = Verdict(False, "no query produced")  # a question with no SQL repairs or escalates
+    if verdict.ok:
+        route, why = "execute", "read-only SELECT"
+    else:
+        route, why = decide_sql(verdict=verdict, error=None, attempts=state["attempts"], cfg=cfg)
+    await _step(d, "guard", t, reasoning=why, ok=verdict.ok, reason=verdict.reason)
+    return {"verdict": {"ok": verdict.ok, "reason": verdict.reason}, "error": verdict.reason or "",
+            "route": route, "why": why}
+
+
+async def execute(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    d, t = runtime.context, time.monotonic()
+    cfg = d.cfg.agent
+    try:
+        result = await run_query(
+            _db_path(d.cfg), state["sql"], row_limit=cfg.guard.row_limit, timeout_ms=cfg.guard.timeout_ms
+        )
+    except QueryError as e:  # includes QueryTimeout
+        route, why = decide_sql(verdict=None, error=str(e), attempts=state["attempts"], cfg=cfg)
+        await _step(d, "execute", t, status="failed", reasoning=str(e), error=str(e))
+        return {"error": str(e), "route": route, "why": why}
+    await _step(
+        d, "execute", t,
+        reasoning=f"{len(result.rows)} rows",
+        row_count=len(result.rows), truncated=result.truncated, elapsed_ms=result.elapsed_ms,
+        columns=result.columns, rows=result.rows[:_PREVIEW_ROWS],
+    )
+    return {
+        "columns": result.columns, "rows": result.rows, "truncated": result.truncated,
+        "row_count": len(result.rows), "error": "", "route": "answer", "why": "the query ran",
+    }
+
+
+async def repair(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    d, t = runtime.context, time.monotonic()
+    out, response = await platform._structured_call(
+        d.aclient,
+        model=d.cfg.agent.model,
+        system=await _system(d),
+        user_content=(
+            f"Latest message:\n{state['question']}\n\n"
+            f"Your query failed.\nQuery:\n{state['sql']}\nError: {state['error']}\n\n"
+            "Write a corrected query."
+        ),
+        schema=_REPAIR_SCHEMA,
+        max_tokens=d.cfg.agent.max_tokens,
+        cache_system=True,
+    )
+    sql, attempt = (out.get("sql") or "").strip(), state["attempts"] + 1
+    await _model_step(
+        d, state, "repair", t, response,
+        reasoning=out.get("reasoning"), error=state["error"], sql=sql or None, attempt=attempt,
+    )
+    return {"sql": sql, "attempts": attempt, "route": "guard"}
+
+
+def _rows_text(columns: list[str], rows: list[list], truncated: bool, limit: int) -> str:
+    """A compact table, header first. Truncation is flagged so the answer can say it is partial."""
+    lines = [" | ".join(columns)] + [" | ".join("" if v is None else str(v) for v in r) for r in rows]
+    lines.append(f"({len(rows)} rows" + (f", truncated at the {limit}-row limit)" if truncated else ")"))
+    return "\n".join(lines)
+
+
+def answer_request_kwargs(
+    cfg: ClientConfig, *, client_id: str, sql: str, reasoning: str,
+    columns: list[str], rows: list[list], truncated: bool, question: str, history: list[dict],
+) -> dict:
+    """Assemble the answering call: the rows are one search_result, and `tools` is absent (D2)."""
+    result = {
+        "type": "search_result",
+        "source": f"sql://{client_id}",
+        "title": excerpt(reasoning or sql, 120),
+        "content": [{"type": "text", "text": _rows_text(columns, rows, truncated, cfg.agent.guard.row_limit)}],
+        "citations": {"enabled": True},
+    }
+    return {
+        "model": cfg.agent.model,
+        "max_tokens": cfg.agent.max_tokens,
+        "system": [{"type": "text", "text": _prompt(cfg, "answer"), "cache_control": {"type": "ephemeral"}}],
+        "messages": history + [{"role": "user", "content": [result, {"type": "text", "text": question}]}],
+    }
+
+
+async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    d, t = runtime.context, time.monotonic()
+    kwargs = answer_request_kwargs(
+        d.cfg, client_id=d.client_id, sql=state["sql"], reasoning=state.get("reasoning", ""),
+        columns=state["columns"], rows=state["rows"], truncated=state["truncated"],
+        question=state["question"], history=state.get("history", []),
+    )
+    response = await platform._stream_answer(d, kwargs)
+    text, citations, segments = collect_segments(response)
+    await _model_step(d, state, "answer", t, response, reasoning=state["why"], n_citations=len(citations))
+    return {"outcome": "answer", "answer": text, "citations": citations, "segments": segments}
+
+
+def _route(state: TurnState) -> str:
+    return state["route"]
 
 
 def build() -> StateGraph:
     g = StateGraph(TurnState, context_schema=Deps)
-    g.add_node("generate", _generate)
+    for name, node in (
+        ("generate", generate), ("guard", guard_node), ("execute", execute), ("repair", repair),
+        ("answer", answer), ("converse", converse), ("escalate", escalate), ("ticket", ticket),
+    ):
+        g.add_node(name, node)
     g.add_edge(START, "generate")
-    g.add_edge("generate", END)
+    g.add_conditional_edges("generate", _route, ["guard", "converse", "escalate"])
+    g.add_conditional_edges("guard", _route, ["execute", "repair", "escalate"])
+    g.add_conditional_edges("execute", _route, ["answer", "repair", "escalate"])
+    g.add_edge("repair", "guard")
+    g.add_edge("answer", END)
+    g.add_edge("converse", END)
+    g.add_edge("escalate", "ticket")
+    g.add_conditional_edges("ticket", _after_ticket, ["ticket", END])
     return g
 
 
+def summary(values: dict) -> dict:
+    """No `confidence`: this engine grades nothing."""
+    return {"row_count": values["row_count"]} if "row_count" in values else {}
+
+
 async def _ready(db, cfg: ClientConfig) -> str | None:
+    path = _db_path(cfg)
+    if not path.exists():  # data state, not a config error: CI and fresh clones lack it
+        return f"The database was not found at {cfg.agent.database.path}; run `make data-bird`."
     return await context.ready(db, cfg, _REPO_ROOT)
 
 
-ENGINE = Engine(
-    "text_to_sql", build, "generate", lambda values: {}, context.check, context.ingest, _ready
-)
+ENGINE = Engine("text_to_sql", build, "generate", summary, context.check, context.ingest, _ready)

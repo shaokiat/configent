@@ -1,0 +1,37 @@
+# Formula 1 Analyst: the text-to-SQL client (D13). Branding values are placeholders.
+client_id: f1-analyst
+name: "Formula 1 Analyst"
+branding:
+  logo: assets/f1-analyst/logo.svg
+  primary_color: "#e10600"
+  assistant_name: "PitWall"
+  tagline: >-
+    I answer Formula 1 questions by querying a historical results database, and show the
+    SQL behind every answer. The data stops in 2017; for anything newer, or anything the
+    data doesn't hold, I'll pass it to the data team.
+  suggested_questions:
+    - "Who won the 2008 Monaco Grand Prix?"
+    - "Which constructor scored the most points in 2010?"
+    - "Can you add the 2024 season?"
+agent:
+  engine: text_to_sql
+  model: claude-haiku-4-5-20251001
+  # answer.md; generate.md and ticket_draft.md sit beside it.
+  system_prompt_file: prompts/f1-analyst/answer.md
+  max_tokens: 2048
+  database:
+    dialect: sqlite
+    path: data/bird/formula_1.sqlite
+  context:
+    source: corpora/f1-analyst/
+  guard:
+    row_limit: 200
+    timeout_ms: 5000
+  repair_attempts: 1
+escalation:
+  queue: data-team
+  team: data team
+  categories: [missing_data, data_request, other]
+limits:
+  rate_limit_per_minute: 20
+  daily_budget_usd: 2.00

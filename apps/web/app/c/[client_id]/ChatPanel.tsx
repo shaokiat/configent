@@ -51,6 +51,16 @@ export interface RunStep {
   ticket_id?: string;
   route?: string;
   cost_usd?: number;
+  // text-to-SQL stages
+  sql?: string;
+  ok?: boolean;
+  reason?: string;
+  error?: string;
+  row_count?: number;
+  truncated?: boolean;
+  elapsed_ms?: number;
+  columns?: string[];
+  rows?: (string | number | null)[][];
 }
 
 type ChatMessage =
@@ -315,6 +325,10 @@ const STAGE_LABEL: Record<string, string> = {
   answer: "Answered from sources",
   escalate: "Drafted a ticket for review",
   ticket: "Filed a ticket",
+  generate: "Wrote a query",
+  guard: "Checked the query",
+  execute: "Ran the query",
+  repair: "Fixed the query",
 };
 
 function stageLabel(step: RunStep): string {
@@ -347,6 +361,14 @@ function stageDetail(step: RunStep): string | null {
       return step.category ?? null;
     case "ticket":
       return step.ticket_id ?? null;
+    case "guard":
+      return step.ok === false ? (step.reason ?? "rejected") : "read-only SELECT";
+    case "execute":
+      return step.row_count !== undefined
+        ? `${step.row_count} rows · ${step.elapsed_ms}ms${step.truncated ? " · truncated" : ""}`
+        : (step.error ?? null);
+    case "repair":
+      return step.error ?? null;
     default:
       return null;
   }
@@ -499,6 +521,37 @@ function StepTrail({ steps, live }: { steps: RunStep[]; live: boolean }) {
                   <p className="mt-0.5 text-gray-400 dark:text-white/35 leading-relaxed">
                     {step.reasoning}
                   </p>
+                )}
+                {step.sql && (
+                  <code className="mt-1 block whitespace-pre-wrap break-words rounded bg-gray-100 dark:bg-white/5 px-2 py-1 font-mono text-gray-600 dark:text-white/60">
+                    {step.sql}
+                  </code>
+                )}
+                {step.columns && step.rows && step.rows.length > 0 && (
+                  <div className="mt-1 overflow-x-auto">
+                    <table className="text-left tabular-nums text-gray-500 dark:text-white/50">
+                      <thead>
+                        <tr>
+                          {step.columns.map((c, i) => (
+                            <th key={i} className="pr-4 font-medium">
+                              {c}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {step.rows.map((row, i) => (
+                          <tr key={i}>
+                            {row.map((v, j) => (
+                              <td key={j} className="pr-4">
+                                {v === null ? "" : String(v)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </li>
             );

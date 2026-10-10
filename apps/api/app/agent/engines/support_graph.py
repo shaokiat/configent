@@ -14,12 +14,11 @@ Citations cannot be combined with `output_config.format`, so `grade`, `rewrite` 
 """
 import time
 
-from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from app.agent import platform
-from app.agent.common import attr_or_key, collect_segments, excerpt
+from app.agent.common import collect_segments
 from app.agent.escalation import _after_ticket, converse, escalate, ticket
 from app.agent.platform import Deps, Engine, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig
@@ -291,30 +290,10 @@ def answer_request_kwargs(
 async def answer(state: TurnState, runtime: Runtime[Deps]) -> dict:
     """Stream a cited answer from whichever tier's passages cleared the guardrail."""
     d, t = runtime.context, time.monotonic()
-    write = get_stream_writer()
-    citation_index = 0
     kwargs = answer_request_kwargs(
         d.cfg, hits=state["hits"], question=state["question"], history=state.get("history", [])
     )
-    async with d.aclient.messages.stream(**kwargs) as stream:
-        async for event in stream:
-            if getattr(event, "type", "") != "content_block_delta":
-                continue
-            if event.delta.type == "text_delta":
-                write(("text", {"delta": event.delta.text}))
-            elif event.delta.type == "citations_delta":
-                citation_index += 1
-                cit = event.delta.citation
-                write((
-                    "citation",
-                    {
-                        "index": citation_index,
-                        "source": attr_or_key(cit, "source"),
-                        "title": attr_or_key(cit, "title"),
-                        "cited_text": excerpt(attr_or_key(cit, "cited_text") or ""),
-                    },
-                ))
-        response = await stream.get_final_message()
+    response = await platform._stream_answer(d, kwargs)
     text, citations, segments = collect_segments(response)
     await _model_step(
         d, state, "answer", t, response,
