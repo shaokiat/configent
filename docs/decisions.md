@@ -534,9 +534,20 @@ marker into the citation the UI has always rendered.
   step's `bad_citations`. So `arr[0]` survives, and a model inventing `[9]` shows in the trail.
 - **The chip is the passage.** `cited_text` is the passage's excerpt. The API already
   returned whole chunks as `cited_text`, so the preview a reader sees is the same.
-- **Any model can answer.** DeepSeek V4.1 Flash answered the demo questions with citations
-  and no bad markers. Both clients still answer on Haiku 4.5 and grade on DeepSeek; switching
-  the answer is one YAML line.
+- **Any model can answer, and both clients now run DeepSeek V4.1 Flash for every call.**
+  Measured on the nine demo questions, three passes each
+  (`evals/results/model-cost-2026-10-11.md`):
+
+  | | Original (P4, all Haiku 4.5) | Haiku answers, DeepSeek structured | All DeepSeek |
+  |---|---|---|---|
+  | Billed per turn | $0.0060 | $0.0017 (−72%) | **$0.00026 (−96%)** |
+  | Routed as expected · facts stated | 27/27 · 15/15 | 27/27 · 15/15 | 27/27 · 15/15 |
+  | Citations per answer · naming no passage | 1.9 · — | 2.5 · 0 | 3.1 · 0 |
+
+- **Structured calls turn reasoning off, use strict schemas, and put `reasoning` first.**
+  The benchmark found both failures. With reasoning on, DeepSeek used up `max_tokens` and
+  returned no JSON (2 of 18 turns). With reasoning off, it filled in `kind` before `reasoning`
+  and decided too early (24 of 27 routed). After the fixes: 0 of 16 and 27 of 27.
 - **Structured calls use `response_format: json_schema`.** Usage maps from OpenAI's shape:
   `prompt_tokens` includes cached and cache-written tokens, so plain input is what remains
   after taking both out. Counted whole, every cached call would be overstated.

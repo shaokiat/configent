@@ -216,6 +216,7 @@ evidence for a cited answer. Eval results are not in yet (see
 
 - [Architecture](docs/architecture.md)
 - [Decision log](docs/decisions.md) — including what this deliberately does not build
+- [Model cost comparison](evals/results/model-cost-2026-10-11.md): the original API citations on Haiku against numbered markers on DeepSeek, 24× cheaper per turn
 - [Full docs site](https://shaokiat.github.io/configent/)
 - [Config reference](https://shaokiat.github.io/configent/docs/config-reference/)
 - [Examples](https://shaokiat.github.io/configent/docs/examples/)

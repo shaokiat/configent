@@ -15,10 +15,10 @@ branding:
     - "Can you add the 2024 season?"
 agent:
   template: database
-  model: anthropic/claude-haiku-4.5
-  # Grading, rewriting, SQL and the ticket draft run on this cheaper model; the cited
-  # answer runs on `model`. Any OpenRouter model works for either (D14, D15).
-  structured_model: deepseek/deepseek-v4.1-flash
+  # Every call, the cited answer included. A quarter of a cent a turn against six tenths
+  # on Haiku 4.5, with the same routes and facts: evals/results/model-cost-2026-10-11.md.
+  # Set `structured_model` to run grading, SQL and drafting on a different model (D15).
+  model: deepseek/deepseek-v4.1-flash
   # answer.md; generate.md and ticket_draft.md sit beside it.
   system_prompt_file: prompts/f1-analyst/answer.md
   max_tokens: 2048

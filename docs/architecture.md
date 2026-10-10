@@ -217,7 +217,7 @@ configent/
 | Agent runtime | LangGraph for mechanism, Python for decisions | Checkpoints and the ticket pause come from the framework; every route is a function you can read |
 | Escalation | Routed by code; answering call sent no tools | A model cannot be talked out of an `if` statement |
 | Citations | Numbered passages, `[n]` markers parsed in Python | Any model can answer and cite; an invented number is caught, a wrong-but-valid one is not (D15) |
-| Model | `anthropic/claude-haiku-4.5` | Cheap enough to spend extra calls on grading and rewriting |
+| Model | `deepseek/deepseek-v4.1-flash`, every call | $0.00026 a turn, 24× cheaper than all-Haiku with the same routes and facts (D15) |
 | Cost | Priced per model from a dated YAML table | No API returns prices; an unpriced model fails startup |
 | Tracing | Homegrown Postgres `traces` table | The same data feeds cost display and the daily budget; no extra service to run |
 | Limits | Per-client rate limit + daily budget, enforced server-side | Config fields are meaningless if nothing reads them; both return a friendly 429 |
