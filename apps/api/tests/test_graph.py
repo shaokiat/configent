@@ -326,7 +326,7 @@ async def test_stream_emits_error_instead_of_done_when_a_stage_throws(h, monkeyp
     async def _boom(*_a, **_k):
         raise RuntimeError("retrieval exploded")
 
-    monkeypatch.setattr(graph, "search", _boom)
+    monkeypatch.setattr("app.retrieval.search.retrieve", _boom)
     events = await h.turn("anything")
     names = [name for name, _ in events]
     assert names[-1] == "error" and "done" not in names

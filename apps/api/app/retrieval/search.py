@@ -3,12 +3,9 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.schema import RetrievalConfig
 from app.models import Chunk, Document
-from app.retrieval.embed import embed_queries, embed_query
-
-# Reciprocal rank fusion constant. 60 is the value from the original RRF paper and the
-# common default; it damps the gap between rank 1 and rank 2 so no single list dominates.
-_RRF_K = 60
+from app.retrieval.embed import embed_queries
 
 
 @dataclass
@@ -62,24 +59,6 @@ async def _dense(
     return [_hit(r, float(r.similarity)) for r in rows if float(r.similarity) >= floor][:k]
 
 
-async def search(
-    db: AsyncSession,
-    client_id: str,
-    query: str,
-    *,
-    model: str,
-    k: int = 5,
-    floor: float = 0.3,
-) -> list[Hit]:
-    """Cosine similarity top-k search over chunks, scoped to client_id.
-
-    Drops hits below the similarity floor so irrelevant results don't reach the model.
-    `model` must be the one the chunks were embedded with — the client's
-    `corpus.embedding.model`, which the fingerprint check holds to the index.
-    """
-    return await _dense(db, client_id, await embed_query(query, model), k, floor)
-
-
 async def _keyword(db: AsyncSession, client_id: str, keywords: str, k: int) -> list[Hit]:
     """Postgres full-text search over `chunks.text_search`, for the exact terms embeddings
     blur: error codes, permission names, flags. `websearch_to_tsquery` never raises on
@@ -97,8 +76,11 @@ async def _keyword(db: AsyncSession, client_id: str, keywords: str, k: int) -> l
     return [_hit(r, 0.0) for r in (await db.execute(stmt)).all()]
 
 
-def rrf_merge(ranked_lists: list[list[Hit]], k: int) -> list[Hit]:
-    """Fuse several rankings by reciprocal rank: each list adds 1 / (60 + rank) per chunk.
+def rrf_merge(ranked_lists: list[list[Hit]], k: int, *, rrf_k: int) -> list[Hit]:
+    """Fuse several rankings by reciprocal rank: each list adds 1 / (rrf_k + rank) per chunk.
+
+    `rrf_k` damps the gap between rank 1 and rank 2 so no single list dominates; 60 is the
+    original paper's value and the schema default.
 
     Rank-based on purpose. Cosine similarities and `ts_rank_cd` scores are on unrelated
     scales, so adding them would be meaningless; positions are comparable.
@@ -107,26 +89,32 @@ def rrf_merge(ranked_lists: list[list[Hit]], k: int) -> list[Hit]:
     hits_by_id: dict[int, Hit] = {}
     for hits in ranked_lists:
         for position, hit in enumerate(hits):
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + 1 / (_RRF_K + position + 1)
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + 1 / (rrf_k + position + 1)
             hits_by_id.setdefault(hit.chunk_id, hit)
     ordered = sorted(scores, key=lambda chunk_id: scores[chunk_id], reverse=True)
     return [hits_by_id[chunk_id] for chunk_id in ordered[:k]]
 
 
-async def hybrid_search(
+async def retrieve(
     db: AsyncSession,
     client_id: str,
     queries: list[str],
-    keywords: str,
+    keywords: str = "",
     *,
+    cfg: RetrievalConfig,
     model: str,
-    k: int = 5,
-    floor: float = 0.3,
+    floor: float,
 ) -> list[Hit]:
-    """Level 2 retrieval: dense search for every query variant, plus full-text search on the
-    exact keywords, fused by reciprocal rank. No new infrastructure — one GIN index."""
+    """The one retriever (D12): dense search for every query, plus full-text search on the
+    exact keywords when enabled, fused by reciprocal rank. No new infrastructure — one GIN index.
+
+    Level 1 is one query and no keywords; fusing a single list is the identity, so it takes the
+    same path. `model` must be the one the chunks were embedded with, the client's
+    `corpus.embedding.model`, which the fingerprint check holds to the index. `floor` drops weak
+    dense hits so irrelevant results don't reach the model.
+    """
     vecs = await embed_queries(queries, model)
-    ranked = [await _dense(db, client_id, vec, k, floor) for vec in vecs]
-    if keywords:
-        ranked.append(await _keyword(db, client_id, keywords, k))
-    return rrf_merge(ranked, k)
+    ranked = [await _dense(db, client_id, vec, cfg.top_k, floor) for vec in vecs]
+    if cfg.keyword.enabled and keywords:
+        ranked.append(await _keyword(db, client_id, keywords, cfg.top_k))
+    return rrf_merge(ranked, cfg.top_k, rrf_k=cfg.rrf_k)

@@ -54,6 +54,12 @@ def test_fingerprint_moves_with_every_index_setting_but_not_the_folder():
         assert CorpusConfig(source="corpora/x/", **change).fingerprint() != base.fingerprint()
 
 
+def test_retrieval_settings_are_query_side_and_stay_out_of_the_fingerprint():
+    # The fingerprint is a CorpusConfig method, so a retrieval: edit cannot reach it; this
+    # pins that retrieval sits outside the corpus block, where re-ingest is not forced.
+    assert "retrieval" not in CorpusConfig.model_fields
+
+
 def test_an_embedding_model_of_another_width_is_refused_at_load():
     with pytest.raises(ValidationError, match="1024-dim"):
         CorpusConfig(source="corpora/x/", embedding={"model": "text-embedding-3-small"})

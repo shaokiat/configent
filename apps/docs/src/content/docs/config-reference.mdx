@@ -130,6 +130,28 @@ agent:
 
 ---
 
+## `retrieval` (optional)
+
+How the index is queried (D12). Every key defaults to today's behaviour, and a file without the block loads and retrieves identically. All keys are query-side, so editing them needs no re-ingest. Unknown keys fail at load.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `retrieval.top_k` | `int` | `5` | Chunks kept per ranked list and after fusion. Must be above 0. |
+| `retrieval.rrf_k` | `int` | `60` | Reciprocal rank fusion constant. Must be above 0. Only affects Level 2. |
+| `retrieval.keyword.enabled` | `bool` | `true` | Whether Level 2 also runs full-text search on the rewrite's keywords. |
+
+```yaml
+retrieval:
+  top_k: 5
+  rrf_k: 60
+  keyword:
+    enabled: true
+```
+
+The drop floor and `escalate_below` stay under `agent:`: they are a validated pair of guardrail thresholds, not retriever parameters.
+
+---
+
 ## Model pricing
 
 ```yaml

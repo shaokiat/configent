@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent import graph
+from app.retrieval import search as retrieval
 from app.retrieval.search import Hit
 
 CLIENT = "gcp-platform-support"
@@ -147,8 +148,7 @@ class Harness:
         monkeypatch.setattr(graph, "_graph", graph._builder.compile(checkpointer=InMemorySaver()))
         monkeypatch.setattr(graph, "RunRecorder", _recorder_class(self.runs))
         monkeypatch.setattr(graph, "prepare_conversation", self._prepare)
-        monkeypatch.setattr(graph, "search", self._search)
-        monkeypatch.setattr(graph, "hybrid_search", self._hybrid)
+        monkeypatch.setattr(retrieval, "retrieve", self._retrieve)
         monkeypatch.setattr(graph, "_structured_call", self._structured)
         monkeypatch.setattr(graph, "stage_ticket", self._file)
         monkeypatch.setattr(
@@ -162,10 +162,10 @@ class Harness:
     async def _prepare(self, _db, _client_id, conversation_id):
         return conversation_id or "conv-1", list(self.scenario.get("history") or [])
 
-    async def _search(self, *_a, **_k):
-        return list(self.scenario.get("hits") or [])
-
-    async def _hybrid(self, _db, *, client_id, queries, keywords, model, k, floor):
+    async def _retrieve(self, _db, _client_id, queries, keywords="", *, cfg, model, floor):
+        # One query is Level 1; anything more is the Level 2 request.
+        if len(queries) == 1:
+            return list(self.scenario.get("hits") or [])
         self.hybrid_requests.append({"queries": queries, "keywords": keywords})
         return list(self.scenario.get("l2_hits") or [])
 

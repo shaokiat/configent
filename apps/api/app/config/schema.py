@@ -77,7 +77,7 @@ class AgentConfig(BaseModel):
 
     # --- the guardrail (D2, D10) ----------------------------------------------------
     # Two *different* floors, and the difference matters:
-    #   retrieval_drop_floor  discards weak chunks inside search() — they never reach
+    #   retrieval_drop_floor  discards weak chunks inside retrieve() — they never reach
     #                         the model at all.
     #   escalate_below        escalates when the best *surviving* hit is still weak.
     # Set escalate_below at or under retrieval_drop_floor and it can never fire:
@@ -94,7 +94,7 @@ class AgentConfig(BaseModel):
             raise ValueError(
                 f"agent.escalate_below ({self.escalate_below}) must be greater than "
                 f"agent.retrieval_drop_floor ({self.retrieval_drop_floor}) — otherwise the "
-                f"retrieval guardrail can never fire, because search() has already "
+                f"retrieval guardrail can never fire, because retrieve() has already "
                 f"discarded every hit below the drop floor."
             )
         return self
@@ -110,12 +110,30 @@ class LimitsConfig(BaseModel):
     daily_budget_usd: float = Field(default=2.00, gt=0)
 
 
+class KeywordConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True  # off, Level 2 is multi-query dense search only
+
+
+class RetrievalConfig(BaseModel):
+    """How the index is queried (D12). Every key defaults to the pre-config behaviour. All
+    query-side, so none joins CorpusConfig.fingerprint(): edits apply with no re-ingest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    top_k: int = Field(default=5, gt=0)
+    rrf_k: int = Field(default=60, gt=0)
+    keyword: KeywordConfig = KeywordConfig()
+
+
 class ClientConfig(BaseModel):
     client_id: str
     name: str
     branding: BrandingConfig
     corpus: CorpusConfig
     agent: AgentConfig
+    retrieval: RetrievalConfig = RetrievalConfig()
     evals: EvalsConfig | None = None
     limits: LimitsConfig = LimitsConfig()
 

@@ -5,7 +5,7 @@ order: 9
 group: The Support Graph
 ---
 
-`retrieve` is Level 1's first node and makes no model call. It embeds the message, runs a cosine scan over the client's chunks, and discards anything below the drop floor. The node lives in `agent/graph.py`; the search is `search()` in `retrieval/search.py`.
+`retrieve` is Level 1's first node and makes no model call. It embeds the message, runs a cosine scan over the client's chunks, and discards anything below the drop floor. The node lives in `agent/graph.py`; the search is `retrieve()` in `retrieval/search.py`, the one retriever both levels use (D12 in `docs/decisions.md`).
 
 The best surviving similarity is **signal 1** of the [guardrail](/configent/docs/escalation-guardrail).
 
@@ -16,15 +16,16 @@ The best surviving similarity is **signal 1** of the [guardrail](/configent/docs
 ```
 retrieve(state)
   │
-  └─ search()                 retrieval/search.py
-       ├─ embed_query()       Voyage, input_type="query"
+  └─ retrieve()               retrieval/search.py · one query, no keywords
+       ├─ embed_queries()     Voyage, input_type="query"
        ├─ _dense()            pgvector cosine · WHERE client_id = ? · LIMIT k*2
-       └─ floor filter        drop below retrieval_drop_floor, then [:k=5]
+       ├─ floor filter        drop below retrieval_drop_floor, then [:top_k]
+       └─ rrf_merge()         one list, so the identity
 ```
 
 The node writes two things to state: the surviving hits, and `top_similarity`, which is `0.0` when nothing survived. Hits are stored as plain dicts (title, source URI, text, similarity) because the checkpointer saves state as JSON.
 
-Level 2 reuses the `_dense()` half of `search()` inside `hybrid_search()`. See [Corrective Retrieval](/configent/docs/corrective-retrieval).
+Level 2 calls the same `retrieve()` with more queries and keywords. See [Corrective Retrieval](/configent/docs/corrective-retrieval).
 
 ---
 
@@ -92,8 +93,11 @@ Level 1 embeds the bare message. The retired pipeline prepended the previous use
 | Key | Default | What it does |
 |---|---|---|
 | `agent.retrieval_drop_floor` | `0.3` | Similarity below which a chunk is discarded. Also applied to the dense half of Level 2 |
+| `retrieval.top_k` | `5` | Chunks kept per list and after fusion |
+| `retrieval.rrf_k` | `60` | Fusion damping constant; only matters at Level 2 |
+| `retrieval.keyword.enabled` | `true` | Level 2 keyword search; off, Level 2 is multi-query dense only |
 
-`k` is fixed at 5. Full key list: [Config Reference](/configent/docs/config-reference#agent).
+The `retrieval:` block is optional and query-side: edits apply on the next request, with no re-ingest. Full key list: [Config Reference](/configent/docs/config-reference#agent).
 
 > **The floor and `escalate_below` are not the same knob.** The floor discards; `escalate_below` fails Level 1. They read the same number at different points, and their ordering is validated at startup. See [The Guardrail](/configent/docs/escalation-guardrail#three-thresholds).
 

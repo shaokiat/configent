@@ -44,6 +44,12 @@ agent:
   corrective:
     enabled: true
     query_rewrites: 3
+# Optional; these are the defaults. Query-side, so editing needs no re-ingest (D12).
+# retrieval:
+#   top_k: 5
+#   rrf_k: 60
+#   keyword:
+#     enabled: true
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
   judge_model: claude-sonnet-4-6
