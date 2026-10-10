@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: up up-web up-api dev dev-db dev-api dev-web ingest data-bird down build logs ps docs docs-build
+.PHONY: up up-web up-api dev dev-db dev-api dev-web ingest data-bird eval down build logs ps docs docs-build
 
 # ── Production-like (Docker) ───────────────────────────────────────────────
 up: ## Rebuild and restart web + api (db untouched)
@@ -41,6 +41,9 @@ ingest: ## Ingest one client's corpus: make ingest CLIENT=<id> [FORCE=1] [CHECK=
 
 data-bird: ## Fetch the BIRD dev set (formula_1) into data/bird/ (gitignored, CC BY-SA 4.0)
 	python3 scripts/fetch_bird.py
+
+eval: ## Run the text-to-SQL evals (costs money; needs credits): make eval CLIENT=f1-analyst [MODEL=...]
+	cd apps/api && for s in bird triage; do uv run python ../../evals/runner/run.py --client $(CLIENT) --suite $$s $(if $(MODEL),--model $(MODEL)); done
 
 # ── Shared ─────────────────────────────────────────────────────────────────
 down: ## Stop and remove all containers (data volume preserved)
