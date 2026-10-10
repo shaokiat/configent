@@ -183,3 +183,8 @@ async def test_a_missing_database_makes_ready_refuse_not_the_load_fail(h):
     cfg = get_registry().get(CLIENT)  # loaded fine although data/bird may be absent
     cfg = cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"database": cfg.agent.database.model_copy(update={"path": "nope.sqlite"})})})
     assert "make data-bird" in await database.TEMPLATE.ready(None, cfg)
+
+
+def test_database_paths_resolve_from_the_repo_root():
+    """It once computed the root one level short (`apps/`), so every real chat answered 409."""
+    assert (database._REPO_ROOT / "config" / "f1-analyst.yaml").is_file()

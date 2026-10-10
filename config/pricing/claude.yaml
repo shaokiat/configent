@@ -1,6 +1,8 @@
 # Token prices, USD per million tokens, keyed by the exact model id a client config uses (D8).
 #
-# Source: https://platform.claude.com/docs/en/about-claude/pricing — checked 2026-09-30.
+# Keys are OpenRouter model ids: every call goes through OpenRouter (D14).
+# Source: https://openrouter.ai/api/v1/models — checked 2026-10-10. OpenRouter passes
+# Anthropic's prices through, so these match https://platform.claude.com/docs/en/about-claude/pricing.
 # No API returns prices, so this table is checked in and dated. When a price changes, edit
 # the row and the date. Copy each column from the page rather than deriving it from a
 # multiplier: the multipliers are not the same on every model.
@@ -10,14 +12,30 @@
 #   cache_write  the 5-minute TTL rate: the only cache this app writes
 #   cache_read   "cache hits and refreshes"
 
-claude-haiku-4-5-20251001:
+anthropic/claude-haiku-4.5:
   input: 1.00
   output: 5.00
   cache_write: 1.25
   cache_read: 0.10
 
-claude-sonnet-4-6:
+# A tenth of Haiku 4.5's price, but it always thinks first (OpenRouter ignores
+# `thinking: disabled`), so output tokens run higher and a tight max_tokens can truncate.
+anthropic/claude-haiku-5.5:
+  input: 0.10
+  output: 0.50
+  cache_write: 0.125
+  cache_read: 0.01
+
+anthropic/claude-sonnet-4.6:
   input: 3.00
   output: 15.00
   cache_write: 3.75
   cache_read: 0.30
+
+# Not Claude: it cannot read `search_result` blocks, so it is only ever an
+# `agent.structured_model` (D14). A cache write bills as plain input.
+deepseek/deepseek-v4.1-flash:
+  input: 0.30
+  output: 1.20
+  cache_write: 0.30
+  cache_read: 0.006

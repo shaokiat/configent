@@ -172,11 +172,12 @@ def fingerprint(cfg: ClientConfig, root: Path) -> str:
 
 
 def _count_tokens(model: str, text: str) -> int | None:
-    """Claude's own tokenizer via the API. Best-effort: no key or no network gives None."""
+    """Claude's own tokenizer via the API. Best-effort: no key, no network, or a gateway without
+    the endpoint (OpenRouter has none, D14) gives None."""
     try:
-        import anthropic
+        from app import llm
 
-        r = anthropic.Anthropic().messages.count_tokens(
+        r = llm.client().messages.count_tokens(
             model=model, messages=[{"role": "user", "content": text}]
         )
         return r.input_tokens

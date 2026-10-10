@@ -23,14 +23,13 @@ from sqlalchemy import select
 from app.agent import platform
 from app.agent.common import collect_segments, excerpt
 from app.agent.handoff import _after_ticket, converse, decline, escalate, route, ticket
-from app.agent.platform import Deps, Template, _model_step, _prompt, _step, _transcript
+from app.agent.platform import _REPO_ROOT, Deps, Template, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig, DatabaseAgent
 from app.models import Document
 from app.sql import context, guard
 from app.sql.connection import QueryError, run_query
 from app.sql.guard import Verdict
 
-_REPO_ROOT = Path(__file__).parents[4]
 _PREVIEW_ROWS = 5  # in the step trail; the full rows go only to the answering call
 
 
@@ -102,7 +101,7 @@ async def generate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
     out, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=await _system(d),
         user_content=(
             f"Recent conversation:\n{_transcript(state.get('history', []))}\n\n"
@@ -115,7 +114,7 @@ async def generate(state: TurnState, runtime: Runtime[Deps]) -> dict:
     kind, sql = out.get("kind"), (out.get("sql") or "").strip()
     route = {"conversation": "converse", "handoff": "escalate"}.get(kind, "guard")
     reasoning = out.get("reasoning") or ""
-    await _model_step(d, state, "generate", t, response, reasoning=reasoning, kind=kind, sql=sql or None)
+    await _model_step(d, state, "generate", t, response, model=d.cfg.structured_model, reasoning=reasoning, kind=kind, sql=sql or None)
     return {
         "kind": kind, "sql": sql, "reasoning": reasoning, "reply": out.get("reply"),
         "route": route, "why": reasoning or f"the model marked this a {kind}",
@@ -168,7 +167,7 @@ async def repair(state: TurnState, runtime: Runtime[Deps]) -> dict:
     d, t = runtime.context, time.monotonic()
     out, response = await platform._structured_call(
         d.aclient,
-        model=d.cfg.agent.model,
+        model=d.cfg.structured_model,
         system=await _system(d),
         user_content=(
             f"Latest message:\n{state['question']}\n\n"
@@ -181,7 +180,7 @@ async def repair(state: TurnState, runtime: Runtime[Deps]) -> dict:
     )
     sql, attempt = (out.get("sql") or "").strip(), state["attempts"] + 1
     await _model_step(
-        d, state, "repair", t, response,
+        d, state, "repair", t, response, model=d.cfg.structured_model,
         reasoning=out.get("reasoning"), error=state["error"], sql=sql or None, attempt=attempt,
     )
     return {"sql": sql, "attempts": attempt, "route": "guard"}

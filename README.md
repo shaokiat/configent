@@ -48,7 +48,7 @@ corpus:
     overlap: 64
 agent:
   template: documents
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   retrieval_drop_floor: 0.3
@@ -83,7 +83,7 @@ deployment, different YAML.
                           ┌─────────────────┬───────────┴──────────┐
                           ▼                 ▼                      ▼
                   ┌──────────────┐  ┌───────────────┐    ┌─────────────────┐
-                  │ Anthropic API│  │  Postgres +   │    │ Voyage AI       │
+                  │ OpenRouter   │  │  Postgres +   │    │ Voyage AI       │
                   │ Grade, draft │  │   pgvector    │    │ embeddings      │
                   │ + citations  │  │ Chunks/runs/  │    │ (ingest + query)│
                   └──────────────┘  │ checkpoints   │    └─────────────────┘
@@ -120,7 +120,7 @@ Full write-up: [`docs/architecture.md`](docs/architecture.md).)*
 ## Running the demo
 
 ```bash
-cp .env.example .env          # add ANTHROPIC_API_KEY and VOYAGE_API_KEY
+cp .env.example .env          # add OPENROUTER_API_KEY and VOYAGE_API_KEY
 make dev                      # Postgres + mock ticket service, then API and web
 
 cd apps/api && .venv/bin/alembic upgrade head

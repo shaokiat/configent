@@ -15,7 +15,10 @@ branding:
     - "Can you add the 2024 season?"
 agent:
   template: database
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
+  # Grading, rewriting, SQL and the ticket draft run on this cheaper model; the cited
+  # answer stays on `model`, because only Claude reads search_result blocks (D14).
+  structured_model: deepseek/deepseek-v4.1-flash
   # answer.md; generate.md and ticket_draft.md sit beside it.
   system_prompt_file: prompts/f1-analyst/answer.md
   max_tokens: 2048

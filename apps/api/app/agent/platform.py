@@ -21,6 +21,7 @@ from langgraph.graph import StateGraph
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import llm
 from app.agent.common import (
     UsageTotals,
     attr_or_key,
@@ -195,13 +196,15 @@ async def _step(d: Deps, stage: str, started: float, **extra: Any) -> None:
 
 
 async def _model_step(
-    d: Deps, state: dict, stage: str, started: float, response: Any, **extra: Any
+    d: Deps, state: dict, stage: str, started: float, response: Any, *, model: str | None = None,
+    **extra: Any,
 ) -> None:
-    """`_step` for a node that made a model call: also accrues its cost and traces it."""
-    model = d.cfg.agent.model
+    """`_step` for a node that made a model call: also accrues its cost and traces it.
+    `model` is the call's, when it was not `agent.model`."""
+    model = model or d.cfg.agent.model
     usage = UsageTotals(model)
     usage.add(response.usage)
-    d.usage.add(response.usage)
+    d.usage.add(response.usage, model)
     latency_ms = int((time.monotonic() - started) * 1000)
     d.db.add(model_trace(state["conversation_id"], model, response.usage, latency_ms))
     await _step(d, stage, started, usage=usage, **extra)
@@ -350,7 +353,7 @@ async def stream_turn(
         run_id = recorder.run_id
         yield ("run", {"run_id": run_id, "conversation_id": conversation_id})
 
-        deps = Deps(cfg, client_id, db, anthropic.AsyncAnthropic(), recorder)
+        deps = Deps(cfg, client_id, db, llm.async_client(), recorder)
         initial = {
             "question": user_message,
             "history": history,

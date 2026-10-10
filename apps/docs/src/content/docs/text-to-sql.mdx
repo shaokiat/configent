@@ -97,7 +97,7 @@ Setup: `make data-bird && make ingest CLIENT=f1-analyst`. The download is checke
 ```yaml
 agent:
   template: database
-  model: claude-haiku-4-5-20251001
+  model: anthropic/claude-haiku-4.5
   system_prompt_file: prompts/f1-analyst/answer.md   # generate.md, ticket_draft.md beside it
   database: { dialect: sqlite, path: data/bird/formula_1.sqlite }
   context: { source: corpora/f1-analyst/ }

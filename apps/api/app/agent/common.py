@@ -23,33 +23,52 @@ class ConversationNotFoundError(Exception):
     """
 
 
+def _priced(price, input_tokens, output_tokens, cache_write, cache_read) -> float:
+    return (
+        input_tokens * price.input
+        + output_tokens * price.output
+        + cache_write * price.cache_write
+        + cache_read * price.cache_read
+    ) / 1_000_000
+
+
 @dataclass
 class UsageTotals:
-    """Token usage summed across one turn's model calls, priced at `model`'s rates (D8)."""
+    """Token usage summed across one turn's model calls, priced at `model`'s rates (D8).
+
+    A call made on another model (`agent.structured_model`) adds its tokens to the totals
+    and the price difference to `offset_usd`, so `cost_usd` stays exact."""
 
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    offset_usd: float = 0.0
 
-    def add(self, usage: Any) -> None:
-        self.input_tokens += getattr(usage, "input_tokens", 0) or 0
-        self.output_tokens += getattr(usage, "output_tokens", 0) or 0
-        self.cache_creation_input_tokens += (
-            getattr(usage, "cache_creation_input_tokens", 0) or 0
+    def add(self, usage: Any, model: str | None = None) -> None:
+        counts = (
+            getattr(usage, "input_tokens", 0) or 0,
+            getattr(usage, "output_tokens", 0) or 0,
+            getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            getattr(usage, "cache_read_input_tokens", 0) or 0,
         )
-        self.cache_read_input_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
+        self.input_tokens += counts[0]
+        self.output_tokens += counts[1]
+        self.cache_creation_input_tokens += counts[2]
+        self.cache_read_input_tokens += counts[3]
+        if model and model != self.model:
+            self.offset_usd += _priced(price_for(model), *counts) - _priced(price_for(self.model), *counts)
 
     @property
     def cost_usd(self) -> float:
-        price = price_for(self.model)
-        return (
-            self.input_tokens * price.input
-            + self.output_tokens * price.output
-            + self.cache_creation_input_tokens * price.cache_write
-            + self.cache_read_input_tokens * price.cache_read
-        ) / 1_000_000
+        return self.offset_usd + _priced(
+            price_for(self.model),
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+        )
 
 
 _TRACE_FIELD_MAX_CHARS = 2000

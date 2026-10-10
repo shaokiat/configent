@@ -43,7 +43,7 @@ and four prompts, run the ingestion command.
                  ┌──────────────────┬──────────────────┬───┴──────────────┐
                  ▼                  ▼                  ▼                  ▼
          ┌──────────────┐  ┌────────────────┐  ┌───────────────┐  ┌──────────────┐
-         │ Anthropic API│  │  Postgres +    │  │ Voyage AI     │  │ Ticket       │
+         │ OpenRouter   │  │  Postgres +    │  │ Voyage AI     │  │ Ticket       │
          │              │  │   pgvector     │  │ embeddings    │  │ service      │
          │ - Grade      │  │                │  │               │  │ (mock, HTTP) │
          │ - Rewrite    │  │ - Chunks       │  │ - Ingestion + │  └──────────────┘
@@ -68,7 +68,7 @@ and four prompts, run the ingestion command.
 4. `retrieve` runs vector search scoped to that client's rows, and `grade` rates whether the
    passages support an answer. A Python function routes the turn: answer, converse, search
    again, or draft a ticket.
-5. An answer is streamed from the Anthropic API with the passages as `search_result` content
+5. An answer is streamed from Claude (via OpenRouter, D14) with the passages as `search_result` content
    blocks and citations enabled, and with no tool definitions in the request.
 6. Steps, text deltas and citation deltas stream back to the browser via SSE. A ticket offer
    arrives as a `ticket_proposal` event; the graph pauses until the user confirms.
@@ -94,7 +94,7 @@ corpus:
     chunk_size: 512                  # tokens
     overlap: 64
 agent:
-  model: claude-haiku-4-5-20251001   # must have a row in config/pricing/claude.yaml
+  model: anthropic/claude-haiku-4.5   # must have a row in config/pricing/claude.yaml
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   retrieval_drop_floor: 0.3
@@ -105,7 +105,7 @@ agent:
     query_rewrites: 3
 evals:
   golden_set: evals/gcp-platform-support/golden.jsonl
-  judge_model: claude-sonnet-4-6
+  judge_model: anthropic/claude-sonnet-4.6
 limits:
   rate_limit_per_minute: 60
   daily_budget_usd: 2.00
@@ -217,7 +217,7 @@ configent/
 | Agent runtime | LangGraph for mechanism, Python for decisions | Checkpoints and the ticket pause come from the framework; every route is a function you can read |
 | Escalation | Routed by code; answering call sent no tools | A model cannot be talked out of an `if` statement |
 | Citations | `search_result` blocks + API citations | Citations are guaranteed-valid (verbatim match required) instead of prompt-based quoting |
-| Model | `claude-haiku-4-5-20251001` | Cheap enough to spend extra calls on grading and rewriting |
+| Model | `anthropic/claude-haiku-4.5` | Cheap enough to spend extra calls on grading and rewriting |
 | Cost | Priced per model from a dated YAML table | No API returns prices; an unpriced model fails startup |
 | Tracing | Homegrown Postgres `traces` table | The same data feeds cost display and the daily budget; no extra service to run |
 | Limits | Per-client rate limit + daily budget, enforced server-side | Config fields are meaningless if nothing reads them; both return a friendly 429 |

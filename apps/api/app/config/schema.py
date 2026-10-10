@@ -89,6 +89,10 @@ class DocumentsAgent(BaseModel):
 
     template: Literal["documents"]
     model: str
+    # Every structured-output call (grading, rewriting, SQL, the ticket draft) runs on this
+    # when set; the cited answer always runs on `model`. Only Claude reads a `search_result`
+    # block, so `model` must be Claude; this one may be any model that follows a schema (D14).
+    structured_model: str | None = None
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
 
@@ -147,6 +151,10 @@ class DatabaseAgent(BaseModel):
 
     template: Literal["database"]
     model: str
+    # Every structured-output call (grading, rewriting, SQL, the ticket draft) runs on this
+    # when set; the cited answer always runs on `model`. Only Claude reads a `search_result`
+    # block, so `model` must be Claude; this one may be any model that follows a schema (D14).
+    structured_model: str | None = None
     system_prompt_file: str
     max_tokens: int = Field(default=4096, gt=0)
     database: DatabaseConfig
@@ -206,7 +214,7 @@ class TicketHandoff(BaseModel):
         return {
             "type": "object",
             "properties": props,
-            "required": ["subject"],
+            "required": ["subject", "category"],  # a model may skip an optional enum (DeepSeek did)
             "additionalProperties": False,
         }
 
@@ -217,7 +225,7 @@ HandoffConfig = Annotated[MessageHandoff | TicketHandoff, Field(discriminator="m
 
 class EvalsConfig(BaseModel):
     golden_set: str
-    judge_model: str = "claude-sonnet-4-6"
+    judge_model: str = "anthropic/claude-sonnet-4.6"
 
 
 class LimitsConfig(BaseModel):
@@ -286,6 +294,11 @@ class ClientConfig(BaseModel):
                 f"`agent.database` and `agent.context` instead"
             )
         return self
+
+    @property
+    def structured_model(self) -> str:
+        # A template whose agent member has no such key runs everything on `model`.
+        return getattr(self.agent, "structured_model", None) or self.agent.model
 
     def system_prompt_path(self, root: Path) -> Path:
         return root / self.agent.system_prompt_file
