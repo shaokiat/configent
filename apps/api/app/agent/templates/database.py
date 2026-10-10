@@ -23,14 +23,13 @@ from sqlalchemy import select
 from app.agent import platform
 from app.agent.common import collect_segments, excerpt
 from app.agent.handoff import _after_ticket, converse, decline, escalate, route, ticket
-from app.agent.platform import Deps, Template, _model_step, _prompt, _step, _transcript
+from app.agent.platform import _REPO_ROOT, Deps, Template, _model_step, _prompt, _step, _transcript
 from app.config.schema import ClientConfig, DatabaseAgent
 from app.models import Document
 from app.sql import context, guard
 from app.sql.connection import QueryError, run_query
 from app.sql.guard import Verdict
 
-_REPO_ROOT = Path(__file__).parents[4]
 _PREVIEW_ROWS = 5  # in the step trail; the full rows go only to the answering call
 
 
