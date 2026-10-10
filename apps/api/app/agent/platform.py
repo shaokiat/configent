@@ -245,12 +245,20 @@ async def _structured_call(
     max_tokens: int,
     cache_system: bool = False,
 ) -> tuple[dict, Any]:
-    """One model call constrained to a JSON schema."""
+    """One model call constrained to a JSON schema.
+
+    Reasoning is off: a model that reasons by default (DeepSeek) spent the whole `max_tokens`
+    on it and returned no JSON in 2 of 18 benchmark turns. `strict` stops a runaway string
+    field doing the same. Off and strict, 0 of 16 failed (D15)."""
     response = await aclient.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
         messages=[_system(system, cache_system), {"role": "user", "content": user_content}],
-        response_format={"type": "json_schema", "json_schema": {"name": "output", "schema": schema}},
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "output", "strict": True, "schema": schema},
+        },
+        extra_body={"reasoning": {"enabled": False}},
     )
     return json.loads(response.choices[0].message.content or ""), response
 

@@ -43,13 +43,15 @@ class TurnState(platform.TurnState, total=False):
 _GRADE_SCHEMA = {
     "type": "object",
     "properties": {
+        # First, because fields are written in this order: a model that commits to `kind`
+        # before reasoning argues itself out of it afterwards (seen with DeepSeek, D15).
+        "reasoning": {"type": "string"},
         # Triage rides on the grade call (D9): no extra call, and made with the passages in
         # view rather than by a router that sees only the question.
         "kind": {"type": "string", "enum": ["question", "conversation", "handoff"]},
         "supported": {"type": "boolean"},
         "confidence": {"type": "number"},
         "missing_info": {"type": "string"},
-        "reasoning": {"type": "string"},
         "reply": {"type": "string"},
     },
     "required": ["kind", "supported", "confidence", "reasoning"],

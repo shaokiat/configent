@@ -48,14 +48,17 @@ class TurnState(platform.TurnState, total=False):
 
 
 _SQL_FIELDS = {
-    "sql": {"type": "string"},
+    # Reasoning first: fields are written in order, and a model that committed to `kind`
+    # first was seen marking "2008 Monaco" a handoff, then noting 2008 is in range (D15).
     "reasoning": {"type": "string"},
+    "sql": {"type": "string"},
 }
 _GENERATE_SCHEMA = {
     "type": "object",
     "properties": {
+        "reasoning": _SQL_FIELDS["reasoning"],
         "kind": {"type": "string", "enum": ["question", "conversation", "handoff"]},
-        **_SQL_FIELDS,
+        "sql": _SQL_FIELDS["sql"],
         "reply": {"type": "string"},  # what converse says; "" otherwise
     },
     "required": ["kind", "sql", "reasoning", "reply"],
