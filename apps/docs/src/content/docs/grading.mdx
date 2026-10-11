@@ -2,7 +2,7 @@
 title: Grading
 description: The grade node. One cheap structured-output call that rates whether the passages support an answer, and whether the message is a support question at all. Runs at both levels.
 order: 10
-group: The Support Graph
+group: "Template: Documents"
 ---
 
 `grade` is the guardrail's model call. It hands the message, the recent conversation and the passages to a cheap model, and gets back two judgements: how well the passages support an answer, and whether the message is a question or conversation. The same function runs twice in the graph, as `grade` at Level 1 and `regrade` at Level 2. It lives in `agent/templates/documents.py`.

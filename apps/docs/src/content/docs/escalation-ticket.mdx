@@ -1,13 +1,15 @@
 ---
 title: Handoff & Ticket
 description: Level 3. The client's handoff — a fixed message, or a drafted ticket, a graph paused on interrupt(), and a POST from Python once the user confirms. Idempotency comes from the run, not the content.
-order: 14
-group: The Support Graph
+order: 6.4
+group: "The Platform"
 ---
 
-When neither level can ground an answer, the turn goes to the client's **handoff** (`handoff.mode`, D9 amended).
+import Diagram from '@/components/Diagram.astro';
 
-- **`message` (the default):** the shared edge `handoff.route` sends the turn to `decline`, which replies with `handoff.message`. No model call, no ticket, outcome `decline`.
+When a template cannot answer, the turn goes to the client's **handoff**. The nodes on this page are shared by both templates (`handoff.mode`, D9 amended).
+
+- **`message`:** the shared edge `handoff.route` sends the turn to `decline`, which replies with `handoff.message`. No model call, no ticket, outcome `decline`.
 - **`ticket`:** the rest of this page.
 
 In ticket mode, `escalate` drafts a ticket with a structured-output call and offers it. The graph then pauses in `ticket` on `interrupt()`, and the turn ends. Filing happens **only after the user confirms**, when `confirm_ticket()` resumes the graph and Python POSTs the draft.
@@ -19,7 +21,7 @@ The route to this tier was chosen before any of it started. Nothing here, in eit
 ## The flow
 
 ```
-decide_level2 (or decide_level1, with corrective off) → "escalate" + why
+decide_level1 / decide_level2 / decide_sql → "escalate" + why
   │
   ├─ decline                           handoff.mode: message · the configured text · END
   │
@@ -39,35 +41,37 @@ decide_level2 (or decide_level1, with corrective off) → "escalate" + why
 
 The draft call is given the message, the recent conversation and the guardrail's reason string. It is never asked whether to escalate. There is no ticket tool: Python calls the ticket client, `app/tickets.py`, directly.
 
+<Diagram name="ticket" title="A ticket: offered, paused, confirmed, filed once" height={620} />
+
 ---
 
 ## A worked example
 
-**"Can you raise my Cloud Run instance quota for europe-west1? It's blocking a deploy."** A real run, continuing from [the guardrail](/configent/docs/escalation-guardrail#a-worked-example).
+**"Can you raise my Cloud Run instance quota for europe-west1?"** A live run on 2026-10-11, DeployBot.
 
-- `escalate` drafts `category: quota_or_billing`, `product_area: cloud_run`, a subject and a body. The step records the Level 2 reason alongside them.
-- The draft is streamed as a `ticket_proposal` event, and the graph pauses. **Nothing has been filed.** The reply says what the ticket would be and offers to open it.
-- The user clicks through. `confirm_ticket()` resumes the graph, and `stage_ticket` POSTs with `Idempotency-Key: {run_id}:7`: six steps came before it.
-- The service returns `PLATFORM-1042`, queue `platform-serverless`, 8-hour ETA, in 18 ms. The confirmation is saved as its own assistant turn.
-- A second click returns `already_filed: true` and the same id. The mock service holds one ticket.
+- `grade` returned `kind: handoff`, so `decide_level1` routed straight to `escalate`, with reason "the user asked for a person". Level 2 never ran.
+- `escalate` drafted `category: quota_or_billing`, a subject and a body. The draft was streamed as a `ticket_proposal` event, and the graph paused in `ticket`. **Nothing had been filed.** The reply said what the ticket would be and offered to open it.
+- The click resumed the graph. `stage_ticket` POSTed with `Idempotency-Key: {run_id}:4`: three steps came before it.
+- The service returned `PLATFORM-1049`, queue `platform-triage`, 8-hour ETA, in 22 ms. The confirmation was saved as its own assistant turn.
+- A second click returned `already_filed: true` and the same id.
 
 What the user sees:
 
 ```
-Searched the documentation         5 passages · best match 0.50
-Graded the evidence                confidence 0.05
-Rewrote the question               3 rewrites · "Cloud Run quota europe-west1"
-Searched again: keyword + semantic 5 passages
-Graded the new evidence            confidence 0.05
+Searched the documentation         5 passages · best match 0.47
+Graded the evidence                confidence 0.05 · asked for a person
 Drafted a ticket for review        quota_or_billing
 
-  ┌ Draft ticket · high · quota or billing ───────────────┐
-  │ Cloud Run instance quota increase in europe-west1     │
+  ┌ Draft ticket · normal · quota or billing ─────────────┐
+  │ Cloud Run instance quota increase requested for       │
+  │ europe-west1                                          │
   │ [ Open this ticket ]  [ Not now ]                     │
   └───────────────────────────────────────────────────────┘
 
-Filed a ticket                     PLATFORM-1042      ← after they click
+Filed a ticket                     PLATFORM-1049      ← after they click
 ```
+
+PitWall runs the same nodes: "Can you add the 2024 season?" was drafted as `data_request` and filed as `PLATFORM-1050` in the `data-team` queue.
 
 ---
 
@@ -129,8 +133,12 @@ A user mid-deploy did not ask for a ticket. One that appears unrequested reads a
 |---|---|---|
 | `TICKET_API_URL` | `http://localhost:9000` | Env var. Where the ticket service lives |
 | `agent.system_prompt_file` | none | `ticket_draft.md` is resolved beside it |
-| `agent.corrective.enabled` | `true` | Off routes a turn that fails Level 1 straight here |
+| `handoff.mode` | — (required) | `message` or `ticket` |
+| `handoff.categories` | — | Ticket categories, id → label; must include `other` |
+| `handoff.product_areas` | `[]` | Optional enum on the draft |
+| `handoff.queue`, `handoff.team`, `handoff.preamble` | none, `platform team`, `That one needs a human.` | Where it goes and how the offer reads |
+| `agent.corrective.enabled` | `true` | Documents only. Off routes a turn that fails Level 1 straight here |
 
 ---
 
-**Next:** [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph), why this template replaced a hand-written one, and what carried over.
+**Next:** [Runs & Durability](/configent/docs/runs-and-durability), the trail the pause and the resume both write to.

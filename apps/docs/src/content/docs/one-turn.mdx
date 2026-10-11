@@ -1,0 +1,147 @@
+---
+title: One Turn, End to End
+description: What the platform does for every turn, whichever template finds the evidence. The guards in front, the run and its trail, the shared outcomes, and the done event.
+order: 6
+group: "The Platform"
+---
+
+Configent is one platform with two templates. **A template finds evidence. The platform does everything else:** it turns a request away or lets it in, records the run, streams it, decides what happens when there is no answer, saves the reply and prices the turn. This page follows one turn through the platform, and links each part to the page that covers it.
+
+---
+
+## The flow
+
+```
+POST /api/c/{client_id}/chat/stream                  routers/clients.py
+  ├─ _client()                    404  unknown client
+  ├─ _enforce_rate_limit()        429  limits.rate_limit_per_minute
+  ├─ _check_conversation_ownership()  404  another client's conversation
+  ├─ _enforce_daily_budget()      429  limits.daily_budget_usd, summed from traces
+  ├─ _enforce_index_current()     409  template.ready() is not None
+  └─ stream_turn(template=TEMPLATES[cfg.agent.template])      agent/platform.py
+       ├─ prepare_conversation()       load history, or create the conversation
+       ├─ RunRecorder.start()          runs row: status running, template, steps []
+       │     └─ event: run
+       ├─ graph.astream(...)           the template's nodes, then a shared outcome
+       │     ├─ event: step             one per node, committed first
+       │     ├─ event: text / citation  from answer, converse, decline, escalate
+       │     └─ event: ticket_proposal  from escalate, when a ticket is offered
+       ├─ save user + assistant messages, conversation totals
+       ├─ recorder.finish("completed")
+       └─ event: done                  outcome, template summary, tokens, cost, latency
+```
+
+Every check before `stream_turn` returns an ordinary HTTP error, because nothing has streamed yet. After the stream starts, a failure becomes an `error` event and the run is marked `failed`.
+
+---
+
+## What the platform owns, what a template owns
+
+| The platform | A template |
+|---|---|
+| The client registry, startup validation, tenancy by `client_id` | Its graph: nodes and the routing functions |
+| Rate limit, daily budget, the 409 readiness guard | Its typed `agent:` config block |
+| `RunRecorder`, checkpoints, SSE, history | Its prompts |
+| Model calls through one client, cost and traces | What ingestion means for its sources (`check`, `ingest`, `ready`) |
+| The shared outcome nodes `converse`, `decline`, `escalate`, `ticket`, and the `route` edge | What it adds to `done` (`summary`) |
+
+The contract between the two is one frozen dataclass, `Template`. Its seven fields, and the echo template that proves the boundary holds, are on [Adding a Template](/configent/docs/adding-a-template).
+
+---
+
+## How a turn ends
+
+Every turn ends with exactly one `outcome`. The template decides whether there is evidence. The shared nodes decide what to say when there is none.
+
+| Outcome | Node | Model call | Who decides it |
+|---|---|---|---|
+| **`answer`** | the template's `answer` | the answering call, cited with `[n]` | the template's routing function |
+| **`converse`** | `converse` (shared) | none: the triage call already wrote the reply | triage: `kind: conversation` |
+| **`decline`** | `decline` (shared) | none: the client's `handoff.message` | `route`: an escalation, for a `mode: message` client |
+| **`ticket`** | `escalate` → `ticket` (shared) | the ticket draft | `route`: an escalation, for a `mode: ticket` client |
+
+- **A template only ever says "escalate".** The shared `route` edge turns that into `decline` or `escalate` from the client's `handoff.mode`. See [Handoff & Ticket](/configent/docs/escalation-ticket).
+- **Triage rides on the template's first model call.** `grade` in documents and `generate` in database both return `kind`, with `question`, `conversation` or `handoff`. Neither template has a separate classifier in front.
+
+---
+
+## A worked example: one turn per template
+
+Live runs on 2026-10-11, DeepSeek V4.1 Flash for every call:
+
+| | DeployBot (documents) | PitWall (database) |
+|---|---|---|
+| **Message** | "My Cloud Run container fails to start — what does the PORT error mean?" | "Who won the 2008 Monaco Grand Prix?" |
+| **Template nodes** | `retrieve` 0.62 → `grade` 0.90 | `generate` → `guard` ok → `execute` 1 row |
+| **Evidence passed to the answer** | 5 chunks, numbered `[1]`–`[5]` | the rows as one table, `[1]` |
+| **Outcome** | `answer`, 3 citations | `answer`, 1 citation |
+| **`done` adds** | `confidence: 0.9` | `row_count: 1` |
+| **Cost · latency** | $0.00086 · 7.2 s | $0.00136 · 5.8 s |
+
+Everything outside the template-nodes row comes from the platform: the run row, the step events, how citations are parsed, the stored message, the cost. Both turns are walked end to end on their use-case pages, [DeployBot](/configent/docs/deploybot) and [PitWall](/configent/docs/pitwall).
+
+---
+
+## Design decisions
+
+### The guards run before the stream
+
+**A rejection is an HTTP status, not an SSE event.** The streaming endpoint runs ownership, budget and readiness in a short-lived session before it builds the `StreamingResponse`. A client that is out of budget gets a 429 it can show, instead of a 200 that breaks off mid-stream.
+
+### One run row, two records
+
+| | `runs.steps` | LangGraph checkpoints |
+|---|---|---|
+| **Written by** | `RunRecorder.step()` in each node | LangGraph, after each node |
+| **Holds** | What the user sees: stage, reasoning, scores, tokens, cost | The whole `TurnState` |
+| **Read by** | The UI's step trail, a reloaded conversation | `confirm_ticket` resuming a pause |
+| **Survives a crash** | Yes: each step commits in its own session | Yes: `durability="sync"` |
+
+- **Two records because they answer different questions.** The trail is the audit record, so it is shaped for people. A checkpoint is shaped so the graph can carry on from it.
+- **Each step commits through `checkpoint_session()`,** not the request session, which rolls back on the very failure the trail has to survive. See [Runs & Durability](/configent/docs/runs-and-durability).
+
+### The final state is read back, not reconstructed
+
+**`stream_turn` builds the stored message from `aget_state(thread).values`.** The SSE stream is for display. A reply rebuilt from the deltas could drift from what the graph decided, and reading it back from the checkpoint rules that out.
+
+### History: every message to the answer, six turns to the rest
+
+| Call | What it sees of the conversation |
+|---|---|
+| `answer` | Every prior message, then the passages and the question |
+| `grade`, `rewrite`, `generate`, `escalate` | The last 6 text turns, pasted into the user message as a transcript |
+
+- **No window and no summary.** Support conversations are a few turns long.
+- **The conversation row commits before the graph runs.** The step trail is written on its own session and references the conversation, so the row must already be visible. A turn that then fails leaves an empty conversation, not corrupted history.
+- **A turn is persisted after the graph stops:** the user message, and the reply with its `segments` and `run_id`. A confirmed ticket adds a third message, so a reload shows the confirmation and not only the offer.
+- **`run_id` is the join from a reply to its trail.** Reloading a conversation returns each reply with its run's steps, so the trail renders as it did live.
+- **Ownership is checked on every load.** A conversation id from another client returns 404, before the stream starts.
+
+### `run_turn` drains `stream_turn`
+
+**The non-streaming endpoint is the streaming one, consumed to the end.** There is one code path, so the two endpoints cannot behave differently.
+
+### Errors say little
+
+**An `error` event carries a generic message.** It says "Upstream API error: `APIError`" or "An internal error occurred". The detail goes to the logs. `GraphCrash`, the injected fault from `CRASH_AFTER`, is the one exception the platform deliberately lets through (D6).
+
+---
+
+## Configuration
+
+The platform reads these keys for every client, whatever its template:
+
+| Key | Default | What it does |
+|---|---|---|
+| `agent.template` | — (required) | `documents` or `database`. Picks the graph |
+| `agent.model` | — (required) | The OpenRouter model id for every call. Must be priced in `config/pricing/claude.yaml` |
+| `agent.structured_model` | `agent.model` | Grading, rewriting, SQL and the ticket draft run on this model instead |
+| `handoff.mode` | — (required) | `message` sends `handoff.message`; `ticket` drafts and offers a ticket |
+| `limits.rate_limit_per_minute` | 20 | In-memory, per client, per process |
+| `limits.daily_budget_usd` | 2.00 | Checked at the start of a turn against today's `traces.cost_usd` |
+
+Full schema: [Config Reference](/configent/docs/config-reference).
+
+---
+
+**Next:** [Model Calls](/configent/docs/model-calls), the one place every model request goes through.

@@ -1,15 +1,17 @@
 ---
 title: Overview
-description: What Configent is, the stack it runs on, and where each design decision is written down.
+description: What Configent is, the two templates it ships, the stack it runs on, and where each design decision is written down.
 order: 1
-group: Overview
+group: "Overview"
 ---
 
+import Diagram from '@/components/Diagram.astro';
+
+
 <div class="lead">
-  Configent is a platform for grounded assistants, where a client is a YAML file plus a sources folder, not a codebase.
-  The reference client is a Google Cloud support agent that answers from documentation with
-  citations, searches again when the first attempt falls short, and offers a drafted ticket
-  when it still can't.
+  Configent is a platform for grounded assistants. A client is a YAML file plus a sources folder,
+  not a codebase. The config picks one of two templates, by the kind of evidence the client has:
+  documents or a database. Everything else is the same platform.
 </div>
 
 ---
@@ -18,75 +20,66 @@ group: Overview
 
 Four requirements, and every design decision below traces back to one of them.
 
-1. **Answer only from the corpus, with citations.** An uncited claim is a failure, not a style choice.
-2. **Know when it cannot answer.** The interesting half of a support agent is the refusal, and that decision has to be explainable after the fact.
-3. **Serve many clients from one deployment.** Adding a tenant is a config file, a corpus and a prompt, with no Python.
+1. **Answer only from the evidence, with citations.** An uncited claim is a failure, not a style choice.
+2. **Know when it cannot answer.** The interesting half of an assistant is the refusal, and that decision has to be explainable after the fact.
+3. **Serve many clients from one deployment.** Adding a tenant of an existing template is a config file, sources and prompts, with no Python.
 4. **Leave a record.** Every turn has to be auditable, and the record has to survive the process dying mid-turn.
 
 ---
 
-## The support agent at a glance
+## One platform, two templates
 
 ```
-          User question
-                │
-                ▼
-┌──────────────────────────────┐      grounded     ┌────────────────┐
-│ Level 1 · RAG                ├──────────────────▶│ Cited answer   │
-│ search the docs, grade them  │                   └────────────────┘
-└───────────────┬──────────────┘
-                │ falls short
-                ▼
-┌──────────────────────────────┐      grounded     ┌────────────────┐
-│ Level 2 · Corrective RAG     ├──────────────────▶│ Cited answer   │
-│ rewrite, search again        │                   └────────────────┘
-└───────────────┬──────────────┘
-                │ falls short
-                ▼
-┌──────────────────────────────┐   user says yes   ┌────────────────┐
-│ Level 3 · Human              ├──────────────────▶│ Ticket filed   │
-│ draft a ticket, offer it     │                   └────────────────┘
-└──────────────────────────────┘
+                        config/<client>.yaml
+                                │  agent.template
+                ┌───────────────┴────────────────┐
+                ▼                                ▼
+   documents  (DeployBot)              database  (PitWall)
+   retrieve → grade                    generate → guard → execute
+     └─ rewrite → hybrid_retrieve        └─ repair → guard → execute
+          → regrade                                │
+                │                                  │
+                └──────────────┬───────────────────┘
+                               ▼
+          the platform: answer with [n] citations · converse
+                        · decline or escalate → ticket (on confirm)
+          + limits · run trail · checkpoints · SSE · cost
 ```
 
-Each level answers if it can and hands down only what it can't. A Python function chooses every arrow; the model chooses none. The walkthrough is [The Support Graph](/configent/docs/support-graph).
+**Templates find evidence; the platform decides what to do with it.** Every arrow is chosen by a plain Python function. No model is ever sent a tool, so no model can choose to escalate.
+
+| | [DeployBot](/configent/docs/deploybot) | [PitWall](/configent/docs/pitwall) |
+|---|---|---|
+| **Template** | `documents` | `database` |
+| **Evidence** | Public Cloud Run, GKE and IAM docs | A Formula 1 results database, 1950 to 2017 |
+| **Finds it by** | Dense search, then rewrite and hybrid search | One model-written SELECT, guarded, repaired once |
+| **Can't answer means** | The question depends on the user's own project | Newer data, or a change to the data |
+| **Hands off to** | The platform team, as a ticket | The data team, as a ticket |
+
+Start with the use-case pages for what each client does, then [One Turn, End to End](/configent/docs/one-turn) for what the platform does for both.
 
 ---
 
 ## The shape
 
 ```
-Next.js (chat UI)          apps/web
+Next.js (chat UI)            apps/web
       │  SSE
-FastAPI                    apps/api
-      ├─ config registry    one YAML per client, validated at startup
-      ├─ support graph      three tiers, every route a Python function
-      │     ├─ retrieval    Voyage embed → pgvector cosine, + Postgres full-text at Level 2
-      │     ├─ Anthropic    Messages API: citations, structured output
-      │     ├─ LangGraph    checkpoints and the ticket pause
-      │     └─ cost         priced per model from config/pricing/claude.yaml
-      └─ Postgres           conversations · messages · chunks · runs · checkpoints · traces
-                                  │  HTTP
-                            mock ticket service   apps/mockticket
+FastAPI                      apps/api
+      ├─ config registry      one YAML per client, validated at startup
+      ├─ templates            documents · database, each a LangGraph graph
+      ├─ platform             limits · run trail · checkpoints · handoff nodes · cost
+      ├─ OpenRouter           every model call, OpenAI SDK, DeepSeek V4.1 Flash by default
+      ├─ Voyage               embeddings, documents template only
+      ├─ SQLite (read-only)   the database template's evidence
+      └─ Postgres             conversations · messages · chunks · runs · checkpoints · traces
+                                    │  HTTP
+                              mock ticket service   apps/mockticket
 ```
 
-One Postgres holds the relational data, the vectors, the full-text index and the graph checkpoints. One process serves every tenant. The only external calls are Anthropic, Voyage and the ticket service.
+<Diagram name="system" title="Configent: one platform, two templates" height={660} />
 
----
-
-## A graph, not a tool loop
-
-The reference client runs the support graph. A client chooses one template with `agent.template`; the second is [text-to-SQL](/configent/docs/text-to-sql), and [adding one](/configent/docs/adding-a-template) is code behind a stable seam. The alternative, a model looping over tools until it stops, shipped beside it until D11.
-
-| | Tool-use loop (retired) | Support graph |
-|---|---|---|
-| Control flow | The model picks tools until it stops | Three tiers of nodes, routed by Python functions |
-| Escalation decided by | The model | `decide_level1` and `decide_level2` |
-| Good for | Open-ended, multi-hop work | A decision you have to justify |
-
-A model holding the ticket tool cannot make this project's claim, that escalation is not the model's decision. Why the loop was deleted rather than kept: [Retiring the Loop](/configent/docs/retiring-the-loop).
-
-**[The Support Graph](/configent/docs/support-graph) is the section to read next.** Its hub page follows one question end to end, and each page under it owns one component.
+One Postgres holds the relational data, the vectors, the full-text index and the graph checkpoints. One process serves every tenant.
 
 ---
 
@@ -94,11 +87,11 @@ A model holding the ticket tool cannot make this project's claim, that escalatio
 
 | Layer | Choice | Why this one |
 |---|---|---|
-| LLM | Anthropic Claude (Haiku 4.5) | Native citations and structured output are both first-class; Haiku is cheap enough to spend extra calls on grading and rewriting |
-| Embeddings | Voyage `voyage-3` | Anthropic has no embeddings API, so a third party is required either way. Voyage exposes `input_type` query/document, a [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
+| LLM | Any model on OpenRouter, through the OpenAI SDK. DeepSeek V4.1 Flash for every call | One SDK and one bill for any model. 24× cheaper per turn than all-Haiku on the demo questions, with the same routes and facts. [Model Calls](/configent/docs/model-calls) |
+| Embeddings | Voyage `voyage-3` | Exposes `input_type` query/document, a [free recall win](/configent/docs/ingestion-pipeline#why-voyage-ai) |
 | Vector and keyword search | pgvector + Postgres full-text | Already inside the Postgres we need. A dedicated search service would be a [second system for no gain at this scale](/configent/docs/ingestion-pipeline#voyage-ai-vs-pgvector) |
+| Agent runtime | LangGraph, for checkpoints and the ticket pause | Model calls, routing and citations stay plain code. [How the Graphs Are Built](/configent/docs/langgraph) |
 | Backend | FastAPI + async SQLAlchemy | Native `async` all the way down, which is what makes I/O-bound nodes and SSE cheap |
-| Agent runtime | LangGraph, for checkpoints and the ticket pause | Model calls, routing and citations stay plain code. [Why a framework](/configent/docs/from-pipeline-to-graph) · [Why the loop was retired](/configent/docs/retiring-the-loop) |
 | Transport | SSE | One-way server push over plain HTTP. WebSockets buy nothing when only the server talks. [Details](/configent/docs/sse-streaming) |
 | Frontend | Next.js + Tailwind | Client-agnostic; branding comes from the API, not the build |
 
@@ -106,48 +99,45 @@ A model holding the ticket tool cannot make this project's claim, that escalatio
 
 ## Where the design decisions live
 
-The questions worth asking about this project, and the page that answers each.
-
 | Question | Page |
 |---|---|
-| How does one question actually flow through it? | [One Question, End to End](/configent/docs/support-graph) |
+| What does one turn look like, whichever template runs it? | [One Turn, End to End](/configent/docs/one-turn) |
+| How are the graphs built, and what does LangGraph own? | [How the Graphs Are Built](/configent/docs/langgraph) |
 | Why is retrieval a node instead of a tool? | [Retrieval](/configent/docs/retrieval) |
 | Why grade groundedness separately, and how are greetings kept out of the queue? | [Grading](/configent/docs/grading) |
 | Why two escalation signals rather than one? | [The Guardrail](/configent/docs/escalation-guardrail) |
-| Why search a second time before involving a human, and why not the web? | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
-| How do you stop the model from escalating on its own? | [Answering](/configent/docs/answering) |
+| Why search a second time before involving a human? | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
+| How is a model-written SQL query kept from doing harm? | [The Database Graph](/configent/docs/text-to-sql#the-guard-in-layers) |
+| How do you stop the model from escalating on its own? | [Model Calls](/configent/docs/model-calls#the-answering-call-has-nothing-to-escalate-with) |
+| How are citations made, and what do they not prove? | [Citations](/configent/docs/citations) |
 | How do you avoid filing the same ticket twice? | [Handoff & Ticket](/configent/docs/escalation-ticket) |
-| Why adopt LangGraph after building without it? | [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph) |
-| Why delete the free-form agent loop? | [Retiring the Loop](/configent/docs/retiring-the-loop) |
 | What happens if the process dies mid-turn? | [Runs & Durability](/configent/docs/runs-and-durability) |
-| How is one tenant's corpus kept out of another's? | [Multi-Tenancy](/configent/docs/multi-tenancy) |
-| Why `voyage-3`, and why not a dedicated vector DB? | [Ingestion Pipeline](/configent/docs/ingestion-pipeline#stage-3--embed) |
-| Does prompt caching help here, and why not yet? | [Prompt Caching](/configent/docs/prompt-caching) |
-| What does adding a new client actually take? | [Adding a New Use Case](/configent/docs/adding-a-use-case) |
+| How is one tenant's data kept out of another's? | [Multi-Tenancy](/configent/docs/multi-tenancy) |
+| What does a new client, or a new template, take? | [Adding a New Use Case](/configent/docs/adding-a-use-case) · [Adding a Template](/configent/docs/adding-a-template) |
+| What was replaced, and why? | [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph) · [Retiring the Loop](/configent/docs/retiring-the-loop) · [From API Citations to Markers](/configent/docs/from-api-citations-to-markers) |
+
+The decisions themselves, D1 to D15, are in `docs/decisions.md`.
 
 ---
 
 ## Vocabulary
 
-The terms the rest of the docs use without re-defining.
-
-- **Client / tenant:** one assistant (corpus, prompts, branding, thresholds, limits) defined by one YAML file in `config/`.
-- **Chunk:** a passage of a document (512 tokens for the support agent), embedded and stored as a row in pgvector. Retrieval returns chunks, not documents, so a citation can point at a paragraph.
-- **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. Ranges 0 to 1; the support agent discards anything below `0.3`.
-- **Groundedness:** a cheap-model score for whether the retrieved passages actually support an answer. Similarity says "close"; groundedness says "sufficient".
-- **Node:** one unit of the graph: `retrieve`, `grade`, `converse`, `rewrite`, `hybrid_retrieve`, `regrade`, `answer`, `decline`, `escalate`, `ticket`. Each commits an audit entry before the next starts.
-- **Level / tier:** Level 1 is RAG, Level 2 is corrective RAG, Level 3 is the client's handoff: a message, or a ticket for a human. A turn only moves down when the level above falls short.
-- **The two signals:** retrieval similarity (is anything in the corpus close?) and groundedness (is it enough?). One catches a corpus with nothing relevant; the other catches a corpus with something close but wrong.
-- **The routes:** `decide_level1` and `decide_level2`, the plain functions that choose every edge. Nodes do work; only these decide.
-- **Corrective retrieval:** Level 2. A rewrite of the question with the conversation in view, then hybrid search.
-- **Hybrid search:** dense vector search per query variant plus Postgres full-text search on exact keywords, fused by reciprocal rank.
-- **Outcome:** how a turn ends: `answer` (cited, from the corpus), `converse` (a greeting, a thank-you or a meta-question; no ticket), or `ticket` (a real support request neither level could answer; a ticket is drafted, offered, and filed on the user's confirmation).
-- **Triage:** the `kind` field on the grade call, which separates `converse` from everything else. It runs after retrieval, with the passages in view, rather than as an intent classifier in front.
-- **Tool starvation:** the answering call is sent no tool definitions at all, so escalation is unreachable from inside the model. A guarantee, not a prompt instruction.
-- **Run:** one graph turn, and the durable step trail it leaves in Postgres.
-- **Checkpoint:** LangGraph's saved graph state after a node, keyed by the run id. What lets a turn pause on a ticket offer and continue in a later request.
-- **Tool:** a function the model can ask the backend to call. No call in this system is sent one.
+- **Client / tenant:** one assistant (sources, prompts, branding, thresholds, handoff, limits) defined by one YAML file in `config/`.
+- **Template:** the graph a client runs, named for its evidence: `documents` or `database`. Config selects one; code defines it.
+- **Platform:** everything that is not a template: limits, the run trail, checkpoints, the shared outcome nodes, model calls, cost, SSE.
+- **Node:** one step of a graph. Each commits an entry to the step trail before the next starts.
+- **Route:** the string a node writes to the state after a Python function decides it: `decide_level1`, `decide_level2` or `decide_sql`. The edges only read it.
+- **Outcome:** how a turn ends: `answer` (cited), `converse` (a greeting or thanks; no ticket), `decline` (the client's fixed message) or `ticket` (a drafted ticket, filed on confirmation).
+- **Handoff:** what a client does when a turn cannot be answered. `mode: message` declines; `mode: ticket` offers a ticket.
+- **Triage:** the `kind` field on a template's first model call (`question`, `conversation`, `handoff`). It replaces an intent router in front.
+- **Chunk:** a passage of a document (512 tokens for DeployBot), embedded in pgvector. Retrieval returns chunks, so a citation can point at a paragraph.
+- **Similarity:** `1 - cosine_distance` between the question's vector and a chunk's. DeployBot discards anything below `0.3`.
+- **Groundedness:** the grade call's score for whether the passages support an answer. Similarity says "close"; groundedness says "sufficient".
+- **Level / tier:** documents only. Level 1 is RAG, Level 2 is corrective RAG, Level 3 is the handoff.
+- **Guard:** database only. The layers that decide whether a model-written query may run.
+- **Run:** one turn, and the durable step trail it leaves in Postgres.
+- **Checkpoint:** LangGraph's saved state after a node, keyed by the run id. What lets a turn pause on a ticket offer and continue in a later request.
 
 ---
 
-**Start here:** [One Question, End to End](/configent/docs/support-graph) for the design, or [Quickstart](/configent/docs/getting-started) to run it locally.
+**Start here:** [DeployBot](/configent/docs/deploybot) for the product, [One Turn, End to End](/configent/docs/one-turn) for the design, or [Quickstart](/configent/docs/getting-started) to run it locally.

@@ -1,8 +1,8 @@
 ---
 title: SSE Streaming
-description: How the support graph's steps, text and citations stream from FastAPI to the Next.js frontend over Server-Sent Events.
-order: 18
-group: Cross-Cutting
+description: How a turn's steps, text and citations stream from FastAPI to the Next.js frontend over Server-Sent Events.
+order: 6.6
+group: "The Platform"
 ---
 
 The chat endpoint returns a `StreamingResponse` immediately. As the graph runs, it yields SSE frames (step records, text deltas, citation events) that the frontend consumes incrementally.

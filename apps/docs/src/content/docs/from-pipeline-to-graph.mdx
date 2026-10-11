@@ -1,8 +1,8 @@
 ---
 title: From Pipeline to Graph
 description: Why the support agent moved from a hand-written pipeline to a LangGraph graph. Both designs side by side, every decision made in the change, what it cost, and how to recover the old code.
-order: 15
-group: The Support Graph
+order: 16
+group: "Design History"
 ---
 
 The support agent ran on a hand-written pipeline, `agent/pipeline.py`, from week 1 until 2026-09-11. It now runs on a LangGraph state graph with a second retrieval tier (decision D10, PR #6). This page keeps both designs on the record: what each one was, why the change was made, what it cost, and where the retired code lives.

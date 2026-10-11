@@ -1,8 +1,8 @@
 ---
 title: Runs & Durability
 description: The Run row and its step trail, the LangGraph checkpoints beside it, and why the trail's writes commit on a session of their own.
-order: 16
-group: Cross-Cutting
+order: 6.5
+group: "The Platform"
 ---
 
 A graph turn creates one `runs` row and appends one step to it per node. That row is the audit trail the UI renders and the join a reloaded conversation follows. LangGraph keeps its own record of the same turn, a checkpoint after every node, keyed by the run id.

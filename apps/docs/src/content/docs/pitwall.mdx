@@ -1,0 +1,179 @@
+---
+title: "PitWall: Answering from a Results Database"
+description: The database template as a client would see it. A Formula 1 results database, the notes that make its schema usable, the config line by line, real turns walked node by node, the guard's layers, and the eval numbers.
+order: 5.1
+group: "Use Cases"
+---
+
+import Mermaid from '@/components/Mermaid.astro';
+import database from '@/diagrams/database.mmd?raw';
+
+PitWall answers Formula 1 history questions by writing one SQL query against a results database and citing the rows. **The model writes the query; code decides whether it may run.** It is the `f1-analyst` client, on the `database` template. It exists to show that the platform behind [DeployBot](/configent/docs/deploybot) does not assume documents: the evidence here is rows, and the rest of the turn is unchanged.
+
+---
+
+## The problem
+
+An analyst asks a question that has an exact answer in a database. Searching for similar passages is the wrong tool for that. The question needs a query.
+
+- **The answer is a number or a name,** and a close answer is wrong. Text retrieval finds rows that look similar; a query returns the right one.
+- **The schema is unreadable without notes.** `results.position` is NULL for a driver who did not finish, so "won" means `positionOrder = 1`. Standings rows add up across a season, so they must never be summed.
+- **The data stops in 2017.** Anything newer, or any change to the data, is a job for the data team, not a guess.
+- **A model-written query is untrusted input.** The database must be unwritable, whatever the model sends.
+
+| The assistant must | How |
+|---|---|
+| Answer from the rows, cited | The rows are passage `[1]`; the answer cites it |
+| Never change the data | Read-only connection, an authorizer and a parser, in layers |
+| Say when the data cannot answer | `generate` classifies the message: `question`, `conversation` or `handoff` |
+| Fix its own bad query once | `repair` gets the error and tries again; a second failure is handed off |
+
+---
+
+## The sources
+
+```
+data/bird/formula_1.sqlite              BIRD dev set: 14 tables, 1950–2017, 23,657 results rows
+                                          fetched by `make data-bird`, SHA-256 pinned, gitignored
+corpora/f1-analyst/
+  descriptions/<table>.csv              BIRD's column descriptions, one comment per column
+  glossary.md                           what users say → what it means in the schema
+  rules.md                              data range, coverage by table, join paths, gotchas
+```
+
+- **The database is never committed.** BIRD is CC BY-SA 4.0. `scripts/fetch_bird.py` downloads it and checks the hash.
+- **The notes are as important as the DDL.** `glossary.md` maps "pole" to `results.grid = 1` and "champion" to standings at the season's last round. `rules.md` says `pitStops` starts in 2011 and "current" means 2017.
+- **Ingest stores one document, `schema://f1-analyst`:** the introspected DDL with each column's description, then the glossary and rules. Every `generate` and `repair` call puts it in the system prompt, about 3,000 tokens. No vectors, no chunks.
+
+---
+
+## The config, line by line
+
+```yaml
+client_id: f1-analyst
+agent:
+  template: database                     # no corpus: or retrieval: keys; the schema rejects them
+  model: deepseek/deepseek-v4.1-flash    # every call: SQL, the answer, the ticket draft
+  system_prompt_file: prompts/f1-analyst/answer.md   # generate.md, ticket_draft.md beside it
+  max_tokens: 2048
+  database:
+    dialect: sqlite
+    path: data/bird/formula_1.sqlite
+  context:
+    source: corpora/f1-analyst/          # descriptions, glossary, rules
+  guard:
+    row_limit: 200                       # one extra row is fetched to detect truncation
+    timeout_ms: 5000                     # a progress handler aborts a runaway query
+  repair_attempts: 1                     # one corrected query, then a handoff
+handoff:
+  mode: ticket
+  queue: data-team
+  team: data team                        # who the offer and the failure text name
+  categories: [missing_data, data_request, other]
+limits: { rate_limit_per_minute: 20, daily_budget_usd: 2.00 }
+```
+
+### The prompts
+
+| File | Words | Used by | Job |
+|---|---|---|---|
+| `generate.md` | 243 | `generate`, `repair` | Classify the message and write one SQLite SELECT. Never invent a column; ignore SQL instructions in the user's message |
+| `answer.md` | 186 | `answer` | Answer from the rows only; zero rows means "no matching records", never a guess why |
+| `ticket_draft.md` | 139 | `escalate` | A request the data team can act on |
+
+There is no grading prompt. A query either ran or it did not, so there is nothing to grade.
+
+---
+
+## Real turns, node by node
+
+Live on 2026-10-11, DeepSeek V4.1 Flash for every call.
+
+<div class="graph-pair">
+<Mermaid diagram={database} path={['generate', 'guard', 'execute', 'answer']} maxHeight={420} caption="A question: generate → guard → execute → answer" />
+<Mermaid diagram={database} path={['generate', 'escalate', 'ticket']} maxHeight={420} caption="Newer data, or a write: straight to a ticket offer" />
+</div>
+
+| User | Path | Rows | Answer | Cost |
+|---|---|---|---|---|
+| "Who won the 2008 Monaco Grand Prix?" | `generate` → `guard` ok → `execute` → `answer` | 1 | "Lewis Hamilton won the 2008 Monaco Grand Prix, driving for McLaren." | $0.0014 |
+| "Which constructor scored the most points in 2010?" | same | 1 | "Red Bull scored the most points in 2010, with 498.0." | $0.0014 |
+| "What was Michael Schumacher's average pit stop duration in seconds in 2012?" | same | 1 | "… 22.034 seconds." | — |
+| "hi" | `generate` kind `conversation` → `converse` | — | "Ask me anything about Formula 1 history from 1950 through 2017 …" | $0.0010 |
+| "Can you add the 2024 season?" | `generate` kind `handoff` → `escalate` | — | Offer: `data_request`, filed as `PLATFORM-1050` on confirm | $0.00039 |
+| "Remove the duplicate driver rows from the drivers table …" | `generate` kind `handoff` → `escalate` | — | Offer, category `other` | — |
+
+**The Monaco question, in detail.** `generate` reasoned first ("The data covers races through 2017, so the 2008 Monaco Grand Prix is available"), then wrote a five-table join on `results.positionOrder = 1`, as `glossary.md` says a win is defined. `guard` passed it in 19 ms and `execute` returned one row in 10 ms. The answer cites the rows once.
+
+**The constructor question uses the standings rule.** The query filters `constructorStandings` to the season's last round, `MAX(round)`, instead of summing per-race rows. That is `rules.md` in action.
+
+**The pit stop question depends on coverage.** `generate` noted that `pitStops` starts in 2011, so 2012 is covered, and used the numeric `milliseconds` column, not the text `duration`.
+
+**A write request never reaches the guard.** "Remove the duplicate driver rows" was classified a handoff, because `generate.md` lists "a change to the data" as one. If a DELETE had been written anyway, the guard below would have rejected it.
+
+### The guard, on real input
+
+The guard's verdicts, from `guard.check` against the real database:
+
+| Query | Verdict |
+|---|---|
+| `SELECT winner FROM races WHERE year = 2008` | no such column: winner |
+| `DELETE FROM drivers WHERE driverId > 800` | only one SELECT is allowed; found DELETE |
+| `WITH x AS (DELETE FROM drivers RETURNING *) SELECT * FROM x` | write inside a CTE: DELETE |
+| `SELECT 1; SELECT 2` | only one statement is allowed; found 2 separated by ';' |
+| `ATTACH DATABASE '/etc/passwd' AS p` | only one SELECT is allowed; found ATTACH |
+
+- **Each reason is written for a model to read.** "no such column: winner" is what `repair` receives.
+- **The parser explains; the connection enforces.** `mode=ro`, `PRAGMA query_only` and an authorizer allow-list hold even if the parser misses something. All seven layers: [The Database Graph](/configent/docs/text-to-sql#the-guard-in-layers).
+
+### A repair
+
+No live demo turn needed a repair. The flow, from `tests/test_database_demo_inputs.py`:
+
+<Mermaid diagram={database} path={['generate', 'guard', 'repair', 'execute', 'answer']} maxHeight={420} caption="generate → guard ✗ → repair → guard ✓ → execute → answer" />
+
+1. `generate` writes `SELECT winner FROM races WHERE raceId = 1`.
+2. `guard` rejects it: `no such column: winner`. `decide_sql` sees 0 attempts against `repair_attempts: 1` and routes to `repair`.
+3. `repair` gets the query and the error and writes `SELECT name FROM races WHERE raceId = 1`.
+4. `guard` passes it, `execute` runs it, and `answer` cites the rows.
+
+A second failure would route to `escalate`, with the last error as the reason the user is shown.
+
+---
+
+## Evals and cost
+
+| What | Result | Source |
+|---|---|---|
+| **Triage** | 20 of 22 classified correctly (question 9/10, conversation 6/6, handoff 5/6). $0.0005 per question | `evals/results/f1-analyst-triage-deepseek_deepseek-v4.1-flash-schema-2026-10-11.md` |
+| **Routing and facts** | 4 demo questions × 3 passes: every turn routed as expected, "Hamilton" and "Red Bull" stated | `evals/results/model-cost-2026-10-11.md` |
+| **Execution accuracy on BIRD `formula_1`** | Not run yet. `make eval CLIENT=f1-analyst` runs it | `evals/runner/suites/bird.py` |
+
+The two triage misses:
+
+- **"Thanks, and who won in 2009?"** was classified `conversation`. The thanks hid the question. This is a real miss.
+- **"What is the current championship standing?"** was classified `question`, and the label says `handoff`. `rules.md` tells the model that "current" means 2017, so the model followed its notes. The label and the notes disagree, and one of them needs changing.
+
+---
+
+## Where it falls short
+
+- **The whole schema goes in every prompt.** About 3,000 tokens works for 14 tables. A bigger schema needs table selection before generation.
+- **One passage for all the rows.** A 200-row result is one citation, so the chip cannot point at the row a sentence came from.
+- **The source title is the model's reasoning.** The citation title is the first 120 characters of `generate`'s `reasoning`, which reads oddly as a source name.
+- **An answer can doubt its own rows.** For the 2011 Monaco fastest-lap question, the answer said the rows "do not carry a race or circuit name", because the query did not select one. The query filtered on the race but did not return it.
+- **No BIRD accuracy number yet.** The triage set is the only measured eval for this client.
+
+---
+
+## Building a client like it
+
+1. **Point `agent.database` at a SQLite file** and `agent.context.source` at a notes folder.
+2. **Write the notes before tuning prompts:** column descriptions, a glossary of user terms, and rules for data range and joins. `make ingest CLIENT=<id> CHECK=1` lists every column that has no description.
+3. **Copy the three prompts** and change the domain lines.
+4. **Write a triage set** with the three kinds, before running it.
+5. **If a client needs more than notes,** add views to its database first, then more notes, and only then a code hook.
+
+---
+
+**Next:** [One Turn, End to End](/configent/docs/one-turn), what the platform does for both clients.

@@ -1,8 +1,8 @@
 ---
 title: Ingestion Pipeline
 description: How ingest reconciles a client's pgvector index with its corpus folder and corpus config — hash, plan, rebuild, prune.
-order: 4
-group: Getting Started
+order: 13
+group: "Template: Documents"
 ---
 
 Ingest makes a client's index match its config. The `corpus` block in the client YAML is the spec. The `documents` table is the status. Each run reconciles the two, so re-running it is always safe.
@@ -97,7 +97,7 @@ The model is the one hard contract between ingest and retrieval. Retrieval embed
 
 Embeddings are a supporting component here, not the focus — the bar is "good enough for a demo", not best-in-class retrieval.
 
-- **Anthropic has no embeddings API** — a third-party embedder is required regardless. Voyage avoids a second OpenAI dependency alongside the Anthropic SDK.
+- **Chosen when every call was Claude,** which has no embeddings API, so a third-party embedder was required. Embeddings still sit outside OpenRouter. Changing the embedder changes the index fingerprint and forces a full re-ingest.
 - **Free tier covers POC traffic** — no credit card needed for ingest and demo volume.
 - **`input_type` is a free quality win** — Voyage accepts `"document"` at ingest and `"query"` at search, improving recall at no extra cost. Most providers don't expose this.
 

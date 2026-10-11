@@ -2,7 +2,7 @@
 title: Corrective Retrieval
 description: Level 2. Rewrite the question with the conversation in view, search semantic and keyword, fuse by rank, and grade again. One pass, no new infrastructure.
 order: 12
-group: The Support Graph
+group: "Template: Documents"
 ---
 
 Level 2 runs when Level 1 falls short and the grader did not call the message conversation. It rewrites the question, searches again two ways, fuses the results, and grades them. The nodes are `rewrite` and `hybrid_retrieve` in `agent/templates/documents.py`, followed by `regrade`; the search is `retrieve()` in `retrieval/search.py`.
@@ -91,7 +91,7 @@ The textbook corrective tier reaches for the web. For this corpus it would add l
 ### One pass
 
 - **No loop from `regrade` back to `rewrite`.** Level 2 runs once, so its cost is bounded and its trail has a fixed shape.
-- **No multi-hop.** A question that needs one search to inform the next wants a model holding a tool. The loop engine that did that was [retired](/configent/docs/retiring-the-loop).
+- **No multi-hop.** A question that needs one search to inform the next wants a model holding a tool. The loop that did that was [retired](/configent/docs/retiring-the-loop).
 
 ---
 
@@ -110,4 +110,4 @@ The textbook corrective tier reaches for the web. For this corpus it would add l
 
 ---
 
-**Next:** [Answering](/configent/docs/answering), which both levels hand their passages to.
+**Next:** [Citations](/configent/docs/citations), how the answer both levels lead to is cited.

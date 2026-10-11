@@ -1,15 +1,18 @@
 ---
-title: Text-to-SQL
-description: The second template. The model writes one SELECT, code guards and runs it read-only, and the rows are the evidence a cited answer is written from.
-order: 7.6
-group: Templates
+title: The Database Graph
+description: The database template. The model writes one SELECT, code guards and runs it read-only, and the rows are the evidence a cited answer is written from.
+order: 14
+group: "Template: Database"
 ---
+
+import Mermaid from '@/components/Mermaid.astro';
+import database from '@/diagrams/database.mmd?raw';
 
 <div class="lead">
   The <code>database</code> template treats rows as evidence. The model writes one SELECT, code
   decides whether it may run, and the answer is generated from the rows with citations. No
-  vector index is involved. The client is <code>f1-analyst</code> (PitWall), on BIRD's
-  <code>formula_1</code> database.
+  vector index is involved. The client is <code>f1-analyst</code>; its page walks real turns:
+  <a href="/configent/docs/pitwall">PitWall</a>.
 </div>
 
 ---
@@ -25,11 +28,15 @@ generate ─┬─ converse / handoff         (the same call classifies the mess
 handoff = decline (mode: message) or escalate → ticket (mode: ticket)
 ```
 
+As LangGraph compiles it, drawn from the code:
+
+<Mermaid diagram={database} maxHeight={480} />
+
 - **`generate`** classifies the message as `question`, `conversation` or `handoff` and writes the SQL in one structured call.
 - **`guard` and `execute` are separate nodes,** so the step trail tells a rejected query from a failed one.
-- **`answer` is a separate call from `generate`.** Citations cannot be combined with structured output (400), so the query is written without them and the answer is written with them.
+- **`answer` is a separate call from `generate`.** `generate` returns JSON; `answer` streams prose that cites `[n]`. The split falls along node lines, as in the documents graph.
 - **The rows are passage `[1]`,** sourced as `sql://<client_id>`, and the answer cites them as `[1]` (D15). The answering call has no `tools` key (D2).
-- **`converse`, `decline`, `escalate` and `ticket` are the shared nodes.** See [Adding a Template](/configent/docs/adding-a-template).
+- **`converse`, `decline`, `escalate` and `ticket` are the shared nodes.** See [One Turn, End to End](/configent/docs/one-turn#how-a-turn-ends).
 
 ---
 
@@ -97,7 +104,7 @@ Setup: `make data-bird && make ingest CLIENT=f1-analyst`. The download is checke
 ```yaml
 agent:
   template: database
-  model: anthropic/claude-haiku-4.5
+  model: deepseek/deepseek-v4.1-flash
   system_prompt_file: prompts/f1-analyst/answer.md   # generate.md, ticket_draft.md beside it
   database: { dialect: sqlite, path: data/bird/formula_1.sqlite }
   context: { source: corpora/f1-analyst/ }
@@ -116,17 +123,10 @@ handoff:
 
 ---
 
-## Prompt caching
+## Caching and evals
 
-`generate` and `repair` build the same system text (prompt plus schema context) and put a cache breakpoint after it, so a repair reuses the prefix its own `generate` wrote. The answering call has its own breakpoint after `answer.md`.
-
-> **Measurement pending.** Whether the schema context clears Haiku 4.5's 4,096-token minimum, and the cache-read rate in practice, have not been measured yet. The figures will be added here once measured, from a run's recorded `cache_read` tokens. See [Prompt Caching](/configent/docs/prompt-caching) for how P5 applies.
-
----
-
-## Eval results
-
-> **Pending.** The text-to-SQL evals have not been run. Results will land in `evals/results/` after the first run, and the numbers will be copied here from that file.
+- **`generate` and `repair` share one system text** (prompt plus schema context) with a cache breakpoint after it, so a repair can reuse the prefix its own `generate` wrote. Whether a provider caches it is up to the provider: [Model Calls → Caching](/configent/docs/model-calls#caching-one-breakpoint-and-the-provider-decides).
+- **Triage is measured:** 20 of 22 on DeepSeek V4.1 Flash. **BIRD execution accuracy is not run yet.** Both are on [PitWall → Evals and cost](/configent/docs/pitwall#evals-and-cost).
 
 ---
 
@@ -136,4 +136,4 @@ handoff:
 - **The full schema goes in the prompt.** Schema retrieval comes when a schema no longer fits or stops caching.
 - **No plug-in retrievers.** See Known gaps in the decision log, with the trigger for each.
 
-See also: [Adding a Template](/configent/docs/adding-a-template) · [Adding a New Use Case](/configent/docs/adding-a-use-case) · [Handoff & Ticket](/configent/docs/escalation-ticket)
+See also: [PitWall](/configent/docs/pitwall) · [Adding a Template](/configent/docs/adding-a-template) · [Handoff & Ticket](/configent/docs/escalation-ticket)

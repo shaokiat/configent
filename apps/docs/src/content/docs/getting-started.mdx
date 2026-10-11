@@ -2,12 +2,12 @@
 title: Quickstart
 description: Get a Configent support assistant running locally in under 10 minutes.
 order: 2
-group: Getting Started
+group: "Getting Started"
 ---
 
 <div class="lead">
   This guide walks you from zero to a working support assistant on your own documents. You'll
-  write one config file, drop in some documents, copy a prompt set, and have the support graph
+  write one config file, drop in some documents, copy a prompt set, and have the documents template
   streaming cited answers locally.
 </div>
 
@@ -83,21 +83,28 @@ corpus:
     overlap: 100
 
 agent:
-  model: anthropic/claude-haiku-4.5
+  template: documents
+  model: deepseek/deepseek-v4.1-flash
   system_prompt_file: prompts/my-assistant/answer.md
   max_tokens: 2048
+
+handoff:
+  mode: message
+  message: "I can't answer that from my documents. Please ask the team directly."
 
 limits:
   rate_limit_per_minute: 20
   daily_budget_usd: 2.00
 ```
 
-The guardrail thresholds and corrective retrieval take their defaults. `agent.model` must have
-a row in `config/pricing/claude.yaml`; Haiku 4.5 and Sonnet 4.6 already do.
+The guardrail thresholds and corrective retrieval take their defaults. `handoff: mode: message` replies with fixed text when a turn can't be answered; `mode: ticket` drafts
+a ticket instead. `agent.model` must have a row in `config/pricing/claude.yaml`; DeepSeek V4.1
+Flash, Haiku 4.5 and Sonnet 4.6 already do.
 
-> **Want a complete, real example?** [Adding a New Use Case](/configent/docs/adding-a-use-case)
-> walks through the shipped Cloud Platform Support assistant, including the one decision that
-> shapes the prompts: what the corpus can never know.
+> **Want a complete, real example?** [DeployBot](/configent/docs/deploybot)
+> walks through the shipped Cloud Platform Support assistant, config line by line, and
+> [Adding a New Use Case](/configent/docs/adding-a-use-case) covers the one decision that shapes
+> the prompts: what the corpus can never know.
 
 ## 5. Add your documents and prompts
 
@@ -154,7 +161,7 @@ uv run uvicorn app.main:app --reload
 On the first request the config registry loads every YAML file in `config/`. A malformed
 config, an unknown `agent` key or a model with no price raises immediately.
 
-The API also opens the support graph's LangGraph checkpointer on Postgres and creates its
+The API also opens LangGraph's checkpointer on Postgres and creates its
 tables, so the database has to be up first. The Docker image runs `alembic upgrade head` on
 every start.
 
@@ -172,18 +179,18 @@ Open `http://localhost:3000`. The landing page lists every client the registry l
 
 ## What happened?
 
-When you sent your first message, the support graph:
+When you sent your first message, the documents graph:
 
 1. Loaded the conversation history (empty for a new session) and opened a run
 2. **`retrieve`** embedded your message with `voyage-3` and searched `my-assistant`'s chunks in pgvector
-3. **`grade`** asked Claude whether the passages support an answer, and whether the message is a question at all
+3. **`grade`** asked the model whether the passages support an answer, and whether the message is a question at all
 4. **`decide_level1`** compared the best similarity and the groundedness score against your thresholds
 5. **`answer`** streamed a reply from the numbered passages, citing each claim as `[n]`, with no tools
 6. Each node's step, the text and the citations streamed back over SSE
 7. The frontend rendered the step trail above the reply, with inline citation popovers
 
 Had the passages fallen short, the graph would have rewritten the question and searched again
-(Level 2), then offered a drafted ticket (Level 3). A greeting skips all of that and gets a short
+(Level 2), then sent your `handoff.message` (Level 3). A greeting skips all of that and gets a short
 reply. Expand the step trail above any reply to see which path ran.
 
 ---
@@ -192,6 +199,6 @@ reply. Expand the step trail above any reply to see which path ran.
 
 - [Overview](/configent/docs/concepts) — what Configent is, the stack, and where each design decision is written down
 - [Config Reference](/configent/docs/config-reference) — every key explained with types and defaults
-- [The Support Graph](/configent/docs/support-graph) — one question end to end, with the reasoning behind each boundary
-- [Example Configs](/configent/docs/examples) — the live client config from the repo
+- [One Turn, End to End](/configent/docs/one-turn) — what the platform does for every turn
+- [DeployBot](/configent/docs/deploybot) and [PitWall](/configent/docs/pitwall) — the two shipped clients, config and real turns
 - [Architecture](/configent/#architecture) — the graph diagram, the node walkthrough, and the design decisions
