@@ -1,0 +1,35 @@
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	retrieve(retrieve)
+	grade(grade)
+	converse(converse)
+	rewrite(rewrite)
+	hybrid_retrieve(hybrid_retrieve)
+	regrade(regrade)
+	answer(answer)
+	escalate(escalate)
+	ticket(ticket)
+	decline(decline)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> retrieve;
+	escalate --> ticket;
+	grade -.-> answer;
+	grade -.-> converse;
+	grade -.-> decline;
+	grade -.-> escalate;
+	grade -.-> rewrite;
+	hybrid_retrieve --> regrade;
+	regrade -.-> answer;
+	regrade -.-> decline;
+	regrade -.-> escalate;
+	retrieve --> grade;
+	rewrite --> hybrid_retrieve;
+	ticket -.-> __end__;
+	answer --> __end__;
+	converse --> __end__;
+	decline --> __end__;
+	ticket -.-> ticket;
+	class grade,rewrite,regrade,answer,escalate model
+	class retrieve,converse,hybrid_retrieve,ticket,decline code
+	class converse,escalate,ticket,decline shared
+	class ticket pause

@@ -1,0 +1,36 @@
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	generate(generate)
+	guard(guard)
+	execute(execute)
+	repair(repair)
+	answer(answer)
+	converse(converse)
+	escalate(escalate)
+	ticket(ticket)
+	decline(decline)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> generate;
+	escalate --> ticket;
+	execute -.-> answer;
+	execute -.-> decline;
+	execute -.-> escalate;
+	execute -.-> repair;
+	generate -.-> converse;
+	generate -.-> decline;
+	generate -.-> escalate;
+	generate -.-> guard;
+	guard -.-> decline;
+	guard -.-> escalate;
+	guard -.-> execute;
+	guard -.-> repair;
+	repair --> guard;
+	ticket -.-> __end__;
+	answer --> __end__;
+	converse --> __end__;
+	decline --> __end__;
+	ticket -.-> ticket;
+	class generate,repair,answer,escalate model
+	class guard,execute,converse,ticket,decline code
+	class converse,escalate,ticket,decline shared
+	class ticket pause
