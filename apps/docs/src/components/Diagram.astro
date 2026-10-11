@@ -1,0 +1,35 @@
+---
+// An Archify diagram: a standalone HTML page in public/diagrams/, built from
+// docs/diagrams/<name>.archify.json. Regenerate with:
+//   node <archify>/bin/archify.mjs finalize <type> docs/diagrams/<name>.archify.json \
+//     apps/docs/public/diagrams/<name>.html --repo-root . --quality showcase
+interface Props {
+  name: string;
+  title: string;
+  height?: number;
+}
+const { name, title, height = 640 } = Astro.props;
+const src = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/diagrams/${name}.html`;
+---
+
+<figure class="diagram">
+  <iframe src={src} title={title} loading="lazy" style={`height: ${height}px`}></iframe>
+  <figcaption>
+    {title} · <a href={src} target="_blank" rel="noopener">open full screen</a>
+  </figcaption>
+</figure>
+
+<style>
+  .diagram { margin: 2rem 0; }
+  iframe {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+  }
+  figcaption {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+</style>
