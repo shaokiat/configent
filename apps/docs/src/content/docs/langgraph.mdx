@@ -134,7 +134,7 @@ g.add_conditional_edges("ticket", _after_ticket, ["ticket", END])
 - **A failed filing loops back.** `_after_ticket` routes to `ticket` again, which pauses again. The retry reuses the same `seq`, so the idempotency key `{run_id}:{stage_seq}` is unchanged (D4).
 - **The paused graph is the run's, not the client's.** `runs.template` names the graph that paused. A config edit between the offer and the click cannot resume the thread on a different graph.
 
-<Diagram name="ticket" title="A ticket: offered, paused, confirmed, filed once" height={620} />
+<Diagram name="ticket" title="A ticket: offered, paused, confirmed, filed once" />
 
 ---
 

@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: up up-web up-api dev dev-db dev-api dev-web ingest data-bird eval down build logs ps docs docs-build docs-graphs
+.PHONY: up up-web up-api dev dev-db dev-api dev-web ingest data-bird eval down build logs ps docs docs-build docs-graphs docs-archify
 
 # ── Production-like (Docker) ───────────────────────────────────────────────
 up: ## Rebuild and restart web + api (db untouched)
@@ -66,3 +66,11 @@ docs-build: ## Build docs for GitHub Pages → apps/docs/dist/
 
 docs-graphs: ## Redraw the template graphs for the docs (tests/test_diagrams.py checks them)
 	cd apps/api && uv run python -m app.agent.diagrams
+
+ARCHIFY ?= $(HOME)/.claude/skills/archify/bin/archify.mjs
+docs-archify: ## Render the Archify diagrams in docs/diagrams/ and export their SVGs for the docs
+	for d in system:architecture ticket:sequence; do n=$${d%%:*}; t=$${d##*:}; \
+	  node $(ARCHIFY) finalize $$t docs/diagrams/$$n.archify.json apps/docs/public/diagrams/$$n.html \
+	    --repo-root . --quality showcase --out-dir $$(mktemp -d) && \
+	  python3 scripts/archify_svg.py apps/docs/public/diagrams/$$n.html || exit 1; done
+	rm -f apps/docs/public/diagrams/*.delivery.json
