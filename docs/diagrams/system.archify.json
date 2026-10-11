@@ -1,0 +1,332 @@
+{
+ "schema_version": 1,
+ "diagram_type": "architecture",
+ "meta": {
+  "title": "Configent: one platform, two templates",
+  "output": "apps/docs/public/diagrams/system.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "https://github.com/shaokiat/configent.git",
+   "provider": "github",
+   "link_mode": "web",
+   "revision": "b66869020933a7955882adc112a8caf3d37c15d5"
+  }
+ },
+ "components": [
+  {
+   "id": "browser",
+   "type": "frontend",
+   "label": "Chat UI",
+   "sublabel": "Next.js \u00b7 proxies the SSE",
+   "pos": [
+    360,
+    40
+   ],
+   "size": [
+    200,
+    64
+   ],
+   "sources": [
+    {
+     "path": "apps/web/app/c/[client_id]/ChatPanel.tsx",
+     "line": 742,
+     "end_line": 760
+    },
+    {
+     "path": "apps/web/app/api/c/[client_id]/chat/stream/route.ts",
+     "line": 1,
+     "end_line": 29
+    }
+   ]
+  },
+  {
+   "id": "api",
+   "type": "backend",
+   "label": "FastAPI router",
+   "sublabel": "rate \u00b7 budget \u00b7 409 guard",
+   "pos": [
+    360,
+    170
+   ],
+   "size": [
+    200,
+    70
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/routers/clients.py",
+     "line": 156,
+     "end_line": 188
+    },
+    {
+     "path": "apps/api/app/config/registry.py",
+     "line": 18,
+     "end_line": 66
+    }
+   ]
+  },
+  {
+   "id": "platform",
+   "type": "backend",
+   "label": "Platform",
+   "sublabel": "stream_turn \u00b7 RunRecorder",
+   "pos": [
+    360,
+    300
+   ],
+   "size": [
+    200,
+    70
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/agent/platform.py",
+     "line": 366,
+     "end_line": 447
+    },
+    {
+     "path": "apps/api/app/agent/platform.py",
+     "line": 105,
+     "end_line": 191
+    }
+   ]
+  },
+  {
+   "id": "graph",
+   "type": "backend",
+   "label": "Template graph",
+   "sublabel": "documents | database \u00b7 shared nodes",
+   "pos": [
+    360,
+    430
+   ],
+   "size": [
+    200,
+    80
+   ],
+   "tag": "LangGraph",
+   "sources": [
+    {
+     "path": "apps/api/app/agent/templates/__init__.py",
+     "line": 1,
+     "end_line": 5
+    },
+    {
+     "path": "apps/api/app/agent/templates/documents.py",
+     "line": 309,
+     "end_line": 332
+    },
+    {
+     "path": "apps/api/app/agent/handoff.py",
+     "line": 145,
+     "end_line": 185
+    }
+   ]
+  },
+  {
+   "id": "openrouter",
+   "type": "cloud",
+   "label": "OpenRouter",
+   "sublabel": "OpenAI SDK \u00b7 DeepSeek V4.1",
+   "pos": [
+    700,
+    300
+   ],
+   "size": [
+    200,
+    70
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/llm.py",
+     "line": 1,
+     "end_line": 17
+    },
+    {
+     "path": "apps/api/app/agent/platform.py",
+     "line": 238,
+     "end_line": 310
+    }
+   ]
+  },
+  {
+   "id": "voyage",
+   "type": "external",
+   "label": "Voyage AI",
+   "sublabel": "voyage-3 \u00b7 documents only",
+   "pos": [
+    700,
+    410
+   ],
+   "size": [
+    200,
+    60
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/retrieval/embed.py",
+     "line": 18,
+     "end_line": 22
+    }
+   ]
+  },
+  {
+   "id": "tickets",
+   "type": "external",
+   "label": "Ticket service",
+   "sublabel": "mock \u00b7 Idempotency-Key",
+   "pos": [
+    700,
+    500
+   ],
+   "size": [
+    200,
+    64
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/tickets.py",
+     "line": 31,
+     "end_line": 62
+    },
+    {
+     "path": "apps/mockticket/main.py",
+     "line": 76,
+     "end_line": 126
+    }
+   ]
+  },
+  {
+   "id": "postgres",
+   "type": "database",
+   "label": "Postgres + pgvector",
+   "sublabel": "runs \u00b7 checkpoints \u00b7 traces \u00b7 chunks",
+   "pos": [
+    40,
+    296
+   ],
+   "size": [
+    220,
+    78
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/agent/platform.py",
+     "line": 345,
+     "end_line": 357
+    },
+    {
+     "path": "apps/api/app/retrieval/search.py",
+     "line": 48,
+     "end_line": 80
+    }
+   ]
+  },
+  {
+   "id": "sqlite",
+   "type": "database",
+   "label": "SQLite, read-only",
+   "sublabel": "formula_1 \u00b7 database only",
+   "pos": [
+    370,
+    600
+   ],
+   "size": [
+    180,
+    66
+   ],
+   "sources": [
+    {
+     "path": "apps/api/app/sql/connection.py",
+     "line": 37,
+     "end_line": 48
+    },
+    {
+     "path": "apps/api/app/sql/connection.py",
+     "line": 81,
+     "end_line": 85
+    }
+   ]
+  }
+ ],
+ "boundaries": [
+  {
+   "kind": "region",
+   "label": "apps/api \u00b7 one process, every tenant",
+   "wraps": [
+    "api",
+    "platform",
+    "graph"
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "id": "ask",
+   "from": "browser",
+   "to": "api",
+   "label": "POST /chat/stream \u00b7 SSE",
+   "variant": "emphasis"
+  },
+  {
+   "id": "turn",
+   "from": "api",
+   "to": "platform",
+   "label": "stream_turn()",
+   "variant": "emphasis"
+  },
+  {
+   "id": "run",
+   "from": "platform",
+   "to": "graph",
+   "label": "astream(run_id)",
+   "variant": "emphasis"
+  },
+  {
+   "id": "persist",
+   "from": "platform",
+   "to": "postgres",
+   "label": "trail \u00b7 checkpoints"
+  },
+  {
+   "id": "llm",
+   "from": "platform",
+   "to": "openrouter",
+   "label": "model calls"
+  },
+  {
+   "id": "search",
+   "from": "graph",
+   "to": "postgres",
+   "label": "pgvector + FTS",
+   "variant": "dashed",
+   "fromSide": "left",
+   "toSide": "bottom"
+  },
+  {
+   "id": "embed",
+   "from": "graph",
+   "to": "voyage",
+   "label": "embed",
+   "variant": "dashed",
+   "fromSide": "right",
+   "toSide": "left"
+  },
+  {
+   "id": "file",
+   "from": "graph",
+   "to": "tickets",
+   "label": "POST on confirm",
+   "variant": "dashed",
+   "fromSide": "right",
+   "toSide": "left"
+  },
+  {
+   "id": "rows",
+   "from": "graph",
+   "to": "sqlite",
+   "label": "guarded SELECT",
+   "variant": "dashed"
+  }
+ ]
+}

@@ -1,13 +1,20 @@
 ---
 interface Props {
   diagram: string;
+  /** Node ids to ring, e.g. the path one question takes through a generated graph. */
+  path?: string[];
+  /** Height cap in px. Generated graphs are tall; hand-drawn flows are not. */
+  maxHeight?: number;
+  caption?: string;
 }
-const { diagram } = Astro.props;
+const { diagram, path = [], maxHeight = 380, caption } = Astro.props;
+const source = path.length ? `${diagram.trimEnd()}\n\tclass ${path.join(',')} path\n` : diagram;
 ---
 
-<div class="mermaid-wrapper">
-  <pre class="mermaid">{diagram}</pre>
-</div>
+<figure class="mermaid-wrapper" style={`--mermaid-max-h: ${maxHeight}px`}>
+  <pre class="mermaid">{source}</pre>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
 
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
@@ -27,15 +34,51 @@ const { diagram } = Astro.props;
     text-align: center;
   }
 
+  /* Global `pre` styles give code blocks a panel; a diagram sits on the wrapper's. */
   .mermaid {
-    background: transparent;
+    background: transparent !important;
+    border: 0 !important;
+    padding: 0 !important;
+    margin: 0;
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
   }
 
   /* Mermaid sizes the SVG from node count, which overflows the column on tall
      flowcharts. Cap it and let the viewBox scale the contents down. */
   .mermaid :global(svg) {
     max-width: 100%;
-    max-height: 380px;
+    max-height: var(--mermaid-max-h);
     height: auto;
+  }
+
+  /* Node kinds, set by app/agent/diagrams.py. Theme tokens, so both themes read. */
+  .mermaid :global(.node.code > rect),
+  .mermaid :global(.node.code > path) {
+    fill: var(--bg-surface) !important;
+    stroke: var(--text-muted) !important;
+  }
+  .mermaid :global(.node.model > rect),
+  .mermaid :global(.node.model > path) {
+    fill: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+    stroke: var(--accent) !important;
+  }
+  .mermaid :global(.node.shared > rect),
+  .mermaid :global(.node.shared > path) {
+    stroke-dasharray: 5 3 !important;
+  }
+  .mermaid :global(.node.pause > rect),
+  .mermaid :global(.node.pause > path) {
+    stroke: var(--amber) !important;
+  }
+  .mermaid :global(.node.path > rect),
+  .mermaid :global(.node.path > path) {
+    fill: color-mix(in srgb, var(--green) 28%, transparent) !important;
+    stroke: var(--green) !important;
+    stroke-width: 3px !important;
   }
 </style>

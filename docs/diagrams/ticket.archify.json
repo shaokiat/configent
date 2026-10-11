@@ -1,0 +1,216 @@
+{
+ "schema_version": 1,
+ "diagram_type": "sequence",
+ "meta": {
+  "title": "A ticket: offered, paused, confirmed, filed once",
+  "output": "apps/docs/public/diagrams/ticket.html",
+  "viewBox": [
+   1000,
+   588
+  ],
+  "column_fit": "spread",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "https://github.com/shaokiat/configent.git",
+   "provider": "github",
+   "link_mode": "web",
+   "revision": "b66869020933a7955882adc112a8caf3d37c15d5"
+  },
+  "legend": {
+   "entries": {
+    "emphasis": {
+     "label": "request"
+    },
+    "default": {
+     "label": "call"
+    },
+    "dashed": {
+     "label": "checkpoint, then pause"
+    },
+    "return": {
+     "label": "response"
+    }
+   }
+  }
+ },
+ "participants": [
+  {
+   "id": "ui",
+   "type": "frontend",
+   "label": "Chat UI",
+   "sublabel": "confirm card",
+   "sources": [
+    {
+     "path": "apps/web/app/c/[client_id]/ChatPanel.tsx",
+     "line": 742,
+     "end_line": 760
+    }
+   ]
+  },
+  {
+   "id": "api",
+   "type": "backend",
+   "label": "FastAPI",
+   "sublabel": "routers/clients.py",
+   "sources": [
+    {
+     "path": "apps/api/app/routers/clients.py",
+     "line": 156,
+     "end_line": 210
+    }
+   ]
+  },
+  {
+   "id": "graph",
+   "type": "backend",
+   "label": "Graph",
+   "sublabel": "escalate \u00b7 ticket",
+   "sources": [
+    {
+     "path": "apps/api/app/agent/handoff.py",
+     "line": 101,
+     "end_line": 180
+    }
+   ]
+  },
+  {
+   "id": "pg",
+   "type": "database",
+   "label": "Postgres",
+   "sublabel": "checkpoints \u00b7 runs",
+   "sources": [
+    {
+     "path": "apps/api/app/agent/platform.py",
+     "line": 345,
+     "end_line": 357
+    }
+   ]
+  },
+  {
+   "id": "svc",
+   "type": "external",
+   "label": "Ticket service",
+   "sublabel": "Idempotency-Key",
+   "sources": [
+    {
+     "path": "apps/api/app/tickets.py",
+     "line": 31,
+     "end_line": 62
+    },
+    {
+     "path": "apps/mockticket/main.py",
+     "line": 76,
+     "end_line": 126
+    }
+   ]
+  }
+ ],
+ "messages": [
+  {
+   "id": "ask",
+   "from": "ui",
+   "to": "api",
+   "y": 172,
+   "label": "request 1 \u00b7 POST /chat/stream",
+   "variant": "emphasis"
+  },
+  {
+   "id": "astream",
+   "from": "api",
+   "to": "graph",
+   "y": 204,
+   "label": "astream: grade \u2192 escalate drafts",
+   "variant": "emphasis"
+  },
+  {
+   "id": "pause",
+   "from": "graph",
+   "to": "pg",
+   "y": 236,
+   "label": "checkpoint; ticket: interrupt()",
+   "variant": "dashed"
+  },
+  {
+   "id": "offer",
+   "from": "api",
+   "to": "ui",
+   "y": 268,
+   "label": "ticket_proposal \u00b7 text \u00b7 done",
+   "variant": "return"
+  },
+  {
+   "id": "click",
+   "from": "ui",
+   "to": "api",
+   "y": 318,
+   "label": "request 2 \u00b7 POST /runs/{run_id}/ticket",
+   "variant": "emphasis"
+  },
+  {
+   "id": "state",
+   "from": "api",
+   "to": "pg",
+   "y": 350,
+   "label": "aget_state: paused, not yet filed?",
+   "variant": "default"
+  },
+  {
+   "id": "resume",
+   "from": "api",
+   "to": "graph",
+   "y": 382,
+   "label": "Command(resume=True)",
+   "variant": "emphasis"
+  },
+  {
+   "id": "post",
+   "from": "graph",
+   "to": "svc",
+   "y": 414,
+   "label": "POST /tickets  key run_id:seq",
+   "variant": "default"
+  },
+  {
+   "id": "id",
+   "from": "svc",
+   "to": "graph",
+   "y": 446,
+   "label": "PLATFORM-1049 \u2192 checkpoint",
+   "variant": "return"
+  },
+  {
+   "id": "filed",
+   "from": "api",
+   "to": "ui",
+   "y": 478,
+   "label": "reply \u00b7 ticket_id",
+   "variant": "return"
+  }
+ ],
+ "activations": [
+  {
+   "participant": "api",
+   "from": 172,
+   "to": 272,
+   "type": "backend"
+  },
+  {
+   "participant": "graph",
+   "from": 204,
+   "to": 240,
+   "type": "backend"
+  },
+  {
+   "participant": "api",
+   "from": 318,
+   "to": 482,
+   "type": "backend"
+  },
+  {
+   "participant": "graph",
+   "from": 382,
+   "to": 450,
+   "type": "backend"
+  }
+ ]
+}

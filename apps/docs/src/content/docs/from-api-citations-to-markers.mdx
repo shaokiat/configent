@@ -1,0 +1,110 @@
+---
+title: From API Citations to Markers
+description: Why every model call moved from Claude's citations API to the OpenAI SDK on OpenRouter with [n] markers parsed in Python. Both designs side by side, the decisions, the measured saving, and how to recover the old code.
+order: 17.5
+group: "Design History"
+---
+
+Until 2026-10-10 the answer was cited by Anthropic's API: passages went in as `search_result` blocks and came back as `citations_delta` events. Since D15, the model sees numbered passages, cites them as `[n]`, and Python turns each marker into a citation. **This made any model usable for the answer, at the cost of the API's guarantee that a citation points at a passage the model was given.** This page records both designs, the four commits between them, and how to recover the old code.
+
+---
+
+## The two shapes
+
+**API citations** (P4, through D14):
+
+```
+hits → search_result blocks {source, title, content, citations: {enabled}}
+     → Anthropic Messages API (Anthropic SDK; on OpenRouter from D14)
+     → stream: text_delta · citations_delta {cited_text, source, title}
+     → collect_segments(response) → segments
+```
+
+**Numbered markers** (D15):
+
+```
+hits / rows → "[1] title (source)\n text" … then the question, in one user message
+            → any model (OpenAI SDK on OpenRouter)
+            → stream: text with [n]
+            → Markers: valid [n] → citation event; invalid stays as text, counted
+            → segments_from(pieces, passages) → segments
+```
+
+The SSE events, the stored `segments` and the UI did not change. A reloaded conversation from before the change renders the same way.
+
+---
+
+## Side by side
+
+| | API citations (retired) | **Numbered markers (built)** |
+|---|---|---|
+| **SDK** | `anthropic`, base URL changed to OpenRouter in D14 | `openai`, `https://openrouter.ai/api/v1` |
+| **Models that can answer** | Claude only. Others received the blocks empty | Any model OpenRouter lists |
+| **Structured calls** | `output_config.format` | `response_format: json_schema`, `strict` |
+| **Who links a claim to a passage** | The API | The model writes `[n]`; `Markers` checks `n` is in range |
+| **A citation to nothing** | Impossible | Left in the text and counted as `bad_citations` on the answer step |
+| **`cited_text`** | The span the API chose | The whole passage, trimmed by `excerpt()` |
+| **Citations per answer** | 1.9 | 3.1 (the model cites claim by claim) |
+| **Default model** | Haiku 4.5 for every call | DeepSeek V4.1 Flash for every call |
+| **Cost per demo turn** | $0.0060 | $0.00026 (−96%) |
+| **Usage fields** | `input_tokens`, `cache_*_input_tokens` | `prompt_tokens` minus cached and cache-written, by `usage_counts()` |
+| **Token counting** | `count_tokens` (404 through OpenRouter after D14) | Four characters per token |
+
+---
+
+## The change, in four commits
+
+| Commit | Decision | What changed |
+|---|---|---|
+| `b0835d9` | D14 | The Anthropic SDK pointed at OpenRouter. Model ids became OpenRouter's. `structured_model` added, and grading moved to DeepSeek |
+| `1925995` | D15 | The OpenAI SDK for every call. `Markers`, `segments_from`, `numbered()`. `collect_segments` and `citations_delta` handling removed |
+| `dd51822` | D15 | Structured calls: reasoning off, strict schemas, `reasoning` first. `evals/model_cost.py` added |
+| `b668690` | D15 | Both clients run DeepSeek V4.1 Flash for every call |
+
+---
+
+## Decisions in the change
+
+- **Hold back a partial marker.** `[1` at the end of a chunk waits for the next chunk. Without that, a split marker would flash in the UI as text.
+- **An invalid marker stays in the text.** Deleting it would hide a model that invents sources. It also keeps legitimate text like `arr[0]` intact.
+- **One passage for SQL rows.** The database template sends the rows as a single table, passage `[1]`, sourced `sql://<client_id>`.
+- **The SSE contract did not move.** `Markers` emits the same `citation` event the API path emitted, so the UI needed no change.
+
+### Alternatives rejected
+
+| Option | Why not |
+|---|---|
+| **Keep the Anthropic SDK for the answer only** | Two SDKs, and the answer would still be Claude-only |
+| **Verify each cited sentence against its passage now** | Fuzzy matching misses paraphrase, and a judge call per answer eats the saving. It waits for an eval that shows it is needed |
+| **Both providers behind a switch** | Model ids differ per provider, so it needs an id map, for no current client |
+
+---
+
+## What it cost
+
+**P4's guarantee.** The API tied every citation to a passage it had been sent. A marker is the model's claim. Python checks only that the number names a passage, not that the passage says what the sentence does. The decision log lists this under Known gaps.
+
+In the benchmark, no marker in either marker setup named a passage that did not exist.
+
+---
+
+## Recovering the retired design
+
+```bash
+# The API-citations answer path, on OpenRouter (D14)
+git show b0835d9:apps/api/app/agent/platform.py
+git show b0835d9:apps/api/app/agent/common.py                # collect_segments, citations_delta
+git show b0835d9:apps/api/app/agent/templates/documents.py   # search_result blocks
+
+# The direct Anthropic client, before OpenRouter
+git show c251f91:apps/api/app/agent/platform.py
+
+# The Citations page as it read before D15
+git show b0835d9:apps/docs/src/content/docs/citations.mdx
+```
+
+The measurements: `evals/results/model-cost-2026-10-11.md`. The decisions: D14 and D15 in `docs/decisions.md`.
+
+---
+
+**See also:** [Citations](/configent/docs/citations) · [Model Calls](/configent/docs/model-calls) · [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph)

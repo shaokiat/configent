@@ -1,15 +1,16 @@
 ---
-title: One Question, End to End
-description: The support graph in one pass. Three tiers of escalation, every route a Python function, and the claim each boundary exists to support.
+title: The Documents Graph
+description: The documents template in one pass. Three tiers of escalation, every route a Python function, and the claim each boundary exists to support.
 order: 8
-group: The Support Graph
+group: "Template: Documents"
 ---
 
-import ArchDiagram from '@/components/ArchDiagram.astro';
+import Mermaid from '@/components/Mermaid.astro';
+import documents from '@/diagrams/documents.mmd?raw';
 
-This is the hub for the graph. It follows one question from HTTP to answer, names the nodes on the way, and hands each one to the page that owns it.
+This is the hub for the `documents` template, `agent/templates/documents.py`. It names every node, hands each one to the page that covers it, and argues for the shape.
 
-The system is a support agent for Google Cloud questions. It answers from a documentation corpus with citations. When the first search cannot ground an answer, it searches again a different way. When that fails too, it offers a drafted ticket the user confirms. The template is `agent/templates/documents.py`, built on LangGraph.
+The template answers from a documentation corpus with citations. When the first search cannot ground an answer, it searches again a different way. When that fails too, it hands the turn to the client's handoff. DeployBot is the client that runs it; its page walks a real session: [DeployBot](/configent/docs/deploybot).
 
 ## At a glance
 
@@ -37,9 +38,9 @@ The system is a support agent for Google Cloud questions. It answers from a docu
 
 A question moves down a level only when the one above falls short, and Python decides each move. A greeting never moves down: it gets a short reply at Level 1 and no ticket.
 
-The detailed diagram adds every node, both decision points, and the step trail:
+The graph as LangGraph compiles it, drawn from the code ([how](/configent/docs/langgraph#the-two-graphs-drawn-from-the-code)):
 
-<ArchDiagram />
+<Mermaid diagram={documents} maxHeight={560} />
 
 ---
 
@@ -63,7 +64,7 @@ Four properties fall out of the structure rather than out of prompting:
 - **Nothing is filed until the user says yes.** The graph pauses on the offer. A confirmation resumes it.
 - **Every node commits its step before the next starts,** so a crash leaves the finished nodes on the record.
 
-> **It is the only template.** A free-form tool-use loop shipped beside it for clients the demo never loaded, and was deleted in D11. See [Retiring the Loop](/configent/docs/retiring-the-loop).
+> **The second template keeps the claim.** The [database graph](/configent/docs/text-to-sql) routes with `decide_sql` the same way. The free-form tool-use loop that could not make the claim was deleted in D11: [Retiring the Loop](/configent/docs/retiring-the-loop).
 
 ---
 
@@ -86,13 +87,13 @@ Most questions never leave Level 1. Level 2 is a second search of a different sh
 | Node | Model call | Owns | Page |
 |---|---|---|---|
 | `retrieve` | none | Embed, search pgvector, drop weak hits. Emits **signal 1** | [Retrieval](/configent/docs/retrieval) |
-| `grade`, `regrade` | structured output | Rate groundedness (**signal 2**) and triage the turn. One function, two nodes | [Grading](/configent/docs/grading) |
+| `grade`, `regrade` | structured | Rate groundedness (**signal 2**) and triage the turn. One function, two nodes | [Grading](/configent/docs/grading) |
 | *the routes* | none | `decide_level1` and `decide_level2`, called inside the grade node | [The Guardrail](/configent/docs/escalation-guardrail) |
 | `converse` | none | Send the grader's reply to a greeting. No passages, no ticket | [Grading](/configent/docs/grading#converse-is-the-one-ungrounded-path) |
-| `rewrite`, `hybrid_retrieve` | structured output, then none | Reformulate the question, then search dense and keyword and fuse by rank | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
-| `answer` | citations | Answer from whichever tier's passages cleared, with no tools in the request | [Answering](/configent/docs/answering) |
+| `rewrite`, `hybrid_retrieve` | structured, then none | Reformulate the question, then search dense and keyword and fuse by rank | [Corrective Retrieval](/configent/docs/corrective-retrieval) |
+| `answer` | streamed, `[n]` markers | Answer from whichever tier's passages cleared, with no tools in the request | [Citations](/configent/docs/citations), [Model Calls](/configent/docs/model-calls#the-answering-call-has-nothing-to-escalate-with) |
 | `decline` | none | `handoff.mode: message`: send the configured text. No ticket | [Handoff & Ticket](/configent/docs/escalation-ticket) |
-| `escalate` → `ticket` | structured output, then none | `handoff.mode: ticket`: draft the ticket, pause on `interrupt()`, POST from Python once the user confirms | [Handoff & Ticket](/configent/docs/escalation-ticket) |
+| `escalate` → `ticket` | structured, then none | `handoff.mode: ticket`: draft the ticket, pause on `interrupt()`, POST from Python once the user confirms | [Handoff & Ticket](/configent/docs/escalation-ticket) |
 | the step trail | none | One durable entry per node, committed before the next starts | [Runs & Durability](/configent/docs/runs-and-durability) |
 
 Read them in that order and you have read the template.
@@ -101,33 +102,22 @@ Read them in that order and you have read the template.
 
 ## Four questions, four paths
 
-A real run against the demo stack (Haiku 4.5, Voyage, Postgres, the mock ticket service) on 2026-09-11:
+Live runs on 2026-10-11, DeepSeek V4.1 Flash for every call:
 
 | Message | Path | Outcome | Cost |
 |---|---|---|---|
-| "My Cloud Run container fails to start — what does the PORT error mean?" | `retrieve` 0.62 → `grade` 0.95 → `answer` | Answer, 2 citations | $0.026 |
-| "hi" | `retrieve` 0 hits → `grade` kind=conversation → `converse` | Converse, no ticket | $0.006 |
-| "so is that the same as the health check timing out?" (a follow-up) | `retrieve` 0.36 → `grade` 0.15 → `rewrite` → `hybrid_retrieve` → `regrade` 0.95 → `answer` | Answer at Level 2, 3 citations | $0.039 |
-| "Can you raise my Cloud Run instance quota for europe-west1?" | `retrieve` 0.50 → `grade` 0.05 → Level 2 → `regrade` 0.05 → `escalate` | Ticket offer, filed as `PLATFORM-1042` on confirm | $0.031 |
+| "My Cloud Run container fails to start — what does the PORT error mean?" | `retrieve` 0.62 → `grade` 0.90 → `answer` | Answer, 3 citations | $0.00086 |
+| "hey" | `retrieve` 0 hits → `grade` kind=conversation → `converse` | Converse, no ticket | $0.00015 |
+| "so is that the same as the health check timing out?" (a follow-up) | `retrieve` 0.37 → `grade` 0.25 → `rewrite` → `hybrid_retrieve` → `regrade` 0.85 → `answer` | Answer at Level 2, 3 citations | $0.0030 |
+| "Can you raise my Cloud Run instance quota for europe-west1?" | `retrieve` 0.47 → `grade` kind=handoff → `escalate` | Ticket offer, filed as `PLATFORM-1049` on confirm | $0.0014 |
+
+The follow-up is the unstable one: in four more runs it reached Level 2 and was offered a ticket. [DeployBot → Where it falls short](/configent/docs/deploybot#where-it-falls-short).
 
 ---
 
-## What LangGraph owns, and what it doesn't
+## What LangGraph owns
 
-LangGraph provides the mechanism. Every decision stays in this repo's Python.
-
-| Concern | LangGraph | This repo |
-|---|---|---|
-| **Which node runs next** | Follows the edge the state names | `decide_level1` and `decide_level2` write `state["route"]` |
-| **Saving progress** | A checkpoint after every node (`durability="sync"`) | Nothing |
-| **Waiting for the user** | `interrupt()` pauses, `Command(resume=True)` continues | `confirm_ticket()` checks the run before it resumes |
-| **Streaming** | A custom stream writer | Nodes write the same SSE tuples as before |
-| **Model calls** | Nothing | The OpenAI SDK on OpenRouter, called directly (D15) |
-| **The trail the UI shows** | Nothing | `RunRecorder` writes `runs.steps` |
-
-- **Why a framework now.** The two things LangGraph gives this graph are the two things the retired pipeline built by hand: resumable state (`RunRecorder` plus `Run.state`) and a confirm endpoint reading a parked draft. The full comparison, and every decision in the change: [From Pipeline to Graph](/configent/docs/from-pipeline-to-graph).
-- **Why not LangChain model wrappers.** The answer's `[n]` markers are parsed from the raw stream as it arrives, and structured calls need the exact `response_format`. Calling the SDK inside the node keeps both in plain view.
-- **Why the edges are not model-chosen.** A model picking the next node is a tool-use loop with extra steps. The edge function only reads a string Python already wrote.
+The mechanics only: moving between nodes, a checkpoint per node, and the pause for the ticket. Every route is a Python function in this file. The full split, and the LangGraph features deliberately not used: [How the Graphs Are Built](/configent/docs/langgraph#design-decisions).
 
 ---
 
@@ -165,7 +155,7 @@ When routing selects between genuinely different flows: password reset, order st
 
 A graph whose first move is always retrieval has nowhere obvious to put a turn that is not a question. `hey` and `thanks` retrieve nothing, and in the first build every one of them filed a ticket.
 
-The fix keeps the ordering. The grade call returns a `kind` field alongside its confidence, and it runs after retrieval with the passages in view. A greeting costs one grade call and leaves at Level 1: $0.006 and 3.6 s in the live run. See [Grading → Triage rides on the grade call](/configent/docs/grading#triage-rides-on-the-grade-call).
+The fix keeps the ordering. The grade call returns a `kind` field alongside its confidence, and it runs after retrieval with the passages in view. A greeting costs one grade call and leaves at Level 1: $0.00015 in the live run. See [Grading → Triage rides on the grade call](/configent/docs/grading#triage-rides-on-the-grade-call).
 
 ---
 
@@ -195,7 +185,7 @@ The whole client is one YAML file:
 ```yaml
 client_id: gcp-platform-support
 agent:
-  model: anthropic/claude-haiku-4.5
+  model: deepseek/deepseek-v4.1-flash
   retrieval_drop_floor: 0.3
   escalate_below: 0.45
   confidence_threshold: 0.6
@@ -212,11 +202,12 @@ Config decides *which* model, *where* the thresholds sit, and whether Level 2 ru
 
 ## Trade-offs I would raise myself
 
-- **Level 2 costs a question that ends with a human two more model calls.** A rewrite, a regrade and one embedding call run before the ticket offer: $0.031 for the quota question. The answerable Level 1 path makes the same calls it always did.
+- **Level 2 costs a question that ends with a human two more model calls.** A rewrite, a regrade and one embedding call run before the ticket offer. A question that asks for a person skips them: `kind: handoff` goes straight to `escalate`.
 - **No multi-hop.** Level 2 is one more search, not a loop. The template that could chain searches was retired; see [Retiring the Loop](/configent/docs/retiring-the-loop#what-it-cost).
 - **Level 2 answers rest on the grader alone.** The cosine floor gates Level 1 only, because keyword matches carry no similarity. The answer is still cited from the passages.
 - **The grader is a model judging a model's inputs.** It is cheap and narrow, which is why it works. It is a second model call, not a proof.
 - **No resume after a crash.** Checkpoints are written after every node, but nothing reads them back except the ticket confirmation.
+- **Follow-ups are fragile.** A question that leans on the previous answer retrieves weakly at Level 1, and Level 2 rescued it in 1 of 5 live runs.
 - **The escalation copy assumes a project-specific question.** An out-of-scope product like Cloud SQL gets the same "depends on your own project" wording as a quota request.
 
 ---

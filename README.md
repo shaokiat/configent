@@ -219,8 +219,9 @@ evidence for a cited answer. Eval results are not in yet (see
 - [Model cost comparison](evals/results/model-cost-2026-10-11.md): the original API citations on Haiku against numbered markers on DeepSeek, 24× cheaper per turn
 - [Full docs site](https://shaokiat.github.io/configent/)
 - [Config reference](https://shaokiat.github.io/configent/docs/config-reference/)
-- [Examples](https://shaokiat.github.io/configent/docs/examples/)
-- [Adding a template](https://shaokiat.github.io/configent/docs/adding-a-template/) · [Text-to-SQL](https://shaokiat.github.io/configent/docs/text-to-sql/)
+- Use cases: [DeployBot](https://shaokiat.github.io/configent/docs/deploybot/) (documents) · [PitWall](https://shaokiat.github.io/configent/docs/pitwall/) (database)
+- [How the graphs are built](https://shaokiat.github.io/configent/docs/langgraph/): the LangGraph layer, with both graphs drawn from the code
+- [Adding a template](https://shaokiat.github.io/configent/docs/adding-a-template/)
 
 ## Data and attribution
 

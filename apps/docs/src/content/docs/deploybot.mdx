@@ -1,0 +1,173 @@
+---
+title: "DeployBot: Cloud Support from Public Docs"
+description: The documents template as a client would see it. Who asks, what it reads, the config line by line, five turns of one real session walked node by node, what it costs, and where it falls short.
+order: 5
+group: "Use Cases"
+---
+
+import Mermaid from '@/components/Mermaid.astro';
+import documents from '@/diagrams/documents.mmd?raw';
+
+DeployBot answers Cloud Run, GKE and IAM questions for an internal platform team, from public Google Cloud documentation, with citations. **Its value is in what it does not do:** a question about the user's own project never gets a confident answer, and a greeting never reaches the ticket queue. It is the `gcp-platform-support` client, on the `documents` template, and is the assistant in the [demo](/configent/demo).
+
+---
+
+## The problem
+
+From the discovery brief (`briefs/gcp-platform-support.md`):
+
+- **Interrupt load.** The platform channel takes 40 to 60 questions a week. The on-call engineer estimates more than half are answered word for word by the documentation.
+- **Wrong answers are expensive.** A confidently stated limit that does not exist sends an engineer down a debugging path that costs hours. A general-purpose chatbot is fluent about Kubernetes and wrong about GKE.
+- **The queue has to stay trustworthy.** A ticket queue padded with greetings and follow-ups gets skimmed, then ignored.
+
+**What it is for: answer the documented questions, and keep everything else out of the ticket queue except what a person must actually handle.**
+
+The user is an engineer in the middle of a blocked deploy. They type like it is Slack, read the first line, and test the edges in the first minute.
+
+| The assistant must | Measured by |
+|---|---|
+| Answer only from the docs, with a citation | No default, limit or error string missing from a cited passage |
+| Refuse what the docs cannot know | ≥ 95% of questions that need a human reach one |
+| Keep non-questions out of the queue | Greetings, thanks and follow-ups never file a ticket |
+| Never file without consent | The user sees the draft and says yes |
+
+---
+
+## The sources
+
+```
+corpora/gcp-platform-support/            10 files, 11 chunks
+  cloud-run-autoscaling.md      cloud-run-cpu-and-memory.md     cloud-run-service-identity.md
+  cloud-run-troubleshooting.md  gke-autopilot-vs-standard.md    gke-cluster-autoscaler.md
+  gke-workload-identity.md      iam-overview.md                 iam-policy-troubleshooter.md
+  iam-service-account-best-practices.md
+```
+
+- **Public Google Cloud documentation, CC BY 4.0, attributed in each file.** Every file carries `title:` and `url:` front matter, so a citation chip opens the upstream page.
+- **Nothing in it describes any user's project.** "What does the platform do?" can be answered. "What is *my* project doing?" structurally cannot, however close the retrieved passages look (D1).
+- **Chunked at 512 tokens with 64 overlap, embedded with Voyage `voyage-3`.** Ingest: `make ingest CLIENT=gcp-platform-support`. See [Ingestion Pipeline](/configent/docs/ingestion-pipeline).
+
+---
+
+## The config, line by line
+
+```yaml
+client_id: gcp-platform-support
+branding:                                 # served by the API; the frontend has no per-client build
+  assistant_name: "DeployBot"
+  suggested_questions: [...]              # one per branch: Level 1, a synthesised answer, a ticket
+corpus:
+  source: corpora/gcp-platform-support/
+  embedding: { model: voyage-3 }          # these three keys are the index fingerprint:
+  chunking: { chunk_size: 512, overlap: 64 }   # change one and chat answers 409 until re-ingest
+agent:
+  template: documents                     # required; picks the graph
+  model: deepseek/deepseek-v4.1-flash     # every call, the cited answer included
+  system_prompt_file: prompts/gcp-platform-support/answer.md
+  max_tokens: 2048
+  retrieval_drop_floor: 0.3               # hits below this similarity are discarded
+  escalate_below: 0.45                    # signal 1: Level 1 fails if the best hit is weaker
+  confidence_threshold: 0.6               # signal 2: either level fails if the grade is lower
+  corrective: { enabled: true, query_rewrites: 3 }   # Level 2 on; three rewritten queries
+handoff:
+  mode: ticket                            # draft, offer, file on confirmation
+  categories: { account_config: …, quota_or_billing: …, incident: …,
+                access_request: …, docs_gap: …, other: … }
+  product_areas: [cloud_run, gke, iam, other]
+  preamble: "That one needs a human: it depends on your own project configuration, …"
+limits: { rate_limit_per_minute: 60, daily_budget_usd: 2.00 }
+```
+
+Why there are two signals and not one: [The Guardrail](/configent/docs/escalation-guardrail).
+
+### The prompts
+
+| File | Words | Used by | Job |
+|---|---|---|---|
+| `grade.md` | 940 | `grade`, `regrade` | Score how well the passages support an answer, and classify the turn. Written to treat overconfidence as the failure that matters |
+| `rewrite.md` | 246 | `rewrite` | Three semantic queries plus exact identifiers for keyword search |
+| `answer.md` | 627 | `answer` | Lead with the fix, cite each claim `[n]`, no sources list, no hedging |
+| `ticket_draft.md` | 328 | `escalate` | A ticket a platform engineer can act on without re-interviewing |
+
+---
+
+## Five turns, one session
+
+The brief's canonical session, run live on 2026-10-11 in one conversation. Every call ran on DeepSeek V4.1 Flash.
+
+<div class="graph-pair">
+<Mermaid diagram={documents} path={['retrieve', 'grade', 'converse']} maxHeight={420} caption="Turns 1 and 5: converse" />
+<Mermaid diagram={documents} path={['retrieve', 'grade', 'answer']} maxHeight={420} caption="Turn 2: answer at Level 1" />
+<Mermaid diagram={documents} path={['retrieve', 'grade', 'rewrite', 'hybrid_retrieve', 'regrade', 'escalate', 'ticket']} maxHeight={420} caption="Turn 3: Level 2, then a ticket offer" />
+<Mermaid diagram={documents} path={['retrieve', 'grade', 'escalate', 'ticket']} maxHeight={420} caption="Turn 4: straight to a ticket offer" />
+</div>
+
+| # | User | Path | Outcome | Cost |
+|---|---|---|---|---|
+| 1 | `hey` | `retrieve` 0 hits → `grade` kind `conversation` → `converse` | One line naming the scope | $0.00017 |
+| 2 | `cloud run deploy failing, container failed to start and listen on the port defined by PORT` | `retrieve` 0.63 → `grade` 0.85 → `answer` | Three documented causes, cited | $0.0014 |
+| 3 | `so is that the same as the health check timing out?` | `retrieve` 0.37 → `grade` 0.72 → `rewrite` → `hybrid_retrieve` → `regrade` 0.35 → `escalate` | **A ticket offer** (`incident`) | $0.0016 |
+| 4 | `ok that fixed it. can you bump my instance quota in europe-west1? deploy is blocked` | `retrieve` 0.48 → `grade` kind `handoff` → `escalate` | Ticket offer: `quota_or_billing`, priority `high` | $0.0013 |
+| 5 | `thanks` | `retrieve` 0 hits → `grade` kind `conversation` → `converse` | "Glad that sorted it." | $0.00072 |
+
+**Turn 1: a greeting costs one grade call.** Retrieval finds nothing above the 0.3 floor. The grade call still runs, because it is also the triage call, and returns `kind: conversation` with a one-line reply. `decide_level1` sends that to `converse`. No passages, no ticket.
+
+**Turn 2: both signals clear at Level 1.** The best hit is the troubleshooting page at 0.63, above `escalate_below` (0.45). The grader quotes the exact error string from passage 1 and scores 0.85, above `confidence_threshold` (0.6). The answer lists the three documented causes and cites the page three times.
+
+**Turn 3: the turn the design is weakest on.** "That" refers to turn 2, so the bare message retrieves at 0.37, below 0.45, and Level 1 fails. Level 2 rewrites it with the conversation in view ("Cloud Run container failed to start versus health check startup probe timing out…") and searches dense and keyword. In this run the regrade scored 0.35 and the turn went to a ticket offer. The brief says it should not. See [Where it falls short](#where-it-falls-short).
+
+**Turn 4: the user asks for a human, and the graph skips Level 2.** Retrieval returns quota-adjacent pages at 0.48. The grader returns `kind: handoff` with confidence 0.0: the passages describe limits, not this project's quota. `decide_level1` routes a handoff straight to `escalate`, with no second search the user did not want. The draft picked up "deploy is blocked" as priority `high`.
+
+**Turn 5: nothing happens, as it should.** One grade call, `converse`.
+
+### The ticket, confirmed
+
+Confirming an offer is a second request: `POST /api/c/gcp-platform-support/runs/<run_id>/ticket`. In an earlier run of the quota question:
+
+```json
+{"ok": true, "ticket_id": "PLATFORM-1049", "queue": "platform-triage", "eta_hours": 8,
+ "reply": "Done — I've opened **PLATFORM-1049** with the platform-triage team, …"}
+```
+
+Sending the same request again returned `{"ticket_id": "PLATFORM-1049", "already_filed": true}`. Nothing new was filed. How the pause and the resume work: [How the Graphs Are Built](/configent/docs/langgraph#pausing-for-the-user).
+
+---
+
+## Evals and cost
+
+| What | Result | Source |
+|---|---|---|
+| **Golden set** | 12 questions: 8 answer, 4 escalate, each with expected citations or ticket category | `evals/gcp-platform-support/golden.jsonl` |
+| **Retrieval** | Level 1 recall@5 0.889; Level 2 (dense + keyword) 1.000, MRR 0.917. The one Level 1 miss scores 0.27, just under the floor | `evals/results/retrieval-2026-10-08.md` |
+| **Routing and facts** | 5 demo questions × 3 passes: every turn routed as expected, every expected fact stated | `evals/results/model-cost-2026-10-11.md` |
+| **Cost per turn** | $0.0002 (greeting) to $0.0030 (a Level 2 answer). $0.0060 on all-Haiku | the same, and the session above |
+
+Reranking was not built: Level 2 already ranks the expected document first in 8 of 9 cases. The full argument is in the retrieval eval.
+
+---
+
+## Where it falls short
+
+- **Follow-ups that lean on the previous answer often become ticket offers.** Turn 3 was run 5 times on 2026-10-11, each time after the same turn 2. It answered once (regrade 0.85) and was offered a ticket 4 times (regrade 0.20 to 0.45). The grader sees the last six turns as a transcript, so the cause is not missing history; it has not been diagnosed. The brief allows "ask one clarifying question" here, and there is no clarify outcome yet.
+- **The golden set has no follow-ups.** All 12 cases are single questions, so this failure does not show in the eval.
+- **Out-of-scope products get the project-specific wording.** A Cloud SQL question gets "it depends on your own project configuration", which is not the reason.
+- **`thanks` can claim things that did not happen.** Turn 5's reply said "the quota request is still with the platform team", but the offer was never confirmed. `converse` sends the grade call's `reply` as written. The grading prompt forbids tenant facts in it, and nothing checks that.
+- **Latency spikes.** On 2026-10-11, three turns spent 40 to 58 s in `retrieve` or `hybrid_retrieve` (the nodes that call Voyage), and one answer took 29 s. The brief's P90 target is under 10 s. The cause was not investigated.
+
+---
+
+## Building a client like it
+
+A new documents client needs no Python:
+
+1. **Decide what the corpus can never know.** That boundary is what makes escalation meaningful rather than decorative.
+2. **Copy the config,** change `client_id`, `branding`, `corpus.source`, `handoff.categories` and `handoff.preamble`.
+3. **Copy the four prompts** and rewrite the domain parts of `grade.md` and `answer.md`.
+4. **Ingest,** then ask one question per branch and read the step trail.
+5. **Write a golden set** before tuning the thresholds.
+
+The full recipe: [Adding a New Use Case](/configent/docs/adding-a-use-case).
+
+---
+
+**Next:** [PitWall](/configent/docs/pitwall), the same platform with a database instead of documents.

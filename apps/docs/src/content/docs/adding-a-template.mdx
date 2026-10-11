@@ -1,8 +1,8 @@
 ---
 title: Adding a Template
 description: The contract a new template fills, and the echo template in tests/ as the worked example that proves the seam holds.
-order: 7.5
-group: Templates
+order: 15.1
+group: "Extending"
 ---
 
 <div class="lead">
@@ -121,7 +121,7 @@ The union is tagged by `template`, so a YAML names its template and the matching
 
 ## The ingestion contract
 
-| Question | Support graph | Text-to-SQL |
+| Question | Documents | Database |
 |---|---|---|
 | What are the sources? | Documents in `corpus.source` | A database file and a notes folder |
 | What does `ingest` build? | Chunks and embeddings in pgvector | One `documents` row of schema context |
@@ -153,4 +153,4 @@ Per-client customisation is content, not code. When a client needs more than the
 
 Repeated hooks mean a new template is due. The Known gaps in the decision log name the other triggers: a second template needing the same evidence source brings plug-in retrievers, and a hybrid use case brings a third template.
 
-See also: [Text-to-SQL](/configent/docs/text-to-sql) · [Adding a New Use Case](/configent/docs/adding-a-use-case) · [The Support Graph](/configent/docs/support-graph)
+See also: [How the Graphs Are Built](/configent/docs/langgraph) · [The Documents Graph](/configent/docs/support-graph) · [The Database Graph](/configent/docs/text-to-sql)

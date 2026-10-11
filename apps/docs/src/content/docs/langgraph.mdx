@@ -1,0 +1,215 @@
+---
+title: How the Graphs Are Built
+description: The LangGraph layer, node by node. What a node is, how state and context differ, how edges route, how a turn pauses for a ticket, and both graphs drawn from the compiled code.
+order: 7
+group: "LangGraph"
+---
+
+import Mermaid from '@/components/Mermaid.astro';
+import documents from '@/diagrams/documents.mmd?raw';
+import database from '@/diagrams/database.mmd?raw';
+import Diagram from '@/components/Diagram.astro';
+
+Each template is a LangGraph `StateGraph`, built by one `build()` function in `app/agent/templates/<name>.py` and compiled once at startup. **LangGraph handles moving between nodes, saving after each one, and pausing for the user. It makes no decisions:** every route is a string that Python already wrote into the state.
+
+---
+
+## The flow
+
+```
+startup (lifespan)
+  └─ postgres_checkpointer()                       platform.py
+       └─ use_checkpointer(saver, TEMPLATES)
+            └─ template.build().compile(checkpointer=saver)   once per template, not per client
+
+a chat turn
+  └─ stream_turn()                                 platform.py
+       ├─ RunRecorder.start()                      the run row; its id is the thread id
+       ├─ graph.astream(initial, {"thread_id": run_id},
+       │                context=Deps(...),         per-request objects, never saved
+       │                stream_mode="custom",      nodes write SSE tuples
+       │                durability="sync")         a checkpoint commits before the next node
+       │     └─ node → node → … → END, or a pause on interrupt()
+       └─ graph.aget_state(thread).values          the final state builds the reply and `done`
+
+the user confirms a ticket
+  └─ confirm_ticket()
+       └─ graph.ainvoke(Command(resume=True), thread)   picks up inside the paused node
+```
+
+A turn is one `astream` call over one thread. Its final state is read back from the checkpointer, not collected from the stream, so the stored reply and the streamed one cannot disagree.
+
+---
+
+## The two graphs, drawn from the code
+
+`app/agent/diagrams.py` calls `get_graph().draw_mermaid()` on each compiled graph and writes the result to `apps/docs/src/diagrams/`. **The drawings below are generated, not drawn by hand.** `tests/test_diagrams.py` fails when a graph changes and its drawing was not regenerated.
+
+<div class="graph-pair">
+<Mermaid diagram={documents} maxHeight={640} caption="documents: DeployBot" />
+<Mermaid diagram={database} maxHeight={640} caption="database: PitWall" />
+</div>
+
+- **Solid edge:** fixed. `retrieve` always goes to `grade`.
+- **Dashed edge:** conditional. A routing function reads the state and picks one of the listed targets.
+- **Filled in the accent colour:** the node calls a model. Outlined: plain Python.
+- **Dashed border:** a shared node from `handoff.py`, the same function in both graphs.
+- **Amber border:** `ticket`, the one node that pauses.
+
+The bottom halves of the two graphs are identical. **Templates differ in how they find evidence. What happens when there is none is the platform's job,** and the drawing makes that visible.
+
+> **Regenerate after changing a graph:** `cd apps/api && uv run python -m app.agent.diagrams`.
+
+---
+
+## Anatomy
+
+### A node is an async function that returns part of the state
+
+```python
+async def retrieve(state: TurnState, runtime: Runtime[Deps]) -> dict:
+    d, t = runtime.context, time.monotonic()
+    hits = await retrieval.retrieve(d.db, d.client_id, [state["question"]], ...)
+    await _step(d, "retrieve", t, n_hits=len(hits), top_similarity=...)
+    return {"level": 1, "hits": [_hit_dict(h) for h in hits], "top_similarity": top}
+```
+
+- **The node reads `state` and returns only the keys it changed.** LangGraph merges them in. There are no reducers: every key is last-write-wins.
+- **`_step()` is the node's last act.** It commits the step to `runs.steps` and writes the same entry to the stream as `("step", entry)`. One call, so the trail the user watches and the trail that is stored are the same thing.
+- **A node that called a model uses `_model_step()`,** which also accrues the call's tokens and cost and writes a `traces` row.
+
+### State is saved; context is not
+
+| | `TurnState` | `Deps` (the `context`) |
+|---|---|---|
+| **What** | `question`, `history`, `hits`, `grade`, `route`, `draft`, `answer`, … | `cfg`, `client_id`, the DB session, the OpenAI client, the `RunRecorder` |
+| **Type** | `TypedDict`: plain JSON | `@dataclass` |
+| **Checkpointed** | After every node | Never |
+| **On resume** | Read back from Postgres | Built fresh by `confirm_ticket` |
+
+- **`platform.TurnState` is the shared contract.** The shared nodes and the platform read only its keys. Each template's `TurnState` extends it with its own keys (`hits` and `grade`; `sql` and `rows`).
+- **Hits are dicts, not `Hit` objects,** because the checkpointer stores JSON.
+- **A session or client in the state would be pickled into Postgres.** `context_schema=Deps` keeps them out.
+
+### Edges read a route; Python wrote it
+
+```python
+g.add_conditional_edges("grade", route, ["answer", "converse", "rewrite", "escalate", "decline"])
+
+def route(state) -> str:          # handoff.py, shared by every template
+    r = state["route"]
+    return "decline" if r == "escalate" and state.get("handoff") == "message" else r
+```
+
+- **The deciding happens inside the node.** `grade` calls `decide_level1()`, `guard` and `execute` call `decide_sql()`, and each one writes `route` and `why` into the state. The edge function only reads them.
+- **One edge function serves every template.** It applies the client's `handoff.mode`, so a template says "escalate" and never needs to know whether this client files tickets.
+- **The handoff mode travels in the state,** set by `stream_turn` from the client config. The graph is compiled once per template, not once per client, so it cannot close over one client's config.
+- **Every target is listed.** LangGraph needs the list to draw the graph. Without it, the dashed edges above would be guesses.
+- **The routing functions are unannotated.** LangGraph resolves a branch function's type hints eagerly, when the graph is built, so `route(state)` takes no `TurnState` hint.
+
+### One function, two nodes
+
+```python
+g.add_node("grade", grade)
+g.add_node("regrade", grade)
+```
+
+`grade` reads `state["level"]` to decide which route function to call, and names its step `grade` or `regrade`. Two node names keep the edges distinct and keep the step trail readable.
+
+### Pausing for the user
+
+```python
+async def ticket(state, runtime):                  # handoff.py
+    interrupt({"run_id": state["run_id"], **_proposal_payload(state["draft"])})
+    result = await stage_ticket(state["draft"], run_id=..., stage_seq=...)
+    ...
+
+g.add_edge("escalate", "ticket")
+g.add_conditional_edges("ticket", _after_ticket, ["ticket", END])
+```
+
+- **`escalate` drafts and offers; `ticket` waits and files.** They are two nodes because `interrupt()` re-runs its node from the top on resume. Anything before the `interrupt()` call in the same node would run twice, so the model's draft call would run twice too.
+- **The first pass stops at `interrupt()`.** The turn ends, `done` goes out with `outcome: ticket`, and the paused thread waits in Postgres.
+- **`confirm_ticket` resumes the thread** with `Command(resume=True)`. Execution continues after the `interrupt()` call and files the ticket from Python.
+- **A failed filing loops back.** `_after_ticket` routes to `ticket` again, which pauses again. The retry reuses the same `seq`, so the idempotency key `{run_id}:{stage_seq}` is unchanged (D4).
+- **The paused graph is the run's, not the client's.** `runs.template` names the graph that paused. A config edit between the offer and the click cannot resume the thread on a different graph.
+
+<Diagram name="ticket" title="A ticket: offered, paused, confirmed, filed once" />
+
+---
+
+## A worked example: the quota question, checkpoint by checkpoint
+
+A live run on 2026-10-11 against the demo stack (DeepSeek V4.1 Flash, Voyage, Postgres, the mock ticket service). DeployBot is asked "Can you raise my Cloud Run instance quota for europe-west1?"
+
+| LangGraph step | Node | Writes to state | Stream |
+|---|---|---|---|
+| −1 | (input) | `question`, `history`, `run_id`, `handoff: "ticket"` | `run` |
+| 0 | `__start__` | — | — |
+| 1 | `retrieve` | `hits` (5), `top_similarity: 0.47`, `level: 1` | `step` |
+| 2 | `grade` | `grade.kind: "handoff"`, `confidence: 0.05`, `route: "escalate"` | `step` |
+| 3 | `escalate` | `draft` (category `quota_or_billing`), `outcome: "ticket"` | `step`, `ticket_proposal`, `text` |
+| — | `ticket` | nothing yet: pauses on `interrupt()` | `done`, $0.0014 |
+| 4 | `ticket`, resumed | `ticket: {ticket_id: "PLATFORM-1049", …}` | (the confirm response) |
+
+- **The first request leaves five checkpoints,** steps −1 to 3. The paused `ticket` task is recorded on the last one, not as a step of its own.
+- **The click is a second HTTP request,** `POST /api/c/gcp-platform-support/runs/<run_id>/ticket`. It resumes inside `ticket`, files, and writes step 4. The ticket service answered in 22 ms.
+- **A second click returns `already_filed: true`** and the same id. `confirm_ticket` reads `ticket.ticket_id` from the checkpoint before it resumes anything.
+
+The database graph follows the same sequence for "Can you add the 2024 season?": `generate` (kind `handoff`) → `escalate` → `ticket`, filed as `PLATFORM-1050` in the `data-team` queue.
+
+---
+
+## Design decisions
+
+### What LangGraph owns, and what it doesn't
+
+**LangGraph is used for the mechanics only.** Every decision is a plain function in this repo, testable without a graph.
+
+| Concern | LangGraph | This repo |
+|---|---|---|
+| **Which node runs next** | Follows the edge function's answer | `decide_level1`, `decide_level2`, `decide_sql` write `state["route"]` |
+| **Saving progress** | A checkpoint per step (`durability="sync"`) | Nothing |
+| **Waiting for the user** | `interrupt()` and `Command(resume=True)` | `confirm_ticket()` checks the client, the run and `already_filed` first |
+| **Streaming** | `get_stream_writer()`, `stream_mode="custom"` | The SSE event tuples, unchanged since the pipeline |
+| **Model calls** | Nothing | The OpenAI SDK on OpenRouter, called directly ([Model Calls](/configent/docs/model-calls)) |
+| **The audit trail** | Nothing | `RunRecorder` writes `runs.steps` |
+
+### Deliberately not used
+
+| LangGraph feature | Why not |
+|---|---|
+| **`create_react_agent`, `ToolNode`** | A model choosing tools is the loop this project retired. No call is sent a tool ([Retiring the Loop](/configent/docs/retiring-the-loop)) |
+| **LangChain chat models** | The answer's `[n]` markers are parsed from the raw stream, and structured calls need the exact `response_format`. A wrapper would hide both |
+| **`MessagesState`, reducers** | History is loaded from `messages` by the platform, and each node owns distinct keys. Nothing needs merging |
+| **`Send`, parallel branches** | Every turn is one sequential path. Level 2's several queries run inside one node |
+| **Subgraphs** | The shared nodes are plain functions registered in each graph. A subgraph would add a namespace to every checkpoint for no reuse gain |
+| **Graphs declared in YAML** | Config would describe control flow, and every route that is an `if` today would become a string in a file (D13) |
+
+### `durability="sync"`, not the default
+
+**A checkpoint commits before the next node starts.** The default (`async`) writes checkpoints in the background while the next node runs, so a crash could lose the last one even though its step is already in the trail. `sync` costs one awaited write per node, a few milliseconds against model calls of 1 to 5 seconds.
+
+### One compiled graph per template
+
+**Graphs are compiled at startup, keyed by template name** (`_graphs` in `platform.py`). Compiling per request would rebuild the same object on every turn. Compiling per client would tie a paused thread to a config file that can change. The client's settings reach the nodes through `Deps.cfg` and `state["handoff"]`.
+
+---
+
+## Where it lives
+
+| What | Where |
+|---|---|
+| Shared state, `Deps`, compile and run | `app/agent/platform.py` |
+| Shared nodes and edge functions | `app/agent/handoff.py` |
+| The two graphs | `app/agent/templates/documents.py`, `database.py` |
+| The registry | `app/agent/templates/__init__.py` (`TEMPLATES`) |
+| The drawings | `app/agent/diagrams.py` → `apps/docs/src/diagrams/*.mmd` |
+| In-memory checkpointer for tests | `tests/graph_fakes.py` (`InMemorySaver`) |
+
+Versions: `langgraph` 1.2, `langgraph-checkpoint-postgres` 3.1.
+
+---
+
+**Next:** [The Documents Graph](/configent/docs/support-graph), the larger of the two graphs, node by node.
+

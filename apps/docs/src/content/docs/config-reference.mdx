@@ -2,7 +2,7 @@
 title: Config Reference
 description: Complete reference for all config.yaml keys — types, defaults, and examples.
 order: 3
-group: Getting Started
+group: "Getting Started"
 ---
 
 <div class="lead">
@@ -88,12 +88,12 @@ corpus:
 
 ## `agent`
 
-Selects the client's template with `agent.template` (required, no default) and tunes it. The keys below are the [support graph](/configent/docs/support-graph)'s (`template: documents`). Each template accepts only its own keys; the text-to-SQL keys are [in their own section](#agent-database) below.
+Selects the client's template with `agent.template` (required, no default) and tunes it. The keys below are the [documents template](/configent/docs/support-graph)'s. Each template accepts only its own keys; the database keys are [in their own section](#agent-database) below.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `agent.template` | `string` | — | `documents` or `database`. A name with no registered template fails at load. |
-| `agent.model` | `string` | — | OpenRouter model id, such as `anthropic/claude-haiku-4.5` or `deepseek/deepseek-v4.1-flash` (D14). It writes the cited answer, citing numbered passages as `[n]` (D15). Every model call in the graph uses it. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. The shipped client runs `anthropic/claude-haiku-4.5`. |
+| `agent.model` | `string` | — | OpenRouter model id, such as `anthropic/claude-haiku-4.5` or `deepseek/deepseek-v4.1-flash` (D14). It writes the cited answer, citing numbered passages as `[n]` (D15). Every model call in the graph uses it unless `structured_model` is set. It must have a row in [`config/pricing/claude.yaml`](#model-pricing), or startup fails. Both shipped clients run `deepseek/deepseek-v4.1-flash`. |
 | `agent.structured_model` | `string` | `agent.model` | Model for every structured-output call: grading, rewriting, SQL generation and repair, the ticket draft. Any model that follows a JSON schema, such as `deepseek/deepseek-v4.1-flash`; the cited answer runs on `agent.model`. Must have a price row (D14). |
 | `agent.system_prompt_file` | `string` | — | Path to the answering prompt, relative to the repo root. `grade.md`, `rewrite.md` and `ticket_draft.md` must sit beside it. |
 | `agent.max_tokens` | `int` | `4096` | Maximum output tokens for the answering call. The grade, rewrite and draft calls have fixed limits. |
@@ -106,7 +106,7 @@ Selects the client's template with `agent.template` (required, no default) and t
 ```yaml
 agent:
   template: documents
-  model: anthropic/claude-haiku-4.5
+  model: deepseek/deepseek-v4.1-flash
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   retrieval_drop_floor: 0.3
@@ -118,7 +118,7 @@ agent:
 ```
 
 > **Unknown keys fail at load.** `AgentConfig` forbids extra keys. `mode`, `tools` and `effort`
-> belonged to the [retired loop engine](/configent/docs/retiring-the-loop), and a config that
+> belonged to the [retired loop](/configent/docs/retiring-the-loop), and a config that
 > still sets one is rejected rather than silently ignored.
 
 > **Falling short of a threshold does not file a ticket.** At Level 1 it sends the turn to
@@ -157,7 +157,7 @@ The [text-to-SQL template](/configent/docs/text-to-sql)'s keys (`template: datab
 ```yaml
 agent:
   template: database
-  model: anthropic/claude-haiku-4.5
+  model: deepseek/deepseek-v4.1-flash
   system_prompt_file: prompts/f1-analyst/answer.md
   database:
     dialect: sqlite
@@ -237,11 +237,17 @@ anthropic/claude-haiku-4.5:
   output: 5.00
   cache_write: 1.25   # the 5-minute TTL
   cache_read: 0.10
+
+deepseek/deepseek-v4.1-flash:
+  input: 0.30
+  output: 1.20
+  cache_write: 0.30   # a cache write bills as plain input
+  cache_read: 0.006
 ```
 
 Every `cost_usd` in the system comes from this table: the step trail, the `done` event, the conversation total and the daily budget check. It is one file for the deployment, keyed by the exact model id a client config uses.
 
-- **Checked in and dated.** Anthropic publishes prices on its [pricing page](https://platform.claude.com/docs/en/about-claude/pricing); no API returns them.
+- **Checked in and dated.** Prices come from OpenRouter's model list; no API call returns them at request time.
 - **Copy every column.** Cache rates are listed per model; don't derive them from a multiplier.
 - **An unpriced model fails startup.** The registry calls `price_for(agent.model)` for every client at load.
 - **An estimate, not the bill.** Billed cost comes from the Admin API cost report. See [Decisions → Known gaps](https://github.com/shaokiat/configent/blob/main/docs/decisions.md#part-3--known-gaps).
@@ -309,7 +315,7 @@ corpus:
 
 agent:
   template: documents
-  model: anthropic/claude-haiku-4.5
+  model: deepseek/deepseek-v4.1-flash
   system_prompt_file: prompts/gcp-platform-support/answer.md
   max_tokens: 2048
   retrieval_drop_floor: 0.3

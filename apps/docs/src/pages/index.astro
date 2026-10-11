@@ -1,7 +1,7 @@
 ---
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import Hero from '@/components/Hero.astro';
-import ArchDiagram from '@/components/ArchDiagram.astro';
+import Diagram from '@/components/Diagram.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
@@ -31,11 +31,11 @@ const decisions = [
       ticket in someone's queue.`,
   },
   {
-    id: 'D11',
-    title: 'One engine, not two',
-    body: `A free-form tool-use loop shipped beside the graph for clients the demo never
-      loaded. It was deleted rather than kept: disabled code still has to pass its tests,
-      and the case for a loop is argued in the docs, with the old code one git command away.`,
+    id: 'D13',
+    title: 'Templates: config selects, code defines',
+    body: `A client picks a template by the evidence it has: documents or a database.
+      Templates find evidence; the platform decides what to do with it. A new client of
+      an existing template is a YAML file; a new pattern is code behind a stable seam.`,
   },
   {
     id: 'P2',
@@ -47,7 +47,7 @@ const decisions = [
   {
     id: 'D10',
     title: 'A framework for mechanism, not decisions',
-    body: `The support graph uses LangGraph for two things:
+    body: `Each template is a LangGraph graph, used for two things:
       checkpoints, and the pause before a ticket is filed. Routing, model calls, citations
       and cost stay plain code, and the move from a hand-written pipeline is documented.`,
   },
@@ -103,8 +103,8 @@ const decisions = [
         <div class="feature-icon">⬡</div>
         <h3>Config, not code, per client</h3>
         <p>
-          Corpus, prompts, model, thresholds and engine are declared in one YAML file.
-          A second support domain is a new file and a folder of documents.
+          Template, sources, prompts, model, thresholds and handoff are declared in one YAML file.
+          A second client is a new file and a folder of documents, or a database and its notes.
         </p>
       </div>
     </div>
@@ -115,11 +115,11 @@ const decisions = [
     <div class="section-label">Architecture</div>
     <h2>From config to answer</h2>
     <p class="section-sub">
-      One YAML file and a folder of documents become a running support graph. Here is what
-      happens between the question and the reply.
+      One YAML file and a folder of sources become a running assistant. Here is what sits
+      between the question and the reply, and what one turn does on its way through.
     </p>
 
-    <ArchDiagram />
+    <Diagram name="system" title="Configent: one platform, two templates" />
 
     <div class="steps">
 
@@ -153,8 +153,8 @@ const decisions = [
     <span class="y-key">overlap</span>: <span class="y-num">64</span>
 
 <span class="y-key">agent</span>:
-  <span class="y-key">mode</span>: <span class="y-str">graph</span>
-  <span class="y-key">model</span>: <span class="y-str">anthropic/claude-haiku-4.5</span>
+  <span class="y-key">template</span>: <span class="y-str">documents</span>
+  <span class="y-key">model</span>: <span class="y-str">deepseek/deepseek-v4.1-flash</span>
   <span class="y-key">system_prompt_file</span>: <span class="y-str">prompts/gcp-platform-support/answer.md</span>
   <span class="y-cmt"># Retrieval below this similarity is discarded before the model sees it.</span>
   <span class="y-key">retrieval_drop_floor</span>: <span class="y-num">0.3</span>
@@ -173,12 +173,12 @@ const decisions = [
       <div class="step">
         <div class="step-num">02</div>
         <div class="step-body">
-          <h3>The engine builds the client at startup</h3>
+          <h3>The platform builds the client at startup</h3>
           <p>On boot the registry reads every config in <code>config/</code> and:</p>
           <ul>
             <li>Parses, chunks, and embeds the corpus with Voyage AI <code>voyage-3</code> into pgvector, scoped by a <code>client_id</code> column</li>
             <li>Validates the threshold relationship — <code>escalate_below</code> must exceed <code>retrieval_drop_floor</code>, or the escalation signal could never fire</li>
-            <li>Resolves tool names against the registry and rejects unknown ones immediately</li>
+            <li>Rejects an unknown <code>agent.template</code>, an unknown key, or a model with no price row</li>
             <li>Loads one prompt per model-calling node (answer, grade, rewrite, ticket draft), so the grading step stays auditable instead of hiding inside a mega-prompt</li>
           </ul>
           <p>
@@ -191,6 +191,7 @@ const decisions = [
         <div class="step-num">03</div>
         <div class="step-body">
           <h3>A question moves down the tiers only as far as it has to</h3>
+          <p>This is the documents template. The database template writes one guarded SELECT instead, and shares everything from <strong>answer</strong> on.</p>
           <ol>
             <li><strong>retrieve</strong> — the question is embedded and matched against that client's chunks. Anything below the drop floor is discarded.</li>
             <li><strong>grade</strong> — a cheap model rates how well the surviving passages support an answer, and whether the message is a support question at all. A greeting leaves here with a short reply and no ticket.</li>

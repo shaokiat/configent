@@ -1,8 +1,8 @@
 ---
 title: Citations
 description: How Configent cites — numbered passages in the prompt, [n] markers in the answer, parsed in Python into the segments the UI renders.
-order: 17
-group: Cross-Cutting
+order: 6.3
+group: "The Platform"
 ---
 
 When the agent answers, every claim carries a citation to the passage it came from. The model writes the citation as a number; Python turns the number into the chip (D15).
@@ -36,7 +36,7 @@ The database template sends one passage, `[1]`: the query's rows as a table, tit
 
 ### 2. The model cites with `[n]`
 
-The answer prompt asks for a marker after each sentence that uses a passage, `[1][2]` for several, numbers from the list only, and no sources list at the end. Any model OpenRouter lists can do this; Haiku 4.5 and DeepSeek V4.1 Flash both answered the demo questions with valid markers.
+The answer prompt asks for a marker after each sentence that uses a passage, `[1][2]` for several, numbers from the list only, and no sources list at the end. Any model OpenRouter lists can do this; Haiku 4.5 and DeepSeek V4.1 Flash both answered the demo questions with valid markers. Before D15 the API made citations itself: [From API Citations to Markers](/configent/docs/from-api-citations-to-markers).
 
 ### 3. `Markers` parses the stream
 

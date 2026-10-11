@@ -190,3 +190,9 @@ pre {
 
 /* ── Selection ─────────────────────────────────────────────────── */
 ::selection { background: var(--accent-glow); color: var(--text); }
+
+/* Two diagrams side by side, stacked on narrow screens (langgraph.mdx). */
+.graph-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.graph-pair .mermaid-wrapper { margin: 0 !important; }
+.graph-pair { margin: 2rem 0; }
+@media (max-width: 720px) { .graph-pair { grid-template-columns: 1fr; } }

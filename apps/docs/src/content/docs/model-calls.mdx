@@ -1,0 +1,154 @@
+---
+title: Model Calls
+description: Every model request in one place. One SDK on OpenRouter, two call shapes, which node makes which call, how each is priced, and what is cached.
+order: 6.2
+group: "The Platform"
+---
+
+Every model call in Configent goes through one client built in `app/llm.py`: the OpenAI SDK pointed at OpenRouter's OpenAI-compatible endpoint (D14, D15). **There are two call shapes: a structured call that returns JSON, and a streamed answer that cites with `[n]`.** Any model OpenRouter lists can make either one. Both shipped clients run DeepSeek V4.1 Flash for every call.
+
+---
+
+## The flow
+
+```
+llm.async_client()                          one AsyncOpenAI, base_url https://openrouter.ai/api/v1
+  │                                         built per turn from OPENROUTER_API_KEY
+  ├─ platform._structured_call()            grade · rewrite · generate · repair · escalate
+  │     ├─ model = cfg.structured_model     agent.structured_model, else agent.model
+  │     ├─ response_format: json_schema, strict
+  │     └─ extra_body: reasoning off
+  │
+  └─ platform._stream_answer()              answer, in both templates
+        ├─ model = agent.model
+        ├─ messages: system (cache breakpoint) · history · numbered passages + question
+        ├─ stream=True, include_usage
+        └─ Markers: [n] → citation events   see Citations
+
+every call → _model_step()                  step tokens and cost · UsageTotals · a traces row
+```
+
+The answering call is the only one that streams to the user. Every other call returns JSON that a Python function reads.
+
+---
+
+## Which node calls what
+
+| Node | Template | Shape | `max_tokens` | Output |
+|---|---|---|---|---|
+| `grade`, `regrade` | documents | structured | 768 | `reasoning`, `kind`, `supported`, `confidence`, `missing_info`, `reply` |
+| `rewrite` | documents | structured | 512 | `queries[]`, `keywords` |
+| `generate` | database | structured | `agent.max_tokens` | `reasoning`, `kind`, `sql`, `reply` |
+| `repair` | database | structured | `agent.max_tokens` | `reasoning`, `sql` |
+| `escalate` | shared | structured | 768 | the ticket draft, its enums built from `handoff:` |
+| `answer` | both | streamed | `agent.max_tokens` | prose with `[n]` markers |
+
+`retrieve`, `hybrid_retrieve`, `guard`, `execute`, `converse`, `decline` and `ticket` make no model call. Retrieval calls Voyage for embeddings, which is not an OpenRouter call; see [Retrieval](/configent/docs/retrieval).
+
+---
+
+## A worked example: what one turn cost
+
+The Level 2 follow-up on DeployBot, live on 2026-10-11. The question was "so is that the same as the health check timing out?":
+
+| Step | Tokens in · out | Cost |
+|---|---|---|
+| `grade` | 2,367 · 101 | $0.000831 |
+| `rewrite` | 869 · 61 | $0.000334 |
+| `regrade` | 1,147 · 105 | $0.000484 |
+| `answer` | 2,113 · 568 | $0.001321 |
+| **Turn (`done`)** | 6,496 · 835, plus 3,200 read from cache | **$0.00297** |
+
+- **The answer is the most expensive call, but grading together costs more.** `grade` and `regrade` each carry every passage. That is why moving them to a cheaper model saved most of the money in the benchmark below.
+- **Cache reads are priced separately.** DeepSeek reads cost $0.006 per million tokens, against $0.30 for plain input.
+
+---
+
+## Design decisions
+
+### One SDK, any model
+
+**The OpenAI request shape is the one every model on OpenRouter accepts.** Before D15, the answer used Anthropic's `search_result` blocks and API citations. Through OpenRouter, those blocks reached a non-Claude model empty: no passage text, so no answer.
+
+| | Anthropic SDK, API citations (D14) | **OpenAI SDK, `[n]` markers (D15)** |
+|---|---|---|
+| Models that can answer | Claude only | Any model OpenRouter lists |
+| Citation tied to a passage by | The API | `Markers`, in Python |
+| An invented citation | Impossible | Left in the text, counted as `bad_citations` |
+| Whether the passage supports the sentence | Not checked either | Not checked (a known gap) |
+| Cost per demo turn | $0.0060 (all Haiku 4.5) | **$0.00026** (all DeepSeek) |
+
+The full history and the recovery commands: [From API Citations to Markers](/configent/docs/from-api-citations-to-markers).
+
+### The answering call has nothing to escalate with
+
+**The answer request has no `tools` key**, in either template. It is not an empty list: the key never appears, and neither does the ticket tool's name. A test asserts both on the real request.
+
+| | **No `tools` key (built)** | Tools present, prompt says "don't escalate" |
+|---|---|---|
+| **Can it file a ticket?** | No, the capability is absent | Yes, if it decides to |
+| **Can it decline by escalating?** | No | Yes, the easy out on any hard question |
+| **What enforces it** | The request | A sentence the model weighs against others |
+| **How you verify it** | Assert on the request in a test | Re-run the evals and hope |
+
+- **Passages first, question last,** in one user message. The evidence is context; the question is the instruction.
+- **The answer never runs on empty evidence.** Every routing function requires at least one passage, or a query that ran, before it routes to `answer`.
+- **An answer that cites nothing is visible, not blocked.** `n_citations: 0` on the step reads as a corpus problem rather than a wiring one.
+
+### Structured calls: reasoning off, strict, reasoning first
+
+**Three settings, each added because the DeepSeek benchmark failed without it:**
+
+- **`reasoning: {enabled: false}`.** With reasoning on, DeepSeek spent all of `max_tokens` on it and returned no JSON in 2 of 18 turns.
+- **`strict: true`.** A runaway string field can no longer use up the budget the same way. With both fixes in place: 0 failures in 16.
+- **`reasoning` is the first field in every schema.** Fields are written in schema order. A model that wrote `kind` first decided before it reasoned: "2008 Monaco" was marked a handoff, and then the reasoning noticed 2008 is in range. With `reasoning` first, 27 of 27 turns routed as expected.
+
+### Two model slots, one optional
+
+**`agent.model` writes the answer. `agent.structured_model`, if set, makes every other call.** A split lets a client keep a stronger writer and grade cheaply. Measured on the nine demo questions, three passes each:
+
+| | All Haiku 4.5 | Haiku answers, DeepSeek structured | **All DeepSeek** |
+|---|---|---|---|
+| Billed per turn | $0.0060 | $0.0017 | **$0.00026** |
+| Routed as expected · facts stated | 27/27 · 15/15 | 27/27 · 15/15 | 27/27 · 15/15 |
+| Citations per answer · naming no passage | 1.9 · — | 2.5 · 0 | 3.1 · 0 |
+
+Source: `evals/results/model-cost-2026-10-11.md`. Nine questions is a direction, not a benchmark.
+
+### Cost is priced per model, from a checked-in table
+
+**`config/pricing/claude.yaml` holds the rates. A model with no row fails startup** (D8). No API returns prices.
+
+- **`UsageTotals` prices each call at its own model's rates.** A structured call on a different model adds the price difference to `offset_usd`, so the turn total stays exact.
+- **`prompt_tokens` includes cached tokens.** `usage_counts()` subtracts cache reads and writes before pricing the rest as plain input. Counting it whole would overstate every cached call.
+- **The estimate is not the bill.** OpenRouter routes DeepSeek to providers that bill below list price, so the app overstated DeepSeek by 64% in the benchmark. Haiku's estimate was within 5%.
+
+### Caching: one breakpoint, and the provider decides
+
+**The answering call and the database template's `generate`/`repair` calls put a `cache_control` breakpoint after the system prompt.** OpenRouter passes it to Claude. Other models ignore the marker and cache on their own terms.
+
+- **On DeepSeek, caching is automatic and provider-dependent.** 4 of the 9 live turns on 2026-10-11 read from cache, between 1,280 and 5,760 tokens each. Four of the five PitWall turns read none, although their schema prompt is about 3,000 tokens. OpenRouter can send each call to a different provider, and not every provider caches.
+- **On Haiku 4.5 the breakpoint did nothing.** Haiku will not cache a prefix shorter than 4,096 tokens, and `answer.md` is about 750. Sonnet 4.6's minimum is 1,024 tokens.
+- **History has no breakpoint.** Support conversations are a few turns long, so caching history would save a fraction of a cent.
+
+To verify caching, check `cache_read_input_tokens` in `done`. The chat UI shows a "cached" badge when it is above zero.
+
+### No token counting
+
+**`--check` estimates the schema context at four characters per token.** OpenRouter has no `count_tokens` endpoint.
+
+---
+
+## Configuration
+
+| Key | Default | What it does |
+|---|---|---|
+| `agent.model` | — (required) | OpenRouter model id for the answer, and for everything when `structured_model` is unset |
+| `agent.structured_model` | `agent.model` | Model for grading, rewriting, SQL and the ticket draft |
+| `agent.max_tokens` | 4096 | Cap for the answer, and for `generate` and `repair` |
+| `OPENROUTER_API_KEY` | — (env, required) | `llm.async_client()` raises without it |
+| `config/pricing/claude.yaml` | — | One row per model id: `input`, `output`, `cache_write`, `cache_read`, USD per million |
+
+---
+
+**Next:** [Citations](/configent/docs/citations), how `[n]` becomes the chip in the UI.

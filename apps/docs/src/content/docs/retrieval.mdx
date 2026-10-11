@@ -2,7 +2,7 @@
 title: Retrieval
 description: The retrieve node. Embed the message, scan pgvector scoped to the client, drop weak hits. No model call, and the first of the two guardrail signals.
 order: 9
-group: The Support Graph
+group: "Template: Documents"
 ---
 
 `retrieve` is Level 1's first node and makes no model call. It embeds the message, runs a cosine scan over the client's chunks, and discards anything below the drop floor. The node lives in `agent/templates/documents.py`; the search is `retrieve()` in `retrieval/search.py`, the one retriever both levels use (D12 in `docs/decisions.md`).

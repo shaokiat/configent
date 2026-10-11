@@ -1,8 +1,8 @@
 ---
 title: Retiring the Loop
 description: Why the free-form tool-use loop was deleted rather than kept beside the graph. Both engines side by side, every decision in the change, what it cost, and how to recover the old code.
-order: 16
-group: The Support Graph
+order: 17
+group: "Design History"
 ---
 
 The repo shipped two engines until 2026-09-11. `agent.mode: loop` was a hand-written tool-use loop in which the model chose when to search and which tool to call. `agent.mode: graph` is [the support graph](/configent/docs/support-graph). The loop is now deleted (decision D11, PR #8), and this page keeps it on the record.
@@ -54,7 +54,7 @@ Level 3 · human           escalate → ticket   (interrupt → user confirms �
 - **Dead code with a maintenance bill.** Two test suites, a tool registry, two corpora and a UI branch kept passing for an engine no loaded client used.
 - **It blurred the graph's own boundaries.** The graph imported its cost, trace and conversation helpers from a file named `loop.py`.
 - **Its config keys read like capabilities.** `effort` and `tools` validated on a graph client and did nothing.
-- **The argument survives without the code.** "Why not give the model a ticket tool?" is answered by [Answering](/configent/docs/answering) and D2, not by a second engine nobody runs.
+- **The argument survives without the code.** "Why not give the model a ticket tool?" is answered by [Model Calls](/configent/docs/model-calls#the-answering-call-has-nothing-to-escalate-with) and D2, not by a second engine nobody runs.
 
 D5 kept the loop because deleting it "throws away working code and the *when would you not use a fixed pipeline* answer". That answer is still right: exploratory tool use wants a loop. The code was only worth keeping while a client ran on it.
 
@@ -103,7 +103,7 @@ All six are recorded under D11 in `docs/decisions.md`.
 ## What it cost
 
 - **No multi-hop engine.** A question that needs one search to inform the next has nowhere to go. Level 2 is one extra search.
-- **No history caching.** The loop placed a breakpoint on the latest message. The graph's only breakpoint is on the answering system prompt, and on Haiku 4.5 that prompt is under the minimum cacheable length. See [Prompt Caching](/configent/docs/prompt-caching).
+- **No history caching.** The loop placed a breakpoint on the latest message. The graph's only breakpoint is on the answering system prompt, and on Haiku 4.5 that prompt is under the minimum cacheable length. Since D15 every call runs on DeepSeek, which caches on the provider's terms. See [Model Calls](/configent/docs/model-calls#caching-one-breakpoint-and-the-provider-decides).
 - **One tenant in the repo.** Isolation is still enforced on every request, but only one client exercises it, and the cross-corpus sentinel test has one corpus to check.
 - **`documents.full_text` has no reader.** Ingestion still writes it; `get_document` was its only consumer.
 - **About 5,000 lines gone,** most of them corpus files, and a demo contrast that now lives in prose.

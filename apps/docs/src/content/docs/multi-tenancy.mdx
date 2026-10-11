@@ -1,45 +1,15 @@
 ---
 title: Multi-Tenancy
 description: How one Configent deployment serves isolated clients — each with its own branding, corpus, prompts, and cost limits — driven by a single YAML file per client.
-order: 5
-# group: Getting Started  # hidden from sidebar — reachable by link
+order: 6.7
+group: "The Platform"
 ---
 
-Drop a YAML file in `config/`, documents in `corpora/<client_id>/` and prompts in `prompts/<client_id>/`, and a branded, isolated assistant goes live. No code changes, no redeployment.
+Drop a YAML file in `config/`, sources in `corpora/<client_id>/` and prompts in `prompts/<client_id>/`, and a branded, isolated assistant goes live. No code changes. This page covers how clients are kept apart; what goes in each file is on [Adding a New Use Case](/configent/docs/adding-a-use-case).
 
-> **Two clients ship today,** one per template: `gcp-platform-support` (support graph) and
-> `f1-analyst` (text-to-SQL). Every boundary on this page is enforced on every request, and a
+> **Two clients ship today,** one per template: `gcp-platform-support` ([DeployBot](/configent/docs/deploybot), documents) and
+> `f1-analyst` ([PitWall](/configent/docs/pitwall), database). Every boundary on this page is enforced on every request, and a
 > new tenant of an existing template needs only its own files.
-
----
-
-## One YAML, one client
-
-Each file in `config/*.yaml` defines one client:
-
-```yaml
-# config/gcp-platform-support.yaml
-client_id: gcp-platform-support
-name: "Cloud Platform Support"
-
-branding:
-  logo: assets/gcp-platform-support/logo.svg
-  primary_color: "#1a73e8"
-  assistant_name: "DeployBot"
-
-corpus:
-  source: corpora/gcp-platform-support/
-
-agent:
-  model: anthropic/claude-haiku-4.5
-  system_prompt_file: prompts/gcp-platform-support/answer.md
-
-limits:
-  rate_limit_per_minute: 60
-  daily_budget_usd: 2.00
-```
-
-A second file, say `config/newco.yaml`, makes `newco` available at `/c/newco` without touching any other configuration or code.
 
 ---
 
@@ -116,24 +86,12 @@ The Next.js shell applies `primary_color` as the accent and renders `assistant_n
 | Section | Key fields |
 |---------|-----------|
 | `branding` | `logo`, `primary_color`, `assistant_name`, `tagline`, `suggested_questions` |
-| `corpus` | `source`, `chunking.chunk_size`, `chunking.overlap` (support graph only) |
+| `corpus` | `source`, `embedding.model`, `chunking.chunk_size`, `chunking.overlap` (documents only) |
 | `agent` | `template`, `model`, `system_prompt_file`, `max_tokens`, then the template's own keys |
-| `escalation` | `queue`, `team`, `categories`, `product_areas`, `preamble` |
+| `handoff` | `mode`, then `message`, or `queue`, `team`, `categories`, `product_areas`, `preamble` |
 | `evals` | `golden_set`, `judge_model` |
 | `limits` | `rate_limit_per_minute`, `daily_budget_usd` |
 
 `client_id` is validated as a lowercase slug (`[a-z0-9][a-z0-9-]*[a-z0-9]`). Duplicate `client_id` values across files fail with the conflicting filenames named.
 
 See [Config Reference](/configent/docs/config-reference) for the full field listing.
-
----
-
-## Adding a new client
-
-1. Create `config/<client_id>.yaml`.
-2. Add documents to `corpora/<client_id>/`.
-3. Write the four prompts in `prompts/<client_id>/`: `answer.md`, `grade.md`, `rewrite.md`, `ticket_draft.md`.
-4. If the client uses a new model, add its row to `config/pricing/claude.yaml`.
-5. Ingest the corpus, then open `/c/<client_id>`.
-
-[Adding a New Use Case](/configent/docs/adding-a-use-case) walks the whole recipe.
