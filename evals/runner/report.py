@@ -34,7 +34,7 @@ def write(meta: dict, results: list[dict], extra_md: str = "") -> Path:
     RESULTS.mkdir(exist_ok=True)
     s = summarize(results)
     stem = "-".join(
-        [meta["client"], meta["suite"], meta["model"], meta["variant"]]
+        [meta["client"], meta["suite"], meta["model"].replace("/", "_"), meta["variant"]]  # OpenRouter ids have a slash
         + (["evidence"] if meta["evidence"] else []) + [meta["date"]]
     )
     (RESULTS / f"{stem}.json").write_text(json.dumps({"meta": meta, "summary": s, "cases": results}, indent=1))

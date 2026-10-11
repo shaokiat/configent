@@ -1,0 +1,252 @@
+{
+ "meta": {
+  "client": "f1-analyst",
+  "suite": "triage",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "variant": "schema",
+  "evidence": false,
+  "git_sha": "b66869020933a7955882adc112a8caf3d37c15d5",
+  "date": "2026-10-11",
+  "slice": 22
+ },
+ "summary": {
+  "n": 22,
+  "correct": 20,
+  "accuracy": 0.9090909090909091,
+  "outcomes": {
+   "-": 22
+  },
+  "cost_usd": {
+   "mean": 0.00045156763636363637,
+   "p95": 0.0011874
+  },
+  "latency_ms": {
+   "mean": 2752.681818181818,
+   "p95": 4777
+  },
+  "cache_read_tokens": 59648,
+  "cache_write_tokens": 0
+ },
+ "cases": [
+  {
+   "id": "q1",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.0005533319999999999,
+   "latency_ms": 4777,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q2",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.00035763600000000004,
+   "latency_ms": 2628,
+   "cache_read_tokens": 3456,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q3",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.00032686799999999996,
+   "latency_ms": 1905,
+   "cache_read_tokens": 3328,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q4",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.000415632,
+   "latency_ms": 3032,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q5",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.000333132,
+   "latency_ms": 2319,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q6",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.0014703,
+   "latency_ms": 6675,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q7",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.000602832,
+   "latency_ms": 2955,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "q8",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.000648732,
+   "latency_ms": 3320,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "c1",
+   "correct": true,
+   "got": "conversation",
+   "expected": "conversation",
+   "cost_usd": 0.001074,
+   "latency_ms": 2325,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "c2",
+   "correct": true,
+   "got": "conversation",
+   "expected": "conversation",
+   "cost_usd": 0.00017159999999999997,
+   "latency_ms": 1635,
+   "cache_read_tokens": 3200,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "c3",
+   "correct": true,
+   "got": "conversation",
+   "expected": "conversation",
+   "cost_usd": 0.000127632,
+   "latency_ms": 905,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "c4",
+   "correct": true,
+   "got": "conversation",
+   "expected": "conversation",
+   "cost_usd": 0.000152832,
+   "latency_ms": 1904,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "c5",
+   "correct": true,
+   "got": "conversation",
+   "expected": "conversation",
+   "cost_usd": 0.00014639999999999998,
+   "latency_ms": 2425,
+   "cache_read_tokens": 3200,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "h1",
+   "correct": true,
+   "got": "handoff",
+   "expected": "handoff",
+   "cost_usd": 0.0003384,
+   "latency_ms": 3133,
+   "cache_read_tokens": 3200,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "h2",
+   "correct": true,
+   "got": "handoff",
+   "expected": "handoff",
+   "cost_usd": 0.0011874,
+   "latency_ms": 3744,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "h3",
+   "correct": true,
+   "got": "handoff",
+   "expected": "handoff",
+   "cost_usd": 0.00029443199999999996,
+   "latency_ms": 2650,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "h4",
+   "correct": true,
+   "got": "handoff",
+   "expected": "handoff",
+   "cost_usd": 0.000225132,
+   "latency_ms": 2053,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "h5",
+   "correct": false,
+   "got": "question",
+   "expected": "handoff",
+   "cost_usd": 0.000566532,
+   "latency_ms": 4346,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "a1",
+   "correct": false,
+   "got": "conversation",
+   "expected": "question",
+   "cost_usd": 0.00016003199999999997,
+   "latency_ms": 1143,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "a2",
+   "correct": true,
+   "got": "handoff",
+   "expected": "handoff",
+   "cost_usd": 0.000314832,
+   "latency_ms": 4386,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "a3",
+   "correct": true,
+   "got": "conversation",
+   "expected": "conversation",
+   "cost_usd": 0.00012823199999999996,
+   "latency_ms": 532,
+   "cache_read_tokens": 3072,
+   "cache_write_tokens": 0
+  },
+  {
+   "id": "a4",
+   "correct": true,
+   "got": "question",
+   "expected": "question",
+   "cost_usd": 0.00033856800000000003,
+   "latency_ms": 1767,
+   "cache_read_tokens": 3328,
+   "cache_write_tokens": 0
+  }
+ ]
+}
